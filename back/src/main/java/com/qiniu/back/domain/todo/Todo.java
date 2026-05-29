@@ -1,4 +1,4 @@
-package com.qiniu.back.domain.event;
+package com.qiniu.back.domain.todo;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;

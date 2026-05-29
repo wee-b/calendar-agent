@@ -2,11 +2,11 @@ package com.qiniu.back.module.todo.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.qiniu.back.domain.ErrorCode;
-import com.qiniu.back.domain.event.Todo;
-import com.qiniu.back.domain.event.TodoDate;
-import com.qiniu.back.domain.event.dto.TodoCreateDTO;
-import com.qiniu.back.domain.event.dto.TodoUpdateDTO;
-import com.qiniu.back.domain.event.vo.TodoVO;
+import com.qiniu.back.domain.todo.Todo;
+import com.qiniu.back.domain.todo.TodoDate;
+import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
+import com.qiniu.back.domain.todo.dto.TodoUpdateDTO;
+import com.qiniu.back.domain.todo.vo.TodoVO;
 import com.qiniu.back.exception.BusinessException;
 import com.qiniu.back.module.todo.mapper.TodoDateMapper;
 import com.qiniu.back.module.todo.mapper.TodoMapper;
@@ -113,6 +113,45 @@ public class TodoServiceImpl implements TodoService {
         // 删除待办本身（软删除）
         todo.setDeletedFlag(1);
         todoMapper.updateById(todo);
+    }
+
+    @Override
+    public int toggleDateStatus(Long todoId, LocalDate date) {
+        Long userId = LoginUserContext.getUserId();
+        Todo todo = todoMapper.selectById(todoId);
+        if (todo == null || !todo.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "待办不存在");
+        }
+
+        TodoDate todoDate = todoDateMapper.selectOne(new LambdaQueryWrapper<TodoDate>()
+                .eq(TodoDate::getTodoId, todoId)
+                .eq(TodoDate::getTodoDate, date));
+        if (todoDate == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "该日期没有对应的任务");
+        }
+
+        int newStatus = todoDate.getStatus() == 1 ? 0 : 1;
+        todoDate.setStatus(newStatus);
+        todoDateMapper.updateById(todoDate);
+
+        // 检查该待办下所有日期是否都已完成，若是则自动完成整个待办
+        if (newStatus == 1) {
+            Long unfinishedCount = todoDateMapper.selectCount(new LambdaQueryWrapper<TodoDate>()
+                    .eq(TodoDate::getTodoId, todoId)
+                    .eq(TodoDate::getStatus, 0));
+            if (unfinishedCount == 0) {
+                todo.setStatus(1);
+                todoMapper.updateById(todo);
+            }
+        } else {
+            // 有日期被取消完成，待办状态也恢复为未完成
+            if (todo.getStatus() == 1) {
+                todo.setStatus(0);
+                todoMapper.updateById(todo);
+            }
+        }
+
+        return newStatus;
     }
 
     @Override

@@ -1,9 +1,10 @@
 package com.qiniu.back.module.todo.controller;
 
 import com.qiniu.back.domain.ResponseDTO;
-import com.qiniu.back.domain.event.dto.TodoCreateDTO;
-import com.qiniu.back.domain.event.dto.TodoUpdateDTO;
-import com.qiniu.back.domain.event.vo.TodoVO;
+import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
+import com.qiniu.back.domain.todo.dto.TodoDateToggleDTO;
+import com.qiniu.back.domain.todo.dto.TodoUpdateDTO;
+import com.qiniu.back.domain.todo.vo.TodoVO;
 import com.qiniu.back.module.todo.service.TodoService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -44,5 +45,12 @@ public class TodoController {
     public ResponseDTO<Void> delete(@PathVariable Long todoId) {
         todoService.delete(todoId);
         return ResponseDTO.ok();
+    }
+
+    @PutMapping("/toggle-date")
+    @Operation(summary = "完成/取消完成某天任务")
+    public ResponseDTO<Integer> toggleDateStatus(@RequestBody @Valid TodoDateToggleDTO request) {
+        int newStatus = todoService.toggleDateStatus(request.getTodoId(), request.getTodoDate());
+        return ResponseDTO.ok(newStatus);
     }
 }

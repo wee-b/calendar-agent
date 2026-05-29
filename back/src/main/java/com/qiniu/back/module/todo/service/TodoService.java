@@ -1,9 +1,10 @@
 package com.qiniu.back.module.todo.service;
 
-import com.qiniu.back.domain.event.dto.TodoCreateDTO;
-import com.qiniu.back.domain.event.dto.TodoUpdateDTO;
-import com.qiniu.back.domain.event.vo.TodoVO;
+import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
+import com.qiniu.back.domain.todo.dto.TodoUpdateDTO;
+import com.qiniu.back.domain.todo.vo.TodoVO;
 
+import java.time.LocalDate;
 import java.util.List;
 
 public interface TodoService {
@@ -17,4 +18,6 @@ public interface TodoService {
     void delete(Long todoId);
 
     List<TodoVO> listByDate(String date);
+
+    int toggleDateStatus(Long todoId, LocalDate date);
 }
