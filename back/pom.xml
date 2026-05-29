@@ -19,11 +19,15 @@
         <java.version>17</java.version>
     </properties>
     <dependencies>
+<<<<<<< HEAD
         <!-- Spring Boot -->
+=======
+>>>>>>> 7021a3b4328a0b85361bde9cf5d6f3a88e2d8cc2
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
+<<<<<<< HEAD
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -51,13 +55,19 @@
         </dependency>
 
         <!-- Lombok -->
+=======
+
+>>>>>>> 7021a3b4328a0b85361bde9cf5d6f3a88e2d8cc2
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+<<<<<<< HEAD
 
         <!-- Test -->
+=======
+>>>>>>> 7021a3b4328a0b85361bde9cf5d6f3a88e2d8cc2
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

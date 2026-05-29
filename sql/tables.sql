@@ -5,6 +5,7 @@ SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 
+<<<<<<< HEAD
 -- yl_user
 DROP TABLE IF EXISTS `yl_user`;
 CREATE TABLE `yl_user`
@@ -98,3 +99,5 @@ CREATE TABLE `yl_ai_dialogue`
 SET FOREIGN_KEY_CHECKS = 1;
 
 
+=======
+>>>>>>> 7021a3b4328a0b85361bde9cf5d6f3a88e2d8cc2
