@@ -12,7 +12,7 @@
 | 后端 | Spring Boot 3.5 + Sa-Token + MyBatis-Plus |
 | 数据库 | MySQL 8.0 |
 | 连接池 | Druid |
-| 缓存 | Redis |
+| 缓存 | Redis（Sa-Token 持久化） |
 | AI | Spring AI（待集成） |
 | 密码加密 | BCrypt |
 | 文档 | Knife4j (OpenAPI 3) |
@@ -30,7 +30,7 @@ back/src/main/java/com/qiniu/back/
 │   └── CheckPhone.java      #   手机号格式校验
 ├── config/                  # 配置
 │   ├── ClientTokenConfig.java  # Sa-Token 客户端 Token 配置
-│   ├── MvcConfigure.java       # 拦截器注册
+│   ├── MvcConfigure.java       # 拦截器 + CORS 注册
 │   └── StartupListener.java    # 启动成功打印文档地址
 ├── domain/                  # 领域模型
 │   ├── ErrorCode.java       #   统一错误码枚举
@@ -39,11 +39,17 @@ back/src/main/java/com/qiniu/back/
 │   │   ├── AiDialogue.java          # 实体
 │   │   ├── dto/ChatRequestDTO.java  # 请求 DTO
 │   │   └── vo/ChatResponseVO.java   # 响应 VO
-│   ├── event/               #   待办
-│   │   ├── Todo.java                # 实体
-│   │   ├── dto/TodoSaveDTO.java     # 保存 DTO
-│   │   ├── dto/TodoQueryDTO.java    # 查询 DTO
-│   │   └── vo/TodoVO.java           # 响应 VO
+│   ├── todo/                #   待办
+│   │   ├── Todo.java                # 实体（目标）
+│   │   ├── TodoDate.java            # 实体（每日任务）
+│   │   ├── DailyNote.java           # 实体（每日日记）
+│   │   ├── dto/TodoCreateDTO.java   # 创建 DTO
+│   │   ├── dto/TodoUpdateDTO.java   # 修改 DTO
+│   │   ├── dto/TodoDateToggleDTO.java # 完成/取消完成 DTO
+│   │   ├── dto/DailyNoteSaveDTO.java  # 保存日记 DTO
+│   │   ├── vo/TodoVO.java           # 待办响应 VO
+│   │   ├── vo/DayTodosVO.java       # 某天详情 VO
+│   │   └── vo/MonthCountVO.java     # 每日待办数量 VO
 │   └── user/                #   用户
 │       ├── User.java                # 实体
 │       ├── dto/UserLoginDTO.java    # 登录 DTO
@@ -60,28 +66,34 @@ back/src/main/java/com/qiniu/back/
 │   ├── LoginInterceptor.java      # 登录拦截器（Token 校验 + 权限）
 │   └── GlobalExceptionHandler.java  # 全局异常处理
 ├── module/
-│   ├── TestController.java        # 测试接口
-│   └── user/
-│       ├── controller/UserController.java  # 用户接口
-│       ├── mapper/UserMapper.java          # 用户 Mapper
-│       └── service/
-│           ├── UserService.java            # 用户服务接口
-│           └── impl/UserServiceImpl.java   # 用户服务实现
-├── util/
-│   ├── SaTokenUtil.java       # Token 工具（生成/校验/解析/注销）
-│   ├── LoginUserContext.java  # 当前用户上下文（ThreadLocal）
-│   └── ResponseUtil.java      # HttpServletResponse 写 JSON
-└── validator/
-    └── PhoneValidator.java    # 手机号校验器
+│   ├── TestController.java  # 测试接口
+│   ├── user/                #   用户模块
+│   │   ├── controller/UserController.java
+│   │   ├── mapper/UserMapper.java
+│   │   └── service/...
+│   ├── todo/                #   待办模块
+│   │   ├── controller/TodoController.java
+│   │   ├── mapper/TodoMapper.java, TodoDateMapper.java
+│   │   └── service/...
+│   └── dailyNote/           #   日记/日历模块
+│       ├── controller/DailyNoteController.java
+│       ├── mapper/DailyNoteMapper.java
+│       └── service/...
+└── util/
+    ├── SaTokenUtil.java       # Token 工具（生成/校验/解析/注销）
+    ├── LoginUserContext.java  # 当前用户上下文（ThreadLocal）
+    └── ResponseUtil.java      # HttpServletResponse 写 JSON
 ```
 
 ### 数据库表
 
-| 表名 | 说明 |
-|------|------|
-| `yl_user` | 用户表 |
-| `yl_todo` | 待办表 |
-| `yl_ai_dialogue` | AI 对话记录表 |
+| 表名 | 说明 | 关键设计 |
+|------|------|----------|
+| `yl_user` | 用户表 | — |
+| `yl_todo` | 待办表（目标） | 支持 startDate + endDate + weekDays，最多 180 天 |
+| `yl_todo_date` | 每日任务关联表 | todo 与日期的多对多，存储每天具体任务内容 |
+| `yl_daily_note` | 每日日记表 | 每个用户每天最多一条 |
+| `yl_ai_dialogue` | AI 对话记录表 | — |
 
 ### API 接口
 
@@ -95,6 +107,24 @@ back/src/main/java/com/qiniu/back/
 | PUT | `/user/info` | 修改用户信息 | 是 |
 | POST | `/user/logout` | 退出登录 | 是 |
 
+#### 待办模块 `/todo`
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/todo` | 创建目标（自动计算日期并批量插入） | 是 |
+| GET | `/todo/list` | 查询当前用户所有待办 | 是 |
+| PUT | `/todo/{todoId}` | 修改待办（删旧日期 + 重新计算 + 批量插入） | 是 |
+| DELETE | `/todo/{todoId}` | 删除待办（批量删日期 + 软删除） | 是 |
+| PUT | `/todo/toggle-date` | 完成/取消完成某天任务 | 是 |
+
+#### 日历/日记模块
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | `/calendar/month-count?year=2026&month=6` | 当月每日待办数量（日历小圆点） | 是 |
+| GET | `/calendar/day?date=2026-06-01` | 某天所有待办 + 日记 | 是 |
+| PUT | `/daily-note` | 保存/修改某天日记 | 是 |
+
 #### 测试模块 `/test`
 
 | 方法 | 路径 | 说明 | 认证 |
@@ -102,6 +132,25 @@ back/src/main/java/com/qiniu/back/
 | GET | `/test/testConnection` | 测试连接 | 否 |
 | GET | `/test/testLogin` | 测试登录状态 | 是 |
 | GET | `/test/getToken?userId=1` | 获取测试 Token | 否 |
+
+### 核心业务流程
+
+#### 创建待办
+```
+用户输入 → "每周一到周五学英语，从6月1日到6月30日"
+→ POST /todo { title, startDate, endDate, weekDays: [1,2,3,4,5], dayContent, color }
+→ 校验跨度 ≤ 180天 → 插入 yl_todo
+→ 遍历日期区间，匹配周几 → 批量插入 yl_todo_date
+→ 返回 TodoVO（含所有日期列表）
+```
+
+#### 日历查看
+```
+打开日历 → GET /calendar/month-count → 日历格子渲染小圆点数量
+点击某天 → GET /calendar/day → 返回待办列表 + 日记内容
+侧边栏点击待办 → 高亮该待办的所有日期（用 color 字段）
+点击每日任务 → PUT /todo/toggle-date → 完成/取消完成
+```
 
 ### 快速启动
 
@@ -119,6 +168,10 @@ mvn spring-boot:run
 
 # 4. 获取测试 Token
 curl http://localhost:8080/test/getToken?userId=1
+
+# 5. 启动前端
+cd front
+npm install && npm run dev
 ```
 
 ### 接口文档
@@ -131,16 +184,19 @@ curl http://localhost:8080/test/getToken?userId=1
 2. 后续请求 Header 携带 `yvli-token: <token值>`
 3. `LoginInterceptor` 自动解析 token → 查询用户 → 存入 `LoginUserContext`
 4. 业务代码通过 `LoginUserContext.getUser()` 获取当前用户
-5. 登出时调用 `/user/logout`，销毁 token
+5. 登出时调用 `/user/logout`，token 存储在 Redis 15 号库
 
 ### 开发进度
 
 - [x] 项目骨架搭建 + 依赖管理
-- [x] 数据库表设计（用户表 / 待办表 / 对话表）
+- [x] 数据库表设计（用户表 / 待办表 / 日期关联表 / 日记表 / 对话表）
 - [x] 实体类 + DTO + VO
-- [x] Sa-Token 认证 + 登录拦截器
+- [x] Sa-Token 认证 + 登录拦截器 + Redis 持久化
 - [x] 用户模块（注册 / 登录 / 信息 / 修改 / 登出）
-- [ ] 待办模块 CRUD
+- [x] 待办模块（创建 / 列表 / 修改 / 删除）
+- [x] 每日任务完成/取消完成（含自动联动待办整体状态）
+- [x] 日历模块（当月每日待办数量 / 某天详情）
+- [x] 日记模块（保存/修改某天日记）
 - [ ] AI 对话 + Spring AI 集成
 - [ ] 前后端联调
 - [ ] 语音转文字（浏览器 STT）
@@ -180,11 +236,11 @@ front/src/
 
 ### 页面说明
 
-- **登录/注册页** — 表单切换，UI 已完成，待对接 `/user/login` 和 `/user/register` 接口
+- **登录/注册页** — 表单切换，UI 已完成，待对接 `/user/login` 和 `/user/register`
 - **主页** — 三栏布局：左待办 + 中日历 + 右语音助手，均可折叠/展开
-- **日历** — 月视图网格、月份选择器、日期点击选中、行内编辑面板（保存/取消）
-- **待办清单** — 左侧可折叠面板，当前为静态列表，待对接后端待办接口
-- **语音助手** — 右侧可折叠面板，模拟对话气泡，麦克风按钮预留了 `startRecord/stopRecord` 方法
+- **日历** — 月视图网格、月份选择器、日期点击选中、行内编辑面板
+- **待办清单** — 左侧可折叠面板，当前为静态列表，待对接 `/todo/list` 等接口
+- **语音助手** — 右侧可折叠面板，模拟对话气泡，麦克风按钮预留
 
 ### 快速启动
 
@@ -202,6 +258,6 @@ npm run dev
 - [x] 语音助手面板 UI
 - [x] 待办清单面板 UI
 - [ ] 对接后端登录/注册 API
-- [ ] 对接后端待办 CRUD API
+- [ ] 对接后端待办 CRUD API + 日历集成
 - [ ] 浏览器麦克风录音（STT）
 - [ ] AI 对话对接 + TTS 播放

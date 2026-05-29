@@ -1,0 +1,28 @@
+package com.qiniu.back.domain.todo;
+
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+
+@Data
+@TableName("yl_todo")
+public class Todo {
+    @TableId(value = "todo_id", type = IdType.AUTO)
+    private Long todoId;
+    private Long userId;
+    private String title;
+    private String color;
+    private LocalDate startDate;
+    private LocalDate endDate;
+    private String weekDays;
+    private Integer priority;
+    private Integer status;
+    private String voiceText;
+    private Integer deletedFlag;
+    private LocalDateTime createTime;
+    private LocalDateTime updateTime;
+}

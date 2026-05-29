@@ -1,25 +1,21 @@
-package com.qiniu.back.domain.event;
+package com.qiniu.back.domain.dailyNote;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Data
-@TableName("yl_todo")
-public class Todo {
-    @TableId(value = "todo_id", type = IdType.AUTO)
-    private Long todoId;
+@TableName("yl_daily_note")
+public class DailyNote {
+    @TableId(value = "note_id", type = IdType.AUTO)
+    private Long noteId;
     private Long userId;
-    private String title;
+    private LocalDate noteDate;
     private String content;
-    private LocalDateTime todoTime;
-    private Integer priority;
-    private Integer status;
-    private String voiceText;
-    private Integer deletedFlag;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }
