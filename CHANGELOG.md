@@ -7,7 +7,7 @@
 - **项目初始化** — 搭建 Spring Boot 空项目骨架，创建前后端目录结构
 - **数据库设计**
   - 完成 `yl_user` 用户表 DDL
-  - 完成 `yl_todo` 待办表 DDL
+  - 完成 `yl_todo` 待办表 DDL（初版）
   - 完成 `yl_ai_dialogue` AI 对话记录表 DDL
   - 写入初始测试数据
 - **依赖管理** — 引入 MyBatis-Plus、MySQL、Druid、Knife4j、Lombok、P6Spy
@@ -24,39 +24,45 @@
   - 创建 `PhoneValidator` 校验器
   - 创建 `BusinessException` 业务异常类
   - 创建 `GlobalExceptionHandler` 全局异常处理
-- **认证体系** — 引入 Sa-Token，创建 `ClientTokenConfig` 客户端 Token 配置、`SaTokenUtil` Token 工具类、`LoginInterceptor` 登录拦截器、`LoginUserContext` 用户上下文、`ResponseUtil` 响应工具
-- **Spring Boot 版本** — 确定使用 3.5.4，调整 Lombok 编译配置，移除 SB 3.0 不存在的 `NoResourceFoundException`
+- **认证体系** — 引入 Sa-Token，创建 `ClientTokenConfig`、`SaTokenUtil`、`LoginInterceptor`、`LoginUserContext`、`ResponseUtil`
 
 ### 晚上
 
 - **后端-用户模块**
-  - 完成注册接口（手机号唯一校验 + BCrypt 密码加密 + 自增 userCode）
-  - 完成登录接口（密码校验 + 状态检查 + Token 发放）
-  - 完成获取用户信息接口
-  - 完成修改用户信息接口
-  - 完成退出登录接口
-- **后端-基础设施**
-  - 添加 `spring-security-crypto` 依赖用于 BCrypt 密码加密
-  - 创建 `StartupListener` 启动成功后打印接口文档地址
-  - 创建 `TestController` 提供测试连接、测试登录、获取测试 Token 接口
+  - 完成注册/登录/获取用户信息/修改用户信息/退出登录接口
+  - 添加 `spring-security-crypto` 用于 BCrypt 密码加密
+  - 添加 `sa-token-redis-jackson` + `spring-boot-starter-data-redis`，Token 持久化到 Redis
+  - 创建 `StartupListener` 启动打印文档地址
+  - 创建 `TestController` 测试接口
+  - CORS 跨域配置
 - **前端-项目搭建**
   - Vue 3 + TypeScript + Vite 8 + Vue Router 4 项目初始化
-  - 登录/注册页面 UI（表单切换、样式完成）
-  - 主页三栏布局：左侧待办清单 + 中间日历 + 右侧语音助手
-  - NavBar 导航栏（面板折叠/展开 + 退出登录按钮）
-  - 日历组件（月视图网格、月份选择器、日期点击选中、行内编辑面板）
-  - ChatPanel 语音助手面板（对话气泡 + 按住说话麦克风按钮占位）
-  - TodoList 待办清单面板（可折叠，当前为静态示例数据）
-  - 全局复古纸张主题设计（统一的配色和边框风格）
-- **文档** — 编写 README.md 和 CHANGELOG.md
+  - 登录/注册页面 UI、主页三栏布局、日历组件
+  - NavBar、ChatPanel、TodoList 组件
+  - 全局复古纸张主题设计
+- **数据库重构**
+  - `yl_todo` 重新设计：移除 `todo_time`、`content`，新增 `start_date`、`end_date`、`week_days`、`color`
+  - 新增 `yl_todo_date` 每日任务关联表（支持多日目标 + dayContent 每日具体任务）
+  - 新增 `yl_daily_note` 每日日记表
+  - 建表 SQL 中加入注释说明每个功能如何通过字段实现
+- **后端-待办模块**
+  - 创建待办（自动根据 startDate/endDate/weekDays 计算日期 → 批量插入 yl_todo_date）
+  - 查询用户所有待办（含日期列表）
+  - 修改待办（删旧日期 → 重新计算 → 批量插入）
+  - 删除待办（批量删日期 + 软删除待办）
+  - 完成/取消完成每日任务（联动更新待办整体状态）
+- **后端-日历/日记模块**
+  - 当月每日待办数量查询（日历小圆点）
+  - 某天详情查询（待办列表 + dayContent + color + 日记内容）
+  - 日记保存/修改（upsert）
+- **文档** — 编写 README.md 和 CHANGELOG.md，所有 DTO 补全 `@Schema` 注解
 
 ---
 
 ## 待完成
 
-- [ ] 待办模块后端 CRUD
 - [ ] 前端对接后端登录/注册 API
-- [ ] 前端对接后端待办 CRUD API
+- [ ] 前端对接待办 CRUD API + 日历交互
 - [ ] Spring AI 集成 + 意图识别
 - [ ] 前端浏览器麦克风录音（STT）
 - [ ] 前端 TTS 朗读播放
