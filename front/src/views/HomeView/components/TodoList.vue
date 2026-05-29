@@ -29,6 +29,7 @@ defineProps<{
   display: flex;
   flex-direction: column;
   z-index: 5;
+  overflow: hidden;
 }
 
 /* 左侧专属边框色，使用复古色 */

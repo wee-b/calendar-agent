@@ -68,6 +68,25 @@
             <version>1.44.0</version>
         </dependency>
 
+        <!-- Sa-Token Redis 集成 (Token 持久化到 Redis) -->
+        <dependency>
+            <groupId>cn.dev33</groupId>
+            <artifactId>sa-token-redis-jackson</artifactId>
+            <version>1.44.0</version>
+        </dependency>
+
+        <!-- Spring Data Redis -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- Lettuce 连接池 (Spring Data Redis 底层需要) -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
+
         <!-- Druid 连接池 -->
         <dependency>
             <groupId>com.alibaba</groupId>

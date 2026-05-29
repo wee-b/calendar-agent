@@ -52,6 +52,7 @@ const stopRecord = () => {
   display: flex;
   flex-direction: column;
   z-index: 5;
+  overflow: hidden;
 }
 
 /* 右侧专属边框色 */

@@ -28,8 +28,8 @@ mybatis-plus:
 
 # Sa-Token 配置
 sa-token:
-  token-name: satoken
-  timeout: 2592000
+  token-name: ${app.sa-token.token-name}
+  timeout: ${app.sa-token.timeout}
   active-timeout: -1
   is-concurrent: true
   is-share: true

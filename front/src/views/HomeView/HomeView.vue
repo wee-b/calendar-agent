@@ -5,7 +5,8 @@
         :chatOpen="isChatOpen"
         @toggle-todo="isTodoOpen = !isTodoOpen"
         @toggle-chat="isChatOpen = !isChatOpen"
-        @logout="logout"
+        @logout="handleLogout"
+        @login="showAuthModal = true"
     />
 
     <main class="main-content">
@@ -57,23 +58,49 @@
       <ChatPanel :isOpen="isChatOpen" />
 
     </main>
+
+    <AuthModal v-if="!hasToken && showAuthModal" @success="handleLoginSuccess" @close="showAuthModal = false" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import { useRouter } from 'vue-router';
+
+import AuthModal from '../../components/AuthModal.vue';
+import { tokenRef, clearAuth } from '../../utils/auth';
+
 
 // 引入抽离的组件 (注意这里的相对路径)
 import NavBar from '../../components/NavBar.vue';
 import TodoList from './components/TodoList.vue';
 import ChatPanel from './components/ChatPanel.vue';
+import {ElMessage} from "element-plus";
+import { logoutAPI } from '../../api/user';
 
-const router = useRouter();
 
 // 侧边栏状态控制
 const isTodoOpen = ref(true);
 const isChatOpen = ref(true);
+
+
+const hasToken = computed(() => !!tokenRef.value);
+const showAuthModal = ref(!tokenRef.value);
+
+const handleLoginSuccess = () => {
+  showAuthModal.value = false;
+};
+
+const handleLogout = async () => {
+  try {
+    await logoutAPI();
+  } catch {
+    // 即使接口失败也清除本地凭证
+  }
+  clearAuth();
+  showAuthModal.value = true;
+  ElMessage.success('已安全退出登录');
+};
+
 
 // ---------------- 日历核心逻辑 ----------------
 
@@ -139,10 +166,7 @@ watch(selectedMonthStr, () => {
   activeDate.value = null;
 });
 
-const logout = () => {
-  // 退出登录，返回登录页
-  router.push('/login');
-};
+
 </script>
 
 <style scoped>
