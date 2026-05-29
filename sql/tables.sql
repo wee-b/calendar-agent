@@ -40,28 +40,105 @@ DROP TABLE IF EXISTS `yl_todo`;
 
 CREATE TABLE `yl_todo`
 (
-    `todo_id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '待办ID',
-    `user_id` BIGINT NOT NULL COMMENT '用户ID',
+    `todo_id`   BIGINT       NOT NULL AUTO_INCREMENT COMMENT '待办ID',
+    `user_id`   BIGINT       NOT NULL COMMENT '用户ID',
 
-    `title` VARCHAR(255) NOT NULL COMMENT '待办标题',
-    `content` TEXT DEFAULT NULL COMMENT '待办详情',
-    `todo_time` DATETIME NOT NULL COMMENT '提醒时间',
+    `title`     VARCHAR(255) NOT NULL COMMENT '待办标题（目标名称）',
+    `color`     VARCHAR(20)  DEFAULT '#5c4b37' COMMENT '高亮颜色（hex）',
 
-    `priority` TINYINT(1) DEFAULT 1 COMMENT '优先级：1低 2中 3高',
-    `status` TINYINT(1) DEFAULT 0 COMMENT '状态：0未完成 1已完成',
-    `voice_text` TEXT DEFAULT NULL COMMENT '原始语音识别文本',
+    `start_date` DATE        NOT NULL COMMENT '开始日期',
+    `end_date`   DATE        NOT NULL COMMENT '结束日期（距开始日期最多180天）',
+    `week_days`  VARCHAR(30) NOT NULL DEFAULT '1,2,3,4,5,6,7' COMMENT '每周执行日：1=周一 7=周日，逗号分隔',
+
+    `priority`   TINYINT(1)  DEFAULT 1 COMMENT '优先级：1低 2中 3高',
+    `status`     TINYINT(1)  DEFAULT 0 COMMENT '状态：0未完成 1已完成',
+    `voice_text` TEXT        DEFAULT NULL COMMENT '原始语音识别文本',
     `deleted_flag` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除状态',
-    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    `create_time` DATETIME   NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time` DATETIME   NOT NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`todo_id`),
-    KEY `idx_user_time` (`user_id`, `todo_time`),
-    KEY `idx_status` (`status`),
+    KEY `idx_user_status` (`user_id`, `status`),
     CONSTRAINT `fk_todo_user`
         FOREIGN KEY (`user_id`)
             REFERENCES `yl_user` (`user_id`)
 
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='待办表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='待办表（目标）';
+
+
+-- yl_todo_date（待办-日期关联表，支持一个目标跨多天）
+--
+-- 【功能1：获取某天所有待办】
+--   查询某一天的所有待办：按 todo_date 查询，JOIN yl_todo 拿 title/color，
+--   返回每个待办的 day_content（当日具体任务），前端展示在日历格子点击后的详情面板中。
+--
+-- 【功能2：获取某个月每天的待办数量（日历小圆点）】
+--   SELECT todo_date, COUNT(*) AS cnt
+--   FROM yl_todo_date td
+--   JOIN yl_todo t ON td.todo_id = t.todo_id
+--   WHERE t.user_id = ? AND t.deleted_flag = 0 AND td.todo_date BETWEEN '2026-06-01' AND '2026-06-30'
+--   GROUP BY todo_date
+--   返回每一天有几个待办，前端在日历格子上渲染对应数量的小圆点。
+--
+-- 【功能3：点击左侧待办 → 日历高亮该目标的所有日期】
+--   查询该 todo_id 的所有 todo_date，前端用该待办的 color 高亮这些日期格子。
+--
+-- 【功能4：每日任务 ≠ 待办标题】
+--   yl_todo.title = "学英语"（目标名称，显示在左侧列表）
+--   yl_todo_date.day_content = "背Unit3单词50个"（当天具体任务，点开日期时看到）
+--   同一个目标每天可以有不同的 day_content，也可以为空（空则只显示标题）。
+DROP TABLE IF EXISTS `yl_todo_date`;
+
+CREATE TABLE `yl_todo_date`
+(
+    `id`          BIGINT   NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `todo_id`     BIGINT   NOT NULL COMMENT '待办ID',
+    `todo_date`   DATE     NOT NULL COMMENT '执行日期',
+    `day_content` TEXT     DEFAULT NULL COMMENT '当日具体任务内容（不同于待办标题，可为空）',
+    `status`      TINYINT(1) DEFAULT 0 COMMENT '当天完成状态：0未完成 1已完成',
+
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_todo_date` (`todo_id`, `todo_date`),
+    KEY `idx_date` (`todo_date`),
+    CONSTRAINT `fk_tododate_todo`
+        FOREIGN KEY (`todo_id`)
+            REFERENCES `yl_todo` (`todo_id`)
+
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='待办日期关联表';
+
+
+-- yl_daily_note（每日日记/备注）
+--
+-- 【功能：点击日历每一天 → 写日记/备注】
+--   每个用户每天最多一条日记记录（uk_user_date 唯一约束）。
+--   点击日历某天 → 前端调 GET /daily-note?date=2026-06-01
+--   有记录就展示日记内容，没有就显示空编辑器。
+--   保存时调 PUT /daily-note，upsert（INSERT ON DUPLICATE KEY UPDATE 或 service 层判断）。
+--
+--   查看某天时，前端同时请求三个接口并排展示：
+--     1. GET /todo/day?date=xxx        → 该天的待办列表（来自 yl_todo_date）
+--     2. GET /daily-note?date=xxx      → 该天的日记（来自 yl_daily_note）
+--     3. GET /todo/month-count?year=2026&month=6 → 当月每日待办数量（日历小圆点）
+DROP TABLE IF EXISTS `yl_daily_note`;
+
+CREATE TABLE `yl_daily_note`
+(
+    `note_id`    BIGINT   NOT NULL AUTO_INCREMENT COMMENT '日记ID',
+    `user_id`    BIGINT   NOT NULL COMMENT '用户ID',
+    `note_date`  DATE     NOT NULL COMMENT '日期',
+    `content`    TEXT     DEFAULT NULL COMMENT '日记内容',
+
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+    PRIMARY KEY (`note_id`),
+    UNIQUE KEY `uk_user_date` (`user_id`, `note_date`),
+    CONSTRAINT `fk_dailynote_user`
+        FOREIGN KEY (`user_id`)
+            REFERENCES `yl_user` (`user_id`)
+
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='每日日记表';
 
 
 

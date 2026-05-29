@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Data
@@ -14,8 +15,10 @@ public class Todo {
     private Long todoId;
     private Long userId;
     private String title;
-    private String content;
-    private LocalDateTime todoTime;
+    private String color;
+    private LocalDate startDate;
+    private LocalDate endDate;
+    private String weekDays;
     private Integer priority;
     private Integer status;
     private String voiceText;
