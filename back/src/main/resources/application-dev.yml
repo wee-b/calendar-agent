@@ -1,0 +1,17 @@
+app:
+  datasource:
+    host: localhost
+    port: 3306
+    database: yl_database
+    username: root
+    password: 123
+  redis:
+    host: localhost
+    port: 6379
+    database: 15
+
+
+
+  sa-token:
+    token-name: yvli-token
+    timeout: 604800

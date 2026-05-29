@@ -16,7 +16,6 @@ public class User {
     private String userCode;
     private String userName;
     private String phone;
-    private String email;
     private String password;
     private String avatar;
     private Integer gender;
