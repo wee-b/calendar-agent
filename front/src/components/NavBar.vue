@@ -34,6 +34,11 @@
         </template>
       </div>
 
+      <button class="icon-btn" @click="$emit('help')" title="使用帮助">
+        <span class="text">帮助</span>
+        <span class="icon">❓</span>
+      </button>
+
       <button class="icon-btn" @click="$emit('toggle-chat')">
         <span class="text">{{ chatOpen ? '收起对话' : '展开对话' }}</span>
         <span class="icon">{{ chatOpen ? '▶' : '◀' }}</span>
@@ -59,6 +64,7 @@ defineEmits<{
   (e: 'toggle-chat'): void;
   (e: 'logout'): void;
   (e: 'login'): void;
+  (e: 'help'): void;
 }>();
 
 const isLoggedIn = computed(() => !!tokenRef.value);

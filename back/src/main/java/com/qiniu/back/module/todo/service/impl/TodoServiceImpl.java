@@ -60,7 +60,6 @@ public class TodoServiceImpl implements TodoService {
         Long userId = LoginUserContext.getUserId();
         List<Todo> todos = todoMapper.selectList(new LambdaQueryWrapper<Todo>()
                 .eq(Todo::getUserId, userId)
-                .eq(Todo::getDeletedFlag, 0)
                 .orderByDesc(Todo::getCreateTime));
 
         return todos.stream().map(todo -> {
@@ -110,9 +109,8 @@ public class TodoServiceImpl implements TodoService {
         }
         // 删除每日任务
         todoDateMapper.delete(new LambdaQueryWrapper<TodoDate>().eq(TodoDate::getTodoId, todoId));
-        // 删除待办本身（软删除）
-        todo.setDeletedFlag(1);
-        todoMapper.updateById(todo);
+        // 物理删除待办
+        todoMapper.delete(new LambdaQueryWrapper<Todo>().eq(Todo::getTodoId, todoId));
     }
 
     @Override
