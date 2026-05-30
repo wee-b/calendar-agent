@@ -27,3 +27,8 @@ export const getMonthCountAPI = (year: number, month: number): Promise<MonthCoun
 export const getDayTodosAPI = (date: string): Promise<DayTodosVO> => {
   return request.get('/calendar/day', { params: { date } });
 };
+
+// 保存/修改某天的日记
+export const saveDailyNoteAPI = (noteDate: string, content: string): Promise<void> => {
+  return request.put('/daily-note', { noteDate, content });
+};

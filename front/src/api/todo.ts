@@ -52,3 +52,15 @@ export const updateTodoAPI = (todoId: number, data: TodoUpdateDTO): Promise<Todo
 export const deleteTodoAPI = (todoId: number): Promise<void> => {
   return request.delete(`/todo/${todoId}`);
 };
+
+
+// ★ 新增：切换任务日期状态请求体
+export interface TodoDateToggleDTO {
+  todoId: number;
+  todoDate: string;
+}
+
+// ★ 新增：完成/取消完成某天任务
+export const toggleTodoDateStatusAPI = (data: TodoDateToggleDTO): Promise<number> => {
+  return request.put('/todo/toggle-date', data);
+};

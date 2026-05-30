@@ -68,10 +68,41 @@
 
 ---
 
+## 2026-05-30
+
+### 前端功能完善
+
+- **登录/退出优化**
+  - 退出登录改为不跳转页面（clearAuth + 显示登录弹窗）
+  - 登录弹窗改为非强制（点击遮罩可关闭，未登录可浏览页面）
+  - NavBar 未登录时显示"去登录"按钮，点击弹出登录弹窗，已登录时显示用户名和下拉菜单
+  - 退出登录调用 `/user/logout` 接口后再清除本地凭证
+  - `auth.ts` 新增 `isLoggedIn()` 判断方法
+- **环境变量配置** — 创建 `.env`，提取 `VITE_TOKEN_KEY=yvli-token` 和 `VITE_API_BASE_URL`，`auth.ts` 和 `request.ts` 改为读取环境变量
+- **待办清单 (TodoList.vue)**
+  - 完整 CRUD 对接后端 `/todo` 接口
+  - 顶部"创建待办"按钮 → 弹窗（标题/颜色/dayContent/起止日期/每周执行日 chip 选择）
+  - 每行左侧颜色圆点，右侧 `···` 菜单（修改/删除），点击外部自动关闭
+  - 右侧显示剩余天数圆角标签（`dates.length`），悬浮提示"还有xx天的任务"，已完成显示 ✓
+  - 未登录点击创建时提示"请先登录"
+- **日历增强 (HomeView.vue)**
+  - 对接 `/calendar/month-count`：右上角方形标签显示每日待办数量，数量越多颜色越深
+  - 农历 + 节日/节气显示（`utils/lunar.ts`，含 1900-2100 年数据、24 节气、公历/农历节日）
+  - 待办选中联动：点击左侧待办 → 跳转到 dates[0] 所在月份 → 该待办所有日期高亮（半透明底色）
+  - 日历格子 `aspect-ratio: 4/3`，wrapper `max-width: 980px; min-width: 500px` 防止挤压
+- **日详情面板**
+  - 点击日历日期 → 调用 `/calendar/day` 获取当日待办 + 日记
+  - 展开面板显示：待办列表（颜色圆点/标题/每日任务描述/完成状态）+ 日记 textarea
+  - 日记支持编辑 + 保存（`PUT /daily-note`）
+  - 面板 `max-height: 900px`，日历 + 面板可滚动
+- **API 层补充**
+  - `api/todo.ts` 补充 `toggleTodoDateStatusAPI`（完成/取消完成每日任务）
+  - `api/calendar.ts` 补充 `saveDailyNoteAPI`（日记保存）
+
+---
+
 ## 待完成
 
-- [ ] 前端日历对接 `month-count` + `day` 接口
-- [ ] 前端待办清单对接 CRUD 接口
 - [ ] Spring AI 集成 + 意图识别
 - [ ] 前端浏览器麦克风录音（STT）
 - [ ] 前端 TTS 朗读播放
