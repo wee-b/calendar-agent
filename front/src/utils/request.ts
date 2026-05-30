@@ -15,7 +15,7 @@ const whiteList = [
 
 // 2. 创建 axios 实例
 const request = axios.create({
-    baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080',
+    baseURL: import.meta.env.VITE_API_BASE_URL || '',
     timeout: 10000, // 请求超时时间
     headers: {
         'Content-Type': 'application/json;charset=utf-8'

@@ -7,10 +7,12 @@
         @toggle-chat="isChatOpen = !isChatOpen"
         @logout="handleLogout"
         @login="showAuthModal = true"
+        @help="showHelp = true"
     />
 
     <main class="main-content">
       <TodoList
+          ref="todoListRef"
           :isOpen="isTodoOpen"
           :selectedTodoId="selectedTodo?.todoId"
           @select="handleTodoSelect"
@@ -81,10 +83,11 @@
 
       </section>
 
-      <ChatPanel :isOpen="isChatOpen" />
+      <ChatPanel :isOpen="isChatOpen" @refresh="handleChatRefresh" />
     </main>
 
     <AuthModal v-if="!hasToken && showAuthModal" @success="handleLoginSuccess" @close="showAuthModal = false" />
+    <Help :visible="showHelp" @close="showHelp = false" />
   </div>
 </template>
 
@@ -102,13 +105,16 @@ import AuthModal from '../../components/AuthModal.vue';
 import NavBar from '../../components/NavBar.vue';
 import TodoList from './components/TodoList.vue';
 import ChatPanel from './components/ChatPanel.vue';
-import DayDetailPanel from './components/DayDetailPanel.vue'; // 引入新抽离的面板组件
+import DayDetailPanel from './components/DayDetailPanel.vue';
+import Help from '../../components/Help.vue';
 
 // ================= 状态管理 =================
 const isTodoOpen = ref(true);
 const isChatOpen = ref(true);
 const hasToken = computed(() => !!tokenRef.value);
 const showAuthModal = ref(!tokenRef.value);
+const showHelp = ref(false);
+const todoListRef = ref<InstanceType<typeof TodoList> | null>(null);
 
 const handleLoginSuccess = () => showAuthModal.value = false;
 
@@ -126,6 +132,19 @@ const handleTodoSelect = (todo: TodoVO) => {
   selectedTodo.value = todo;
   const firstDate = todo.dates?.[0] || todo.startDate;
   selectedMonthStr.value = firstDate.substring(0, 7);
+};
+
+const handleChatRefresh = async () => {
+  const todos = await todoListRef.value?.fetchTodos();
+  fetchMonthCounts();
+  if (todos && todos.length > 0) {
+    const newest = todos.reduce((a, b) =>
+      new Date(a.createTime) > new Date(b.createTime) ? a : b
+    );
+    selectedTodo.value = newest;
+    const firstDate = newest.dates?.[0] || newest.startDate;
+    selectedMonthStr.value = firstDate.substring(0, 7);
+  }
 };
 
 const handleLogout = async () => {

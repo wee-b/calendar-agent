@@ -3,6 +3,7 @@ package com.qiniu.back.module.chat.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
+import com.qiniu.back.domain.todo.dto.TodoUpdateDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
@@ -156,17 +157,40 @@ public class OpenAiService {
         return results;
     }
 
+    private Long toLong(Object value) {
+        if (value instanceof Number n) return n.longValue();
+        if (value instanceof String s) return Long.parseLong(s);
+        throw new IllegalArgumentException("无法转换为数字: " + value);
+    }
+
+    private int toInt(Object value) {
+        if (value instanceof Number n) return n.intValue();
+        if (value instanceof String s) return Integer.parseInt(s);
+        throw new IllegalArgumentException("无法转换为数字: " + value);
+    }
+
+    private List<Integer> toWeekDayList(Object value) {
+        if (value instanceof List<?> list) {
+            return list.stream().map(item -> {
+                if (item instanceof Number n) return n.intValue();
+                if (item instanceof String s) return Integer.parseInt(s);
+                throw new IllegalArgumentException("无法解析星期: " + item);
+            }).toList();
+        }
+        throw new IllegalArgumentException("weekDays 不是数组");
+    }
+
     private String executeTool(String name, String arguments) throws JsonProcessingException {
         Map<String, Object> args = mapper.readValue(arguments, Map.class);
 
         switch (name) {
             case "createTodo": {
                 String title = (String) args.get("title");
-                String color = (String) args.getOrDefault("color", "#5c4b37");
-                String dayContent = (String) args.get("dayContent");
+                String color = args.get("color") instanceof String s ? s : "#5c4b37";
+                String dayContent = args.get("dayContent") instanceof String s ? s : null;
                 String startDate = (String) args.get("startDate");
                 String endDate = (String) args.get("endDate");
-                List<Integer> weekDays = (List<Integer>) args.get("weekDays");
+                List<Integer> weekDays = toWeekDayList(args.get("weekDays"));
 
                 TodoCreateDTO dto = new TodoCreateDTO();
                 dto.setTitle(title);
@@ -179,13 +203,49 @@ public class OpenAiService {
                 return toolService.createTodo(dto);
             }
             case "queryMonthCount": {
-                int year = (int) args.get("year");
-                int month = (int) args.get("month");
+                int year = toInt(args.get("year"));
+                int month = toInt(args.get("month"));
                 return toolService.queryMonthCount(year, month);
             }
             case "queryDayDetail": {
                 String date = (String) args.get("date");
                 return toolService.queryDayDetail(date);
+            }
+            case "queryTodoList": {
+                return toolService.queryTodoList();
+            }
+            case "deleteTodo": {
+                Long todoId = toLong(args.get("todoId"));
+                return toolService.deleteTodo(todoId);
+            }
+            case "updateTodo": {
+                Long todoId = toLong(args.get("todoId"));
+                String title = (String) args.get("title");
+                String color = args.get("color") instanceof String s ? s : "#5c4b37";
+                String dayContent = args.get("dayContent") instanceof String s ? s : null;
+                String startDate = (String) args.get("startDate");
+                String endDate = (String) args.get("endDate");
+                List<Integer> weekDays = toWeekDayList(args.get("weekDays"));
+
+                TodoUpdateDTO dto = new TodoUpdateDTO();
+                dto.setTitle(title);
+                dto.setColor(color);
+                dto.setDayContent(dayContent != null ? dayContent : title);
+                dto.setStartDate(LocalDate.parse(startDate));
+                dto.setEndDate(LocalDate.parse(endDate));
+                dto.setWeekDays(weekDays);
+
+                return toolService.updateTodo(todoId, dto);
+            }
+            case "toggleTodoDate": {
+                Long todoId = toLong(args.get("todoId"));
+                String date = (String) args.get("date");
+                return toolService.toggleTodoDate(todoId, date);
+            }
+            case "saveDailyNote": {
+                String date = (String) args.get("date");
+                String content = (String) args.get("content");
+                return toolService.saveDailyNote(date, content);
             }
             default:
                 return "未知的工具: " + name;
@@ -201,7 +261,7 @@ public class OpenAiService {
                         "type", "function",
                         "function", Map.of(
                                 "name", "createTodo",
-                                "description", "创建一个新的待办目标。用户明确确认后才能调用！",
+                                "description", "创建一个新的待办目标。仅在用户明确要求创建且已确认后才调用。用户说删除/去掉/移除时绝对不要调这个工具！",
                                 "parameters", Map.of(
                                         "type", "object",
                                         "properties", Map.of(
@@ -244,6 +304,83 @@ public class OpenAiService {
                                                 "date", Map.of("type", "string", "description", "日期 yyyy-MM-dd")
                                         ),
                                         "required", List.of("date")
+                                )
+                        )
+                ),
+                Map.of(
+                        "type", "function",
+                        "function", Map.of(
+                                "name", "queryTodoList",
+                                "description", "查询当前用户的所有待办目标列表，返回每个目标的ID、名称、日期范围、状态。删除或修改待办前必须先调用此工具获取 todoId。",
+                                "parameters", Map.of(
+                                        "type", "object",
+                                        "properties", Map.of()
+                                )
+                        )
+                ),
+                Map.of(
+                        "type", "function",
+                        "function", Map.of(
+                                "name", "deleteTodo",
+                                "description", "删除一个待办目标。用户说删除/去掉/移除/取消XX时就应该调用此工具。必须先调用 queryTodoList 获取待办ID，用户确认后才能调用！不要在用户说删除时去调用 createTodo！",
+                                "parameters", Map.of(
+                                        "type", "object",
+                                        "properties", Map.of(
+                                                "todoId", Map.of("type", "integer", "description", "待办目标ID")
+                                        ),
+                                        "required", List.of("todoId")
+                                )
+                        )
+                ),
+                Map.of(
+                        "type", "function",
+                        "function", Map.of(
+                                "name", "updateTodo",
+                                "description", "修改一个待办目标的名称、颜色、日期范围或执行日。必须先从 queryTodoList 获取 todoId，用户确认后才能调用！所有字段均为必填，未修改的字段需填入原值。",
+                                "parameters", Map.of(
+                                        "type", "object",
+                                        "properties", Map.of(
+                                                "todoId", Map.of("type", "integer", "description", "待办目标ID"),
+                                                "title", Map.of("type", "string", "description", "目标名称"),
+                                                "color", Map.of("type", "string", "description", "十六进制颜色，如#4CAF50"),
+                                                "dayContent", Map.of("type", "string", "description", "每日具体任务描述"),
+                                                "startDate", Map.of("type", "string", "description", "开始日期 yyyy-MM-dd"),
+                                                "endDate", Map.of("type", "string", "description", "结束日期 yyyy-MM-dd"),
+                                                "weekDays", Map.of("type", "array",
+                                                        "items", Map.of("type", "integer"),
+                                                        "description", "每周执行日 1=周一至7=周日")
+                                        ),
+                                        "required", List.of("todoId", "title", "startDate", "endDate", "weekDays")
+                                )
+                        )
+                ),
+                Map.of(
+                        "type", "function",
+                        "function", Map.of(
+                                "name", "toggleTodoDate",
+                                "description", "切换某天某个待办的完成状态（完成↔未完成）。用户说'完成'/'搞定'/'做完了'时调用。",
+                                "parameters", Map.of(
+                                        "type", "object",
+                                        "properties", Map.of(
+                                                "todoId", Map.of("type", "integer", "description", "待办目标ID"),
+                                                "date", Map.of("type", "string", "description", "日期 yyyy-MM-dd")
+                                        ),
+                                        "required", List.of("todoId", "date")
+                                )
+                        )
+                ),
+                Map.of(
+                        "type", "function",
+                        "function", Map.of(
+                                "name", "saveDailyNote",
+                                "description", "保存某天的日记内容。用户说'写日记'/'记录一下'/'记下来'时调用。",
+                                "parameters", Map.of(
+                                        "type", "object",
+                                        "properties", Map.of(
+                                                "date", Map.of("type", "string", "description", "日期 yyyy-MM-dd"),
+                                                "content", Map.of("type", "string", "description", "日记内容")
+                                        ),
+                                        "required", List.of("date", "content")
                                 )
                         )
                 )

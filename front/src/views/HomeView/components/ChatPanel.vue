@@ -65,7 +65,7 @@
           <textarea
               v-model="inputText"
               class="chat-input"
-              :placeholder="isRecording ? '正在聆听...' : '输入指令，或点击左下角🎤开始语音输入'"
+              :placeholder="voiceEnabled ? (isRecording ? '正在聆听...' : '正在聆听，说完后说【发送】提交...') : '语音已关闭，输入指令或点击🎤开启'"
               @keydown.enter.exact.prevent="handleSend"
               :disabled="isSending || !isUserLoggedIn"
               :rows="isExpanded ? 10 : 3"
@@ -77,7 +77,7 @@
                 @click="toggleVoice"
                 :disabled="isSending || !isUserLoggedIn"
             >
-              {{ isRecording ? '⏹' : '🎤' }}
+              {{ voiceEnabled ? '🎤' : '🔇' }}
             </button>
             <button
                 class="send-btn"
@@ -90,6 +90,18 @@
           <span class="expand-icon" @click="isExpanded = !isExpanded" :title="isExpanded ? '收起' : '展开'">
             {{ isExpanded ? '↕' : '↕' }}
           </span>
+        </div>
+      </div>
+
+      <div v-if="confirmSendVisible" class="confirm-modal-overlay">
+        <div class="confirm-modal">
+          <p>确认发送吗？</p>
+          <p class="confirm-preview">{{ inputText }}</p>
+          <div class="confirm-actions">
+            <button class="confirm-btn danger" @click="cleanupConfirmRecognition(); confirmSendVisible = false; sendGuard = false; handleSend()">确认发送</button>
+            <button class="confirm-btn cancel" @click="cleanupConfirmRecognition(); confirmSendVisible = false; sendGuard = false">取消</button>
+          </div>
+          <p class="confirm-hint">也可以说"确认"或"取消"来控制</p>
         </div>
       </div>
 
@@ -116,6 +128,7 @@ import {
 import { tokenRef } from '../../../utils/auth';
 
 const props = defineProps<{ isOpen: boolean }>();
+const emit = defineEmits<{ (e: 'refresh'): void }>();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
 
 interface ChatMessage { role: string; content: string; loading?: boolean; }
@@ -133,7 +146,13 @@ const chatHistoryRef = ref<HTMLElement | null>(null);
 
 const isRecording = ref(false);
 const isExpanded = ref(false);
+const confirmSendVisible = ref(false);
+const voiceEnabled = ref(true);
 let recognition: any = null;
+let confirmRecognition: any = null;
+let sendGuard = false;
+let voiceTimer: any = null;
+const VOICE_TIMEOUT = 10 * 60 * 1000; // 10分钟
 
 const currentSessionTitle = computed(() => {
   const session = sessions.value.find(s => s.sessionId === currentSessionId.value);
@@ -241,64 +260,149 @@ const handleDeleteLastRound = async () => {
 };
 
 // ================= 语音识别录入 =================
-const toggleVoice = () => {
-  if (isRecording.value) {
+const clearVoiceTimer = () => {
+  if (voiceTimer) { clearTimeout(voiceTimer); voiceTimer = null; }
+};
+
+const resetVoiceTimer = () => {
+  clearVoiceTimer();
+  voiceTimer = setTimeout(() => {
+    voiceEnabled.value = false;
     stopVoice();
+    cleanupConfirmRecognition();
+  }, VOICE_TIMEOUT);
+};
+
+const toggleVoice = () => {
+  if (voiceEnabled.value) {
+    voiceEnabled.value = false;
+    clearVoiceTimer();
+    stopVoice();
+    cleanupConfirmRecognition();
   } else {
+    voiceEnabled.value = true;
+    resetVoiceTimer();
     startVoice();
   }
 };
 
 const startVoice = () => {
-  if (!isUserLoggedIn.value) return;
+  if (!isUserLoggedIn.value || !voiceEnabled.value) return;
 
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-  if (SpeechRecognition) {
-    recognition = new SpeechRecognition();
-    recognition.lang = 'zh-CN';
-    recognition.interimResults = true; // 开启实时返回结果
-    recognition.continuous = true;     // 允许连续说话
-
-    inputText.value = '';
-    isRecording.value = true;
-
-    // 实时拼接识别结果
-    recognition.onresult = (event: any) => {
-      let currentText = '';
-      for (let i = 0; i < event.results.length; i++) {
-        currentText += event.results[i][0].transcript;
-      }
-      inputText.value = currentText;
-    };
-
-    recognition.onerror = (event: any) => {
-      if (event.error !== 'aborted') {
-        ElMessage.error('语音识别出错');
-      }
-      isRecording.value = false;
-    };
-
-    recognition.onend = () => {
-      isRecording.value = false;
-    };
-
-    recognition.start();
-  } else {
+  if (!SpeechRecognition) {
     ElMessage.warning('您的浏览器不支持语音识别功能');
-    isRecording.value = false;
+    voiceEnabled.value = false;
+    return;
   }
+
+  try { if (recognition) recognition.stop(); } catch {}
+
+  recognition = new SpeechRecognition();
+  recognition.lang = 'zh-CN';
+  recognition.interimResults = true;
+  recognition.continuous = true;
+
+  isRecording.value = true;
+  sendGuard = false;
+
+  recognition.onresult = (event: any) => {
+    let currentText = '';
+    for (let i = 0; i < event.results.length; i++) {
+      currentText += event.results[i][0].transcript;
+    }
+    inputText.value = currentText.replace(/[。！？，、；：]\)\}»』】〉》]+$/g, '').trim();
+  };
+
+  recognition.onerror = (event: any) => {
+    if (event.error !== 'aborted') {
+      ElMessage.error('语音识别出错');
+    }
+    isRecording.value = false;
+  };
+
+  recognition.onend = () => {
+    isRecording.value = false;
+  };
+
+  recognition.start();
 };
 
 const stopVoice = () => {
   if (recognition) {
-    recognition.stop();
+    try { recognition.stop(); } catch {}
+    recognition = null;
   }
   isRecording.value = false;
 };
 
+// ================= 语音发送确认 =================
+const cleanupConfirmRecognition = () => {
+  if (confirmRecognition) {
+    try { confirmRecognition.stop(); } catch {}
+    confirmRecognition = null;
+  }
+};
+
+const startConfirmRecognition = () => {
+  cleanupConfirmRecognition();
+  const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  if (!SpeechRecognition) return;
+
+  confirmRecognition = new SpeechRecognition();
+  confirmRecognition.lang = 'zh-CN';
+  confirmRecognition.interimResults = false;
+  confirmRecognition.continuous = false;
+
+  confirmRecognition.onresult = (event: any) => {
+    const text = event.results[0][0].transcript.trim();
+    if (/确认|发送|好的|可以|行|没问题/.test(text)) {
+      cleanupConfirmRecognition();
+      confirmSendVisible.value = false;
+      sendGuard = false;
+      handleSend();
+    } else if (/取消|不要|算了|不了/.test(text)) {
+      cleanupConfirmRecognition();
+      confirmSendVisible.value = false;
+      sendGuard = false;
+    }
+  };
+
+  confirmRecognition.onerror = () => {
+    cleanupConfirmRecognition();
+  };
+
+  confirmRecognition.onend = () => {
+    if (confirmSendVisible.value) {
+      setTimeout(() => {
+        if (confirmSendVisible.value && confirmRecognition) {
+          try { confirmRecognition.start(); } catch {}
+        }
+      }, 300);
+    }
+  };
+
+  confirmRecognition.start();
+};
+
+watch(inputText, (newVal) => {
+  if (!isRecording.value || sendGuard) return;
+  const idx = newVal.indexOf('发送');
+  if (idx === -1) return;
+
+  sendGuard = true;
+  inputText.value = newVal.substring(0, idx).trim();
+  stopVoice();
+  confirmSendVisible.value = true;
+  startConfirmRecognition();
+});
+
 // ================= 发送消息 =================
+const CHAT_TIMEOUT = 10000;
+
 const handleSend = async () => {
-  const text = inputText.value.trim();
+  let text = inputText.value.trim();
+  text = text.replace(/发送[。！？，、；：]*$/g, '').trim();
   if (!text || isSending.value || !isUserLoggedIn.value) return;
 
   if (!currentSessionId.value) {
@@ -306,6 +410,7 @@ const handleSend = async () => {
     if (!currentSessionId.value) return;
   }
 
+  stopVoice();
   messages.value.push({ role: 'user', content: text });
   inputText.value = '';
   scrollToBottom();
@@ -314,19 +419,30 @@ const handleSend = async () => {
   isSending.value = true;
   scrollToBottom();
 
+  let slowTimer: any = null;
   try {
+    slowTimer = setTimeout(() => {
+      ElMessage.warning('响应较慢，请耐心等待...');
+    }, CHAT_TIMEOUT);
+
     const res = await sendChatAPI({
       sessionId: currentSessionId.value,
       message: text
     });
+    clearTimeout(slowTimer);
 
     const lastMsg = messages.value[messages.value.length - 1];
     if (lastMsg && lastMsg.loading) {
       lastMsg.loading = false;
       lastMsg.content = res.aiResult || '操作已完成';
     }
+    await nextTick();
+    scrollToBottom();
+    emit('refresh');
+    handleRead(lastMsg?.content || res.aiResult || '操作已完成');
     fetchSessions();
   } catch (error) {
+    clearTimeout(slowTimer);
     const lastMsg = messages.value[messages.value.length - 1];
     if (lastMsg && lastMsg.loading) {
       lastMsg.loading = false;
@@ -335,6 +451,11 @@ const handleSend = async () => {
   } finally {
     isSending.value = false;
     scrollToBottom();
+    inputText.value = '';
+    if (voiceEnabled.value) {
+      resetVoiceTimer();
+      setTimeout(() => startVoice(), 400);
+    }
   }
 };
 
@@ -344,6 +465,7 @@ onMounted(async () => {
     await fetchSessions();
     if (sessions.value.length > 0) selectSession(sessions.value[0]);
     else createNewSession();
+    if (voiceEnabled.value) { resetVoiceTimer(); startVoice(); }
   }
 });
 
@@ -352,7 +474,10 @@ watch(isUserLoggedIn, async (newVal) => {
     await fetchSessions();
     if (sessions.value.length > 0) selectSession(sessions.value[0]);
     else createNewSession();
+    if (voiceEnabled.value) { resetVoiceTimer(); startVoice(); }
   } else {
+    clearVoiceTimer();
+    stopVoice();
     sessions.value = [];
     messages.value = [];
     currentSessionId.value = null;
@@ -451,6 +576,8 @@ watch(isUserLoggedIn, async (newVal) => {
 .confirm-modal-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(92, 75, 55, 0.4); backdrop-filter: blur(2px); display: flex; justify-content: center; align-items: center; z-index: 100; }
 .confirm-modal { background: #fdfae9; padding: 20px; border: 2px solid #d3c4a1; border-radius: 12px; box-shadow: 0 10px 20px rgba(0,0,0,0.1); text-align: center; width: 80%; }
 .confirm-modal p { color: #5c4b37; font-weight: bold; margin: 0 0 20px 0; font-size: 14px; }
+.confirm-preview { font-weight: normal !important; font-size: 13px !important; color: #8c7a65 !important; background: #fcf9ee; padding: 8px 12px; border-radius: 6px; border: 1px solid #eaddc4; margin-bottom: 16px !important; word-break: break-word; max-height: 80px; overflow-y: auto; }
+.confirm-hint { font-weight: normal !important; font-size: 12px !important; color: #b5a992 !important; margin: 12px 0 0 0 !important; }
 .confirm-actions { display: flex; gap: 10px; }
 .confirm-btn { flex: 1; padding: 8px; border-radius: 6px; font-size: 13px; font-weight: bold; cursor: pointer; border: none; }
 .confirm-btn.cancel { background: transparent; border: 1px solid #d3c4a1; color: #5c4b37; }
