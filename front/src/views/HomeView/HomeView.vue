@@ -266,6 +266,7 @@ const handleSaveDiary = async () => {
 const monthCounts = ref<Record<string, number>>({});
 
 const fetchMonthCounts = async () => {
+  if (!hasToken.value) return; // ★ 新增拦截：未登录不请求
   const [yearStr, monthStr] = selectedMonthStr.value.split('-');
   try {
     const list = await getMonthCountAPI(parseInt(yearStr), parseInt(monthStr));
@@ -278,6 +279,16 @@ const fetchMonthCounts = async () => {
 watch(selectedMonthStr, () => {
   closeDayDetail();
   fetchMonthCounts();
+});
+
+// ★ 新增：监听登录状态变化，联动刷新日历角标
+watch(hasToken, (newVal) => {
+  if (newVal) {
+    fetchMonthCounts(); // 登录成功，拉取当月角标
+  } else {
+    monthCounts.value = {}; // 退出登录，清空角标
+    closeDayDetail(); // 关闭可能正开着的详情面板
+  }
 });
 
 onMounted(fetchMonthCounts);

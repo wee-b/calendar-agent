@@ -10,6 +10,12 @@ import com.qiniu.back.module.chat.service.ChatService;
 import com.qiniu.back.module.chat.service.OpenAiService;
 import com.qiniu.back.util.LoginUserContext;
 import com.qiniu.back.util.PromptLoader;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.DayOfWeek;
+import java.time.format.TextStyle;
+import java.util.Locale;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -41,7 +47,7 @@ public class ChatServiceImpl implements ChatService {
 
         String aiResult;
         try {
-            aiResult = openAiService.chat(SYSTEM_PROMPT, messages);
+            aiResult = openAiService.chat(buildSystemPrompt(), messages);
         } catch (Exception e) {
             log.error("AI 调用失败", e);
             aiResult = "抱歉，我暂时无法处理这个请求，请稍后再试。";
@@ -147,6 +153,17 @@ public class ChatServiceImpl implements ChatService {
     }
 
     // ==================== 内部工具 ====================
+
+    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy年M月d日");
+
+    private String buildSystemPrompt() {
+        LocalDate today = LocalDate.now();
+        DayOfWeek dow = today.getDayOfWeek();
+        String weekDayCn = dow.getDisplayName(TextStyle.FULL, Locale.CHINESE);
+        String todayStr = today.format(DATE_FMT) + "（" + weekDayCn + "）";
+
+        return SYSTEM_PROMPT + "\n\n## 时间上下文\n当前日期是 " + todayStr + "。用户说\"今天\"就是指" + todayStr + "，说\"明天\"就是加一天，以此类推。";
+    }
 
     private List<AiDialogue> loadHistory(Long userId, String sessionId) {
         return aiDialogueMapper.selectList(

@@ -102,9 +102,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from 'vue';
+import {ref, reactive, onMounted, onUnmounted, watch} from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { isLoggedIn } from '../../../utils/auth';
+import { isLoggedIn,tokenRef } from '../../../utils/auth';
 import {
   listTodosAPI,
   createTodoAPI,
@@ -147,6 +147,7 @@ const closeMenu = () => {
 };
 
 const fetchTodos = async () => {
+  if (!isLoggedIn()) return; // ★ 新增拦截：未登录不请求
   try {
     todos.value = await listTodosAPI();
   } catch {
@@ -258,6 +259,16 @@ onMounted(() => {
   fetchTodos();
   document.addEventListener('click', handleOutsideClick);
 });
+
+// ★ 新增：监听登录状态变化
+watch(tokenRef, (newVal) => {
+  if (newVal) {
+    fetchTodos(); // 登录成功，重新拉取待办
+  } else {
+    todos.value = []; // 退出登录，清空列表
+  }
+});
+
 
 onUnmounted(() => {
   document.removeEventListener('click', handleOutsideClick);

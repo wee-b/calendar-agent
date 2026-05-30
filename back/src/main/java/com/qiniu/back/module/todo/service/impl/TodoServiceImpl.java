@@ -110,9 +110,8 @@ public class TodoServiceImpl implements TodoService {
         }
         // 删除每日任务
         todoDateMapper.delete(new LambdaQueryWrapper<TodoDate>().eq(TodoDate::getTodoId, todoId));
-        // 删除待办本身（软删除）
-        todo.setDeletedFlag(1);
-        todoMapper.updateById(todo);
+        // 软删除待办（走 MyBatis-Plus 逻辑删除，自动设 deletedFlag=1）
+        todoMapper.deleteById(todoId);
     }
 
     @Override

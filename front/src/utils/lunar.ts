@@ -112,63 +112,75 @@ function getMonthDays(year: number, month: number): number {
 
 // 将公历日期转为农历
 export function solarToLunar(y: number, m: number, d: number): LunarInfo {
-  // 计算与1900-01-31（农历1900年正月初一）的天数差
-  let offset = 0;
-  for (let i = 1900; i < y; i++) {
-    offset += getLunarYearDays(i);
-  }
-  const leapMonth = getLeapMonth(y);
-  let isLeap = false;
+  // ★ 修复点 1：使用标准 Date 计算真实的天数差
+  // 1900-01-31 是农历1900年正月初一
+  const baseDate = Date.UTC(1900, 0, 31);
+  const targetDate = Date.UTC(y, m - 1, d);
+  let offset = Math.floor((targetDate - baseDate) / 86400000);
 
-  for (let i = 1; i < m; i++) {
-    offset += getMonthDays(y, i);
+  // 如果年份超限或早于1900，直接返回空兜底
+  if (offset < 0 || offset > 73050) {
+    return { lunarMonth: 1, lunarDay: 1, isLeapMonth: false, lunarDate: '', festival: '', solarTerm: '' };
   }
-  // 加上闰月天数
-  if (leapMonth > 0 && m > leapMonth) {
-    offset += getLeapMonthDays(y);
-  }
-  offset += d - 1;
 
-  // 从1900年正月初一开始推算农历日期
+  // ★ 修复点 2：根据天数差正确推算农历年份
   let lunarYear = 1900;
-  let yearDays = getLunarYearDays(lunarYear);
-  while (lunarYear < 2100 && offset >= yearDays) {
-    offset -= yearDays;
-    lunarYear++;
+  let yearDays = 0;
+  for (lunarYear = 1900; lunarYear < 2100 && offset > 0; lunarYear++) {
     yearDays = getLunarYearDays(lunarYear);
+    offset -= yearDays;
+  }
+  if (offset < 0) {
+    offset += yearDays;
+    lunarYear--;
   }
 
+  // ★ 修复点 3：推算农历月份
   let lunarMonth = 1;
-  const lm = getLeapMonth(lunarYear);
+  const leapMonth = getLeapMonth(lunarYear);
   let isLeapMonth = false;
-  let monthDays: number;
+  let monthDays = 0;
 
-  for (let i = 1; i <= 12; i++) {
-    monthDays = getMonthDays(lunarYear, i);
-    if (offset < monthDays) {
-      lunarMonth = i;
-      break;
+  for (lunarMonth = 1; lunarMonth <= 12 && offset > 0; lunarMonth++) {
+    // 遇到闰月
+    if (leapMonth > 0 && lunarMonth === leapMonth + 1 && !isLeapMonth) {
+      --lunarMonth;
+      isLeapMonth = true;
+      monthDays = getLeapMonthDays(lunarYear);
+    } else {
+      monthDays = getMonthDays(lunarYear, lunarMonth);
+    }
+
+    // 解除闰月状态
+    if (isLeapMonth && lunarMonth === leapMonth + 1) {
+      isLeapMonth = false;
     }
     offset -= monthDays;
+  }
 
-    if (i === lm) {
-      monthDays = getLeapMonthDays(lunarYear);
-      if (offset < monthDays) {
-        lunarMonth = i;
-        isLeapMonth = true;
-        break;
-      }
-      offset -= monthDays;
+  if (offset === 0 && leapMonth > 0 && lunarMonth === leapMonth + 1) {
+    if (isLeapMonth) {
+      isLeapMonth = false;
+    } else {
+      isLeapMonth = true;
+      --lunarMonth;
     }
+  }
+
+  if (offset < 0) {
+    offset += monthDays;
+    --lunarMonth;
   }
 
   const lunarDay = offset + 1;
 
-  // 节日
+  // ---------------- 节日与显示处理 ----------------
+
+  // 传统节日
   const dateKey = `${String(lunarMonth).padStart(2, '0')}-${String(lunarDay).padStart(2, '0')}`;
   let festival = isLeapMonth ? '' : (LUNAR_FESTIVALS[dateKey] || '');
 
-  // 特殊处理除夕（腊月最后一天）
+  // 特殊处理除夕（腊月最后一天，可能是29也可能是30）
   if (lunarMonth === 12) {
     const daysIn12 = getMonthDays(lunarYear, 12);
     if (lunarDay === daysIn12 && !festival) {
@@ -177,7 +189,12 @@ export function solarToLunar(y: number, m: number, d: number): LunarInfo {
   }
 
   // 节气
-  const solarTerm = getSolarTerm(y, m, d);
+  let solarTerm = getSolarTerm(y, m, d);
+  // 清明既是节气也是节日，提升为节日显示优先级
+  if (solarTerm === '清明') {
+    festival = '清明节';
+    solarTerm = '';
+  }
 
   // 公历节日
   const solarKey = `${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -185,11 +202,19 @@ export function solarToLunar(y: number, m: number, d: number): LunarInfo {
     festival = SOLAR_FESTIVALS[solarKey];
   }
 
+  // ★ 优化显示：初一显示月份，其余显示日子。避免"正月十五"太长撑破格子
+  let lunarDateText = '';
+  if (lunarDay === 1) {
+    lunarDateText = (isLeapMonth ? '闰' : '') + LUNAR_MONTH_NAMES[lunarMonth];
+  } else {
+    lunarDateText = LUNAR_DAY_NAMES[lunarDay];
+  }
+
   return {
     lunarMonth,
     lunarDay,
     isLeapMonth,
-    lunarDate: (isLeapMonth ? '闰' : '') + LUNAR_MONTH_NAMES[lunarMonth] + LUNAR_DAY_NAMES[lunarDay],
+    lunarDate: lunarDateText,
     festival,
     solarTerm,
   };
