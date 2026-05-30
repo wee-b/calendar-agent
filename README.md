@@ -167,7 +167,7 @@ cd back
 mvn spring-boot:run
 
 # 4. 获取测试 Token
-curl http://localhost:8080/test/getToken?userId=1
+curl http://localhost:8080/test/getToken?userId=36
 
 # 5. 启动前端
 cd front
@@ -197,8 +197,8 @@ npm install && npm run dev
 - [x] 每日任务完成/取消完成（含自动联动待办整体状态）
 - [x] 日历模块（当月每日待办数量 / 某天详情）
 - [x] 日记模块（保存/修改某天日记）
+- [x] 测试数据（user_id=36，5 个目标覆盖不同颜色/周期/完成状态）
 - [ ] AI 对话 + Spring AI 集成
-- [ ] 前后端联调
 - [ ] 语音转文字（浏览器 STT）
 - [ ] TTS 朗读播放
 
@@ -212,14 +212,23 @@ npm install && npm run dev
 front/src/
 ├── App.vue                      # 根组件（全局样式重置）
 ├── main.ts                      # 入口（Vue + Router 挂载）
-├── style.css                    # 全局样式
 ├── router/index.ts              # 路由（Login / Home）+ 路由守卫
+├── api/                         # API 封装层
+│   ├── user.ts                  #   用户 API（登录/注册/信息）
+│   ├── todo.ts                  #   待办 API（CRUD + 完成）
+│   └── calendar.ts              #   日历 API（月统计 + 日详情 + 日记）
+├── utils/
+│   ├── request.ts               #   axios 实例（baseURL + 拦截器 + token 注入）
+│   ├── auth.ts                  #   token 存取工具
+│   └── lunar.ts                 #   农历工具
+├── .env                          # 环境变量（VITE_TOKEN_KEY / VITE_API_BASE_URL）
 ├── components/
-│   └── NavBar.vue               # 顶部导航栏（面板切换 + 退出）
+│   ├── NavBar.vue               #   顶部导航栏（面板切换 + 退出）
+│   └── AuthModal.vue            #   登录/注册弹窗（已对接后端）
 └── views/
     ├── LoginView.vue            # 登录/注册页面
     └── HomeView/
-        ├── HomeView.vue         # 主页布局（三栏 + 日历）
+        ├── HomeView.vue         # 主页布局（三栏 + 日历核心逻辑）
         └── components/
             ├── TodoList.vue     # 左侧待办清单面板
             └── ChatPanel.vue    # 右侧语音助手面板
@@ -236,11 +245,12 @@ front/src/
 
 ### 页面说明
 
-- **登录/注册页** — 表单切换，UI 已完成，待对接 `/user/login` 和 `/user/register`
-- **主页** — 三栏布局：左待办 + 中日历 + 右语音助手，均可折叠/展开
-- **日历** — 月视图网格、月份选择器、日期点击选中、行内编辑面板
-- **待办清单** — 左侧可折叠面板，当前为静态列表，待对接 `/todo/list` 等接口
-- **语音助手** — 右侧可折叠面板，模拟对话气泡，麦克风按钮预留
+- **登录/注册** — `AuthModal.vue` 弹窗组件，已对接 `/user/login` 和 `/user/register`，Token 自动存入 localStorage，可关闭不强制登录
+- **主页** — 三栏布局可折叠：左待办 + 中日历 + 右语音助手，NavBar 未登录时显示"去登录"
+- **日历** — 月视图网格、月份选择器、农历/节日/节气显示、每日待办数量标记（右上角，数量越多颜色越深）、待办选中日期高亮
+- **待办清单** — 左侧可折叠面板，完整 CRUD（创建/修改弹窗、删除确认），颜色圆点 + 剩余天数标记，点击选中联动日历跳转月份并高亮日期
+- **语音助手** — 对话气泡 + 按住说话按钮（预留 STT 接口）
+- **API 层** — `request.ts` 统一封装 axios，baseURL 通过 `.env` 配置，自动注入 `yvli-token`，统一错误处理
 
 ### 快速启动
 
@@ -253,11 +263,18 @@ npm run dev
 ### 开发进度
 
 - [x] Vue 3 项目搭建 + 路由
-- [x] 登录/注册页面 UI
+- [x] 登录/注册 UI + 后端 API 对接
+- [x] axios 封装 + token 自动注入 + 统一错误处理
 - [x] 主页三栏布局 + 日历组件
-- [x] 语音助手面板 UI
+- [x] 待办 API 模块（`api/todo.ts`）
+- [x] 日历 API 模块（`api/calendar.ts`）
+- [x] 语音助手面板 UI + 麦克风按钮
 - [x] 待办清单面板 UI
-- [ ] 对接后端登录/注册 API
-- [ ] 对接后端待办 CRUD API + 日历集成
+- [x] 日历对接 `month-count` 接口（每日待办数量 + 颜色深浅）
+- [x] 待办清单对接 CRUD 接口（创建/修改/删除弹窗 + 星期选择）
+- [x] 农历 + 节日/节气显示（`utils/lunar.ts`）
+- [x] 待办选中联动日历高亮（跳转月份 + dates 日期高亮）
+- [x] 非强制登录（登录弹窗可关闭，未登录可浏览，NavBar 显示"去登录"）
 - [ ] 浏览器麦克风录音（STT）
 - [ ] AI 对话对接 + TTS 播放
+- [ ] 日历日详情编辑面板对接

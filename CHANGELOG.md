@@ -56,13 +56,22 @@
   - 某天详情查询（待办列表 + dayContent + color + 日记内容）
   - 日记保存/修改（upsert）
 - **文档** — 编写 README.md 和 CHANGELOG.md，所有 DTO 补全 `@Schema` 注解
+- **测试数据** — 生成完整测试数据集（user_id=36，5 个目标涵盖不同颜色/周期/完成状态，30 行每日任务，6 条日记，10 条对话）
+- **前端-API 层对接**
+  - `utils/request.ts` — axios 封装，baseURL 自动注入 `yvli-token`，401 拦截跳转登录
+  - `utils/auth.ts` — Token 存取工具
+  - `api/user.ts` — 用户 API 模块（注册/登录/信息）
+  - `api/todo.ts` — 待办 API 模块（CRUD + 完成）
+  - `api/calendar.ts` — 日历 API 模块（月统计 + 日详情 + 日记）
+  - `utils/lunar.ts` — 农历工具
+  - `AuthModal.vue` — 登录/注册弹窗组件，已对接后端
 
 ---
 
 ## 待完成
 
-- [ ] 前端对接后端登录/注册 API
-- [ ] 前端对接待办 CRUD API + 日历交互
+- [ ] 前端日历对接 `month-count` + `day` 接口
+- [ ] 前端待办清单对接 CRUD 接口
 - [ ] Spring AI 集成 + 意图识别
 - [ ] 前端浏览器麦克风录音（STT）
 - [ ] 前端 TTS 朗读播放
