@@ -47,7 +47,7 @@ public class ChatServiceImpl implements ChatService {
 
         String aiResult;
         try {
-            aiResult = openAiService.chat(buildSystemPrompt(), messages);
+            aiResult = openAiService.chat(buildSystemPrompt(message), messages);
         } catch (Exception e) {
             log.error("AI 调用失败", e);
             aiResult = "抱歉，我暂时无法处理这个请求，请稍后再试。";
@@ -156,13 +156,35 @@ public class ChatServiceImpl implements ChatService {
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy年M月d日");
 
-    private String buildSystemPrompt() {
+    private String buildSystemPrompt(String userMessage) {
         LocalDate today = LocalDate.now();
         DayOfWeek dow = today.getDayOfWeek();
         String weekDayCn = dow.getDisplayName(TextStyle.FULL, Locale.CHINESE);
         String todayStr = today.format(DATE_FMT) + "（" + weekDayCn + "）";
 
-        return SYSTEM_PROMPT + "\n\n## 时间上下文\n当前日期是 " + todayStr + "。用户说\"今天\"就是指" + todayStr + "，说\"明天\"就是加一天，以此类推。";
+        StringBuilder sb = new StringBuilder(SYSTEM_PROMPT);
+        sb.append("\n\n## 时间上下文\n当前日期是 ").append(todayStr)
+          .append("。用户说\"今天\"就是指").append(todayStr).append("，说\"明天\"就是加一天，以此类推。");
+
+        if (userMessage != null) {
+            String msg = userMessage.trim();
+            boolean isDelete = msg.contains("删除") || msg.contains("去掉") || msg.contains("移除") || msg.contains("取消");
+            boolean isCreate = msg.contains("创建") || msg.contains("添加") || msg.contains("新增") || msg.contains("安排") || msg.contains("加一个") || msg.contains("建一个");
+            boolean isToggle = msg.contains("完成") || msg.contains("搞定") || msg.contains("做完了") || msg.contains("打卡");
+            boolean isUpdate = msg.contains("修改") || msg.contains("改成") || msg.contains("改一下");
+
+            if (isDelete && !isCreate) {
+                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【删除】。你必须走删除流程，先查列表再删。绝对禁止创建！绝对禁止调用createTodo！");
+            } else if (isCreate && !isDelete) {
+                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【创建】。走创建流程。");
+            } else if (isToggle) {
+                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【标记完成】。调用toggleTodoDate。");
+            } else if (isUpdate && !isDelete) {
+                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【修改】。先查列表再修改。");
+            }
+        }
+
+        return sb.toString();
     }
 
     private List<AiDialogue> loadHistory(Long userId, String sessionId) {

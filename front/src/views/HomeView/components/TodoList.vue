@@ -146,14 +146,17 @@ const closeMenu = () => {
   openMenuId.value = null;
 };
 
-const fetchTodos = async () => {
-  if (!isLoggedIn()) return; // ★ 新增拦截：未登录不请求
+const fetchTodos = async (): Promise<TodoVO[]> => {
+  if (!isLoggedIn()) return [];
   try {
     todos.value = await listTodosAPI();
+    return todos.value;
   } catch {
-    // request 拦截器已弹窗
+    return [];
   }
 };
+
+defineExpose({ fetchTodos });
 
 const resetForm = () => {
   form.title = '';
