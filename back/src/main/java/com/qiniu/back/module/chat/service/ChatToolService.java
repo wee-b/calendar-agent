@@ -73,8 +73,17 @@ public class ChatToolService {
 
     public String deleteTodo(Long todoId) {
         log.info("Tool-deleteTodo: {}", todoId);
+        // 先查询确认待办存在
+        List<TodoVO> todos = todoService.listByUser();
+        TodoVO target = todos.stream()
+                .filter(t -> t.getTodoId().equals(todoId))
+                .findFirst()
+                .orElse(null);
+        if (target == null) {
+            return "删除失败：未找到 ID=" + todoId + " 的待办，可能已被删除或不存在。请重新查询待办列表获取最新数据。";
+        }
         todoService.delete(todoId);
-        return "已删除待办 ID=" + todoId + "。";
+        return "已删除待办【" + target.getTitle() + "】ID=" + todoId + "。请调用 queryTodoList 验证删除结果。";
     }
 
     public String updateTodo(Long todoId, TodoUpdateDTO dto) {

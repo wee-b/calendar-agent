@@ -65,20 +65,30 @@
           <textarea
               v-model="inputText"
               class="chat-input"
-              :placeholder="voiceEnabled ? (isRecording ? '正在聆听...' : '正在聆听，说完后说【发送】提交...') : '语音已关闭，输入指令或点击🎤开启'"
+              :placeholder="inputMudle === 2 ? (isRecording ? '正在聆听...' : '正在聆听，说完后说【发送】提交...') : '输入指令或点击🎤开启语音'"
               @keydown.enter.exact.prevent="handleSend"
               :disabled="isSending || !isUserLoggedIn"
               :rows="isExpanded ? 10 : 3"
           ></textarea>
           <div class="input-actions">
-            <button
-                class="voice-record-btn"
-                :class="{ recording: isRecording }"
-                @click="toggleVoice"
-                :disabled="isSending || !isUserLoggedIn"
-            >
-              {{ voiceEnabled ? '🎤' : '🔇' }}
-            </button>
+            <div class="voice-controls" :class="{ 'is-voice-mode': inputMudle === 2 }">
+              <button
+                  class="voice-record-btn"
+                  :class="{ recording: isRecording }"
+                  @click="toggleVoice"
+                  :disabled="isSending || !isUserLoggedIn"
+              >
+                {{ inputMudle === 2 ? '🎤' : '🔇' }}
+              </button>
+              <div class="decibel-meter">
+                <div
+                    class="db-segment"
+                    v-for="i in 10"
+                    :key="i"
+                    :style="{ height: dbBars[i-1] + 'px' }"
+                ></div>
+              </div>
+            </div>
             <button
                 class="send-btn"
                 @click="handleSend"
@@ -147,12 +157,17 @@ const chatHistoryRef = ref<HTMLElement | null>(null);
 const isRecording = ref(false);
 const isExpanded = ref(false);
 const confirmSendVisible = ref(false);
-const voiceEnabled = ref(true);
+const inputMudle = ref(1); // 1-手动，2-语音
 let recognition: any = null;
 let confirmRecognition: any = null;
 let sendGuard = false;
 let voiceTimer: any = null;
 const VOICE_TIMEOUT = 10 * 60 * 1000; // 10分钟
+const dbBars = ref([4, 4, 4, 4, 4, 4, 4, 4, 4, 4]);
+let audioContext: AudioContext | null = null;
+let analyser: AnalyserNode | null = null;
+let mediaStream: MediaStream | null = null;
+let animFrameId: number | null = null;
 
 const currentSessionTitle = computed(() => {
   const session = sessions.value.find(s => s.sessionId === currentSessionId.value);
@@ -267,32 +282,81 @@ const clearVoiceTimer = () => {
 const resetVoiceTimer = () => {
   clearVoiceTimer();
   voiceTimer = setTimeout(() => {
-    voiceEnabled.value = false;
+    inputMudle.value = 1;
     stopVoice();
     cleanupConfirmRecognition();
   }, VOICE_TIMEOUT);
 };
 
 const toggleVoice = () => {
-  if (voiceEnabled.value) {
-    voiceEnabled.value = false;
+  if (inputMudle.value === 2) {
+    inputMudle.value = 1;
     clearVoiceTimer();
     stopVoice();
     cleanupConfirmRecognition();
   } else {
-    voiceEnabled.value = true;
+    inputMudle.value = 2;
     resetVoiceTimer();
     startVoice();
   }
 };
 
+const startDbMeter = async () => {
+  stopDbMeter();
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioContext = new AudioContext();
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    const source = audioContext.createMediaStreamSource(mediaStream);
+    source.connect(analyser);
+
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+
+    const tick = () => {
+      if (!analyser) return;
+      analyser.getByteFrequencyData(dataArray);
+      // 分10个频段取平均值，映射到 4~20px
+      const bands = [0, 3, 7, 12, 18, 26, 36, 48, 63, 82, bufferLength];
+      dbBars.value = Array.from({ length: 10 }, (_, i) => {
+        let sum = 0;
+        const start = bands[i], end = bands[i + 1];
+        for (let j = start; j < end; j++) sum += dataArray[j];
+        const avg = sum / (end - start);
+        return Math.max(4, Math.round(avg * 0.22));
+      });
+      animFrameId = requestAnimationFrame(tick);
+    };
+    animFrameId = requestAnimationFrame(tick);
+  } catch (e) {
+    // 无法获取麦克风时降级为随机动画
+    audioContext = null;
+    analyser = null;
+    mediaStream = null;
+    const fallback = () => {
+      dbBars.value = Array.from({ length: 10 }, () => Math.floor(Math.random() * 16) + 4);
+      animFrameId = requestAnimationFrame(fallback);
+    };
+    animFrameId = requestAnimationFrame(fallback);
+  }
+};
+
+const stopDbMeter = () => {
+  if (animFrameId !== null) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+  if (audioContext) { audioContext.close(); audioContext = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  analyser = null;
+  dbBars.value = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+};
+
 const startVoice = () => {
-  if (!isUserLoggedIn.value || !voiceEnabled.value) return;
+  if (!isUserLoggedIn.value || inputMudle.value !== 2) return;
 
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
   if (!SpeechRecognition) {
     ElMessage.warning('您的浏览器不支持语音识别功能');
-    voiceEnabled.value = false;
+    inputMudle.value = 1;
     return;
   }
 
@@ -305,6 +369,7 @@ const startVoice = () => {
 
   isRecording.value = true;
   sendGuard = false;
+  startDbMeter();
 
   recognition.onresult = (event: any) => {
     let currentText = '';
@@ -314,15 +379,16 @@ const startVoice = () => {
     inputText.value = currentText.replace(/[。！？，、；：]\)\}»』】〉》]+$/g, '').trim();
   };
 
-  recognition.onerror = (event: any) => {
-    if (event.error !== 'aborted') {
-      ElMessage.error('语音识别出错');
-    }
+  recognition.onerror = () => {
     isRecording.value = false;
   };
 
   recognition.onend = () => {
     isRecording.value = false;
+    // 非主动停止时自动重启
+    if (inputMudle.value === 2 && recognition !== null) {
+      setTimeout(() => startVoice(), 300);
+    }
   };
 
   recognition.start();
@@ -334,6 +400,7 @@ const stopVoice = () => {
     recognition = null;
   }
   isRecording.value = false;
+  stopDbMeter();
 };
 
 // ================= 语音发送确认 =================
@@ -452,9 +519,16 @@ const handleSend = async () => {
     isSending.value = false;
     scrollToBottom();
     inputText.value = '';
-    if (voiceEnabled.value) {
+    if (inputMudle.value === 2) {
       resetVoiceTimer();
       setTimeout(() => startVoice(), 400);
+    }
+    // 手动模式下自动聚焦输入框
+    if (inputMudle.value === 1) {
+      nextTick(() => {
+        const ta = document.querySelector('.chat-input') as HTMLTextAreaElement;
+        if (ta) ta.focus();
+      });
     }
   }
 };
@@ -465,7 +539,7 @@ onMounted(async () => {
     await fetchSessions();
     if (sessions.value.length > 0) selectSession(sessions.value[0]);
     else createNewSession();
-    if (voiceEnabled.value) { resetVoiceTimer(); startVoice(); }
+    // 默认手动模式，不自动开启语音
   }
 });
 
@@ -474,7 +548,7 @@ watch(isUserLoggedIn, async (newVal) => {
     await fetchSessions();
     if (sessions.value.length > 0) selectSession(sessions.value[0]);
     else createNewSession();
-    if (voiceEnabled.value) { resetVoiceTimer(); startVoice(); }
+    inputMudle.value = 1;
   } else {
     clearVoiceTimer();
     stopVoice();
@@ -567,10 +641,16 @@ watch(isUserLoggedIn, async (newVal) => {
 .send-btn:hover:not(:disabled) { background-color: #4a3c2c; }
 .send-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
-.voice-record-btn { padding: 2px 6px; background: none; border: none; font-size: 16px; cursor: pointer; transition: all 0.2s; user-select: none; border-radius: 4px; }
+.voice-controls { display: flex; align-items: center; }
+.voice-record-btn { padding: 2px 6px; background: none; border: none; font-size: 16px; cursor: pointer; transition: all 0.2s; user-select: none; border-radius: 4px; flex-shrink: 0; }
 .voice-record-btn:hover:not(:disabled) { background-color: #eaddc4; }
 .voice-record-btn.recording { background-color: #bc423f; color: white; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(188, 66, 63, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(188, 66, 63, 0); } 100% { box-shadow: 0 0 0 0 rgba(188, 66, 63, 0); } }
+
+.decibel-meter { display: flex; align-items: flex-end; gap: 3px; height: 22px; max-width: 0; overflow: hidden; transition: max-width 0.35s cubic-bezier(0.4, 0, 0.2, 1); background: rgba(92, 75, 55, 0.06); border-radius: 4px; padding: 0; }
+.is-voice-mode .decibel-meter { max-width: 90px; padding: 3px 6px; }
+.db-segment { width: 3px; min-width: 3px; background: #d3c4a1; border-radius: 1.5px; transition: height 0.15s ease, background-color 0.15s ease; }
+.is-voice-mode .db-segment { background: #5c4b37; }
 
 /* 删除二次确认弹窗 */
 .confirm-modal-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(92, 75, 55, 0.4); backdrop-filter: blur(2px); display: flex; justify-content: center; align-items: center; z-index: 100; }

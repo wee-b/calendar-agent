@@ -41,24 +41,27 @@ public class OpenAiService {
         this.toolService = toolService;
     }
 
+    private static final int MAX_TOOL_ROUNDS = 5;
+
     /**
-     * 发送对话请求，自动处理 Tool Calling 循环
+     * 发送对话请求，自动处理多轮 Tool Calling 循环
      */
     public String chat(String systemPrompt, List<Map<String, String>> messages) {
         List<Map<String, Object>> openAiMessages = buildMessages(systemPrompt, messages);
 
-        // 第一次调用
-        Map<String, Object> response = callOpenAi(openAiMessages, true);
+        // Tool calling loop: 持续调用直到模型返回纯文本
+        for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            Map<String, Object> response = callOpenAi(openAiMessages, true);
+            Map<String, Object> choice = getFirstChoice(response);
+            Map<String, Object> msg = (Map<String, Object>) choice.get("message");
 
-        // 检查是否需要 tool call
-        Map<String, Object> choice = getFirstChoice(response);
-        Map<String, Object> msg = (Map<String, Object>) choice.get("message");
+            if (!msg.containsKey("tool_calls")) {
+                return (String) msg.getOrDefault("content", "");
+            }
 
-        if (msg.containsKey("tool_calls")) {
             // 执行 tool calls 并回传结果
-            openAiMessages.add(msg); // 助理的 tool_call 消息
+            openAiMessages.add(msg);
             List<Map<String, Object>> toolResults = executeToolCalls(msg);
-
             for (Map<String, Object> tr : toolResults) {
                 openAiMessages.add(Map.of(
                         "role", "tool",
@@ -66,15 +69,13 @@ public class OpenAiService {
                         "content", tr.get("result")
                 ));
             }
-
-            // 第二次调用，让 LLM 总结工具执行结果
-            response = callOpenAi(openAiMessages, false);
-            choice = getFirstChoice(response);
-            Map<String, Object> finalMsg = (Map<String, Object>) choice.get("message");
-            return (String) finalMsg.getOrDefault("content", "");
         }
 
-        return (String) msg.getOrDefault("content", "");
+        // 超出最大轮次后，强制让模型以文本回复
+        Map<String, Object> response = callOpenAi(openAiMessages, false);
+        Map<String, Object> choice = getFirstChoice(response);
+        Map<String, Object> finalMsg = (Map<String, Object>) choice.get("message");
+        return (String) finalMsg.getOrDefault("content", "");
     }
 
     // ==================== 内部实现 ====================
@@ -311,7 +312,7 @@ public class OpenAiService {
                         "type", "function",
                         "function", Map.of(
                                 "name", "queryTodoList",
-                                "description", "查询当前用户的所有待办目标列表，返回每个目标的ID、名称、日期范围、状态。删除或修改待办前必须先调用此工具获取 todoId。",
+                                "description", "查询当前用户的所有待办目标列表，返回每个目标的ID、名称、日期范围、状态。这是获取待办真实状态的唯一方式，删除或修改待办前必须先调用此工具获取最新ID，操作后必须再次调用以验证结果。不要用对话历史推断待办是否存在！",
                                 "parameters", Map.of(
                                         "type", "object",
                                         "properties", Map.of()
@@ -322,7 +323,7 @@ public class OpenAiService {
                         "type", "function",
                         "function", Map.of(
                                 "name", "deleteTodo",
-                                "description", "删除一个待办目标。用户说删除/去掉/移除/取消XX时就应该调用此工具。必须先调用 queryTodoList 获取待办ID，用户确认后才能调用！不要在用户说删除时去调用 createTodo！",
+                                "description", "删除一个待办目标。可能因ID不存在等原因失败，调用后必须用 queryTodoList 验证是否真的删除了。用户说删除/去掉/移除/取消XX时调用此工具。必须先调用 queryTodoList 获取待办ID，用户确认后才能调用！不要在用户说删除时去调用 createTodo！",
                                 "parameters", Map.of(
                                         "type", "object",
                                         "properties", Map.of(

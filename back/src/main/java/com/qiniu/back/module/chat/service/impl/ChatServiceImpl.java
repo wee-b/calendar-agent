@@ -174,7 +174,7 @@ public class ChatServiceImpl implements ChatService {
             boolean isUpdate = msg.contains("修改") || msg.contains("改成") || msg.contains("改一下");
 
             if (isDelete && !isCreate) {
-                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【删除】。你必须走删除流程，先查列表再删。绝对禁止创建！绝对禁止调用createTodo！");
+                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【删除】。你必须走删除流程：先查列表→匹配→确认→删除→再查列表验证。deleteTodo可能失败，必须以验证查询的结果为准，如果待办仍在列表中则如实告知用户删除失败。如果需要再次调用工具，必须通过系统的函数调用机制，绝对不要在文字中写<invoke>等XML标签！绝对禁止创建！绝对禁止调用createTodo！");
             } else if (isCreate && !isDelete) {
                 sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【创建】。走创建流程。");
             } else if (isToggle) {
