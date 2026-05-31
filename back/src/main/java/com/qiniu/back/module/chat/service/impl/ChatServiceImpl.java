@@ -105,10 +105,9 @@ public class ChatServiceImpl implements ChatService {
 
         if (last.size() < 2) return;
 
-        // 删最后2条（用户+助手各一条）
-        for (AiDialogue d : last) {
-            aiDialogueMapper.deleteById(d.getDialogueId());
-        }
+        // 删最后2条（用户+助手各一条），批量删除
+        aiDialogueMapper.deleteBatchIds(
+                last.stream().map(AiDialogue::getDialogueId).toList());
     }
 
     @Override
@@ -170,17 +169,20 @@ public class ChatServiceImpl implements ChatService {
             String msg = userMessage.trim();
             boolean isDelete = msg.contains("删除") || msg.contains("去掉") || msg.contains("移除") || msg.contains("取消");
             boolean isCreate = msg.contains("创建") || msg.contains("添加") || msg.contains("新增") || msg.contains("安排") || msg.contains("加一个") || msg.contains("建一个");
+            boolean isPlan = msg.contains("规划") || msg.contains("计划") || msg.contains("备考");
             boolean isToggle = msg.contains("完成") || msg.contains("搞定") || msg.contains("做完了") || msg.contains("打卡");
             boolean isUpdate = msg.contains("修改") || msg.contains("改成") || msg.contains("改一下");
 
             if (isDelete && !isCreate) {
-                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【删除】。你必须走删除流程，先查列表再删。绝对禁止创建！绝对禁止调用createTodo！");
+                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【删除】。你必须走删除流程：先查列表→匹配→确认→删除→再查列表验证。deleteTodo可能失败，必须以验证查询的结果为准，如果待办仍在列表中则如实告知用户删除失败。如果需要再次调用工具，必须通过系统的函数调用机制，绝对不要在文字中写<invoke>等XML标签！绝对禁止创建！绝对禁止调用createTodo！");
+            } else if (isPlan && !isDelete) {
+                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【规划】。走规划流程：理解目标→设计分阶段方案→问用户拆成多个待办还是合并→创建。如果用户语气急切则跳过确认直接拆成多个创建。");
             } else if (isCreate && !isDelete) {
                 sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【创建】。走创建流程。");
             } else if (isToggle) {
                 sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【标记完成】。调用toggleTodoDate。");
             } else if (isUpdate && !isDelete) {
-                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【修改】。先查列表再修改。");
+                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【修改】。先判断是跨天修改（日期变了）还是同日修改（只改时分），然后直接调用updateTodo，无需确认。updateTodo所有字段必填，未修改的字段从查询结果中取原值。");
             }
         }
 
@@ -188,12 +190,14 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private List<AiDialogue> loadHistory(Long userId, String sessionId) {
-        return aiDialogueMapper.selectList(
+        List<AiDialogue> list = aiDialogueMapper.selectList(
                 new LambdaQueryWrapper<AiDialogue>()
                         .eq(AiDialogue::getUserId, userId)
                         .eq(AiDialogue::getSessionId, sessionId)
-                        .orderByAsc(AiDialogue::getCreateTime)
+                        .orderByDesc(AiDialogue::getCreateTime)
                         .last("LIMIT " + (MAX_HISTORY * 2)));
+        Collections.reverse(list);
+        return list;
     }
 
     private List<Map<String, String>> buildMessageList(List<AiDialogue> history) {

@@ -8,12 +8,13 @@
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | Vue 3 + TypeScript |
+| 前端 | Vue 3 + TypeScript + Vite 8 |
 | 后端 | Spring Boot 3.5 + Sa-Token + MyBatis-Plus |
 | 数据库 | MySQL 8.0 |
 | 连接池 | Druid |
 | 缓存 | Redis（Sa-Token 持久化） |
-| AI | Spring AI（待集成） |
+| AI | 原生 OpenAI API + Tool Calling + 意图路由 |
+| 语音 | Web Speech API（浏览器 STT + TTS） |
 | 密码加密 | BCrypt |
 | 文档 | Knife4j (OpenAPI 3) |
 
@@ -38,7 +39,9 @@ back/src/main/java/com/qiniu/back/
 │   ├── chat/                #   AI 对话
 │   │   ├── AiDialogue.java          # 实体
 │   │   ├── dto/ChatRequestDTO.java  # 请求 DTO
-│   │   └── vo/ChatResponseVO.java   # 响应 VO
+│   │   ├── vo/ChatResponseVO.java   # 响应 VO
+│   │   ├── vo/ChatHistoryItemVO.java    # 历史记录 VO
+│   │   └── vo/ChatSessionVO.java       # 会话列表 VO
 │   ├── todo/                #   待办
 │   │   ├── Todo.java                # 实体（目标）
 │   │   ├── TodoDate.java            # 实体（每日任务）
@@ -75,25 +78,37 @@ back/src/main/java/com/qiniu/back/
 │   │   ├── controller/TodoController.java
 │   │   ├── mapper/TodoMapper.java, TodoDateMapper.java
 │   │   └── service/...
-│   └── dailyNote/           #   日记/日历模块
-│       ├── controller/DailyNoteController.java
-│       ├── mapper/DailyNoteMapper.java
-│       └── service/...
-└── util/
-    ├── SaTokenUtil.java       # Token 工具（生成/校验/解析/注销）
-    ├── LoginUserContext.java  # 当前用户上下文（ThreadLocal）
-    └── ResponseUtil.java      # HttpServletResponse 写 JSON
+│   ├── dailyNote/           #   日记/日历模块
+│   │   ├── controller/DailyNoteController.java
+│   │   ├── mapper/DailyNoteMapper.java
+│   │   └── service/...
+│   └── chat/                #   AI 对话模块
+│       ├── controller/ChatController.java
+│       ├── mapper/AiDialogueMapper.java
+│       └── service/
+│           ├── ChatService.java          # 对话管理接口
+│           ├── ChatServiceImpl.java      # 对话管理实现（会话增删查 + 意图增强）
+│           ├── OpenAiService.java        # OpenAI API 客户端（Tool Calling 循环）
+│           └── ChatToolService.java      # 工具桥接层（8 个业务工具函数）
+├── util/
+│   ├── SaTokenUtil.java       # Token 工具（生成/校验/解析/注销）
+│   ├── LoginUserContext.java  # 当前用户上下文（ThreadLocal）
+│   ├── ResponseUtil.java      # HttpServletResponse 写 JSON
+│   └── PromptLoader.java      # 提示词文件加载器
+└── resources/
+    └── prompt/
+        └── chat-system.txt    # AI 系统提示词（意图路由 + 确认流程）
 ```
 
 ### 数据库表
 
 | 表名 | 说明 | 关键设计 |
 |------|------|----------|
-| `yl_user` | 用户表 | — |
+| `yl_user` | 用户表 | phone 唯一索引，BCrypt 密码加密 |
 | `yl_todo` | 待办表（目标） | 支持 startDate + endDate + weekDays，最多 180 天 |
 | `yl_todo_date` | 每日任务关联表 | todo 与日期的多对多，存储每天具体任务内容 |
 | `yl_daily_note` | 每日日记表 | 每个用户每天最多一条 |
-| `yl_ai_dialogue` | AI 对话记录表 | — |
+| `yl_ai_dialogue` | AI 对话记录表 | sessionId 分组多轮对话，role 区分 user/assistant |
 
 ### API 接口
 
@@ -125,6 +140,18 @@ back/src/main/java/com/qiniu/back/
 | GET | `/calendar/day?date=2026-06-01` | 某天所有待办 + 日记 | 是 |
 | PUT | `/daily-note` | 保存/修改某天日记 | 是 |
 
+#### AI 对话模块 `/chat`
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/chat` | 发送对话消息（含 Tool Calling 自动循环） | 是 |
+| POST | `/chat/new-session` | 开启新对话，返回 sessionId | 是 |
+| GET | `/chat/history` | 获取指定会话历史记录 | 是 |
+| DELETE | `/chat/session` | 删除整个会话 | 是 |
+| DELETE | `/chat/last-round` | 撤回上一轮对话 | 是 |
+| GET | `/chat/sessions` | 获取用户所有历史会话列表 | 是 |
+| GET | `/chat/latest` | 获取用户最新对话历史记录 | 是 |
+
 #### 测试模块 `/test`
 
 | 方法 | 路径 | 说明 | 认证 |
@@ -135,7 +162,7 @@ back/src/main/java/com/qiniu/back/
 
 ### 核心业务流程
 
-#### 创建待办
+#### 创建待办（自动日期计算）
 ```
 用户输入 → "每周一到周五学英语，从6月1日到6月30日"
 → POST /todo { title, startDate, endDate, weekDays: [1,2,3,4,5], dayContent, color }
@@ -149,8 +176,40 @@ back/src/main/java/com/qiniu/back/
 打开日历 → GET /calendar/month-count → 日历格子渲染小圆点数量
 点击某天 → GET /calendar/day → 返回待办列表 + 日记内容
 侧边栏点击待办 → 高亮该待办的所有日期（用 color 字段）
-点击每日任务 → PUT /todo/toggle-date → 完成/取消完成
+点击每日任务 → PUT /todo/toggle-date → 完成/取消完成（乐观更新）
 ```
+
+#### AI 语音助手
+```
+用户语音/文字输入 → POST /chat { sessionId, message }
+→ ChatServiceImpl 构建系统提示词（注入日期上下文 + 意图关键词增强）
+→ OpenAiService 调用 OpenAI API（携带 8 个 Tool Definitions）
+→ LLM 返回 tool_call → executeToolCalls() 执行对应业务函数
+→ 工具结果回传 LLM → LLM 生成自然语言总结
+→ 保存对话记录（user + assistant） → 返回 ChatResponseVO
+```
+
+### AI 意图路由
+
+系统提示词 `prompt/chat-system.txt` 实现了 6 种意图的标准化处理流程：
+
+| 意图 | 触发关键词 | 流程 |
+|------|-----------|------|
+| 规划 | 规划/计划/备考/复习计划 | 理解目标→设计分阶段方案→询问拆成多个还是合并→批量 createTodo |
+| 创建 | 创建/添加/新增/安排/加一个 | 追问缺失信息→展示方案→确认→createTodo（急切语气跳过确认） |
+| 删除 | 删除/去掉/移除/取消/删了 | queryTodoList→匹配→确认→deleteTodo→再查列表验证 |
+| 查询 | 查看/有哪些/今天/明天/几号 | 直接调用对应查询工具 |
+| 标记完成 | 完成/搞定/做完了/打卡 | 调用 toggleTodoDate |
+| 修改 | 修改/改成/改一下/调整 | 跨天（改日期）直接 updateTodo，同日（改时分）更新 dayContent |
+
+8 个 AI 可调用工具：`createTodo` / `queryTodoList` / `queryMonthCount` / `queryDayDetail` / `deleteTodo` / `updateTodo` / `toggleTodoDate` / `saveDailyNote`
+
+核心机制：
+- **多轮 Tool Calling 循环**：支持最多 5 轮工具调用，模型可连续调用 queryTodoList→deleteTodo→queryTodoList（验证）再返回文本
+- **删除验证**：删除后必须重新查询列表确认，失败时如实告知而非伪造成功
+- **批量创建**：规划类请求在同一轮 tool_calls 中并行调用多个 createTodo
+- **操作即查询**：始终以查询工具返回的实际数据为准，禁止根据对话历史推断状态
+- 回复限制 150 字以内纯文本，禁止 XML 标签格式
 
 ### 快速启动
 
@@ -159,8 +218,9 @@ back/src/main/java/com/qiniu/back/
 mysql -u root -p < sql/tables.sql
 mysql -u root -p < sql/insert_data.sql
 
-# 2. 修改数据库/Redis 连接信息
+# 2. 修改数据库/Redis 连接信息 + AI API 配置
 #    编辑 back/src/main/resources/application-dev.yml
+#    需配置：spring.datasource / spring.data.redis / app.ai.*
 
 # 3. 启动后端
 cd back
@@ -197,10 +257,14 @@ npm install && npm run dev
 - [x] 每日任务完成/取消完成（含自动联动待办整体状态）
 - [x] 日历模块（当月每日待办数量 / 某天详情）
 - [x] 日记模块（保存/修改某天日记）
-- [x] 测试数据（user_id=36，5 个目标覆盖不同颜色/周期/完成状态）
-- [ ] AI 对话 + Spring AI 集成
-- [ ] 语音转文字（浏览器 STT）
-- [ ] TTS 朗读播放
+- [x] AI 对话模块（7 个接口 / 8 个 Tool Definitions / 多轮 Tool Calling 循环 / 6 意图路由）
+- [x] 多轮 Tool Calling 循环（最多 5 轮，删除后可验证）
+- [x] 删除验证流程（删后重查列表，失败如实告知）
+- [x] 规划意图（备考/复习计划，批量创建 vs 合并创建）
+- [x] 修改意图（跨天改日期 vs 同日改时分）
+- [x] N+1 查询优化（listByUser 批量 IN 查询 / batchInsert 一条 SQL）
+- [x] 历史消息加载修复（ASC→DESC+reverse，始终取最新 N 条）
+- [x] TTS 语音合成朗读（SpeechSynthesisUtterance + 暂停/继续/重播）
 
 ---
 
@@ -216,22 +280,25 @@ front/src/
 ├── api/                         # API 封装层
 │   ├── user.ts                  #   用户 API（登录/注册/信息）
 │   ├── todo.ts                  #   待办 API（CRUD + 完成）
-│   └── calendar.ts              #   日历 API（月统计 + 日详情 + 日记）
+│   ├── calendar.ts              #   日历 API（月统计 + 日详情 + 日记）
+│   └── chat.ts                  #   对话 API（发送消息 + 会话管理）
 ├── utils/
 │   ├── request.ts               #   axios 实例（baseURL + 拦截器 + token 注入）
 │   ├── auth.ts                  #   token 存取工具
-│   └── lunar.ts                 #   农历工具
-├── .env                          # 环境变量（VITE_TOKEN_KEY / VITE_API_BASE_URL）
+│   └── lunar.ts                 #   农历工具（1900-2100 年数据 + 24 节气 + 节日）
+├── .env                          # 环境变量（VITE_TOKEN_KEY）
 ├── components/
-│   ├── NavBar.vue               #   顶部导航栏（面板切换 + 退出）
-│   └── AuthModal.vue            #   登录/注册弹窗（已对接后端）
+│   ├── NavBar.vue               #   顶部导航栏（面板切换 + 退出 + 帮助入口）
+│   ├── AuthModal.vue            #   登录/注册弹窗（已对接后端）
+│   └── Help.vue                 #   语音助手使用指南（命令卡片 + 操作流程）
 └── views/
     ├── LoginView.vue            # 登录/注册页面
     └── HomeView/
         ├── HomeView.vue         # 主页布局（三栏 + 日历核心逻辑）
         └── components/
-            ├── TodoList.vue     # 左侧待办清单面板
-            └── ChatPanel.vue    # 右侧语音助手面板
+            ├── TodoList.vue     # 左侧待办清单面板（完整 CRUD + 日历联动）
+            ├── ChatPanel.vue    # 右侧语音助手面板（多会话 + 语音识别）
+            └── DayDetailPanel.vue  # 底部日详情弹窗（待办勾选 + 日记编辑）
 ```
 
 ### 技术栈
@@ -247,10 +314,12 @@ front/src/
 
 - **登录/注册** — `AuthModal.vue` 弹窗组件，已对接 `/user/login` 和 `/user/register`，Token 自动存入 localStorage，可关闭不强制登录
 - **主页** — 三栏布局可折叠：左待办 + 中日历 + 右语音助手，NavBar 未登录时显示"去登录"
-- **日历** — 月视图网格、月份选择器、农历/节日/节气显示、每日待办数量标记（右上角，数量越多颜色越深）、待办选中日期高亮
-- **待办清单** — 左侧可折叠面板，完整 CRUD（创建/修改弹窗、删除确认），颜色圆点 + 剩余天数标记，点击选中联动日历跳转月份并高亮日期
-- **语音助手** — 对话气泡 + 按住说话按钮（预留 STT 接口）
-- **API 层** — `request.ts` 统一封装 axios，baseURL 通过 `.env` 配置，自动注入 `yvli-token`，统一错误处理
+- **日历** — 月视图 7×6 网格，支持上月/下月切换（`◀` `▶`）和月份快速选择器；农历/节日/节气显示（1900-2100 完整数据）；每日待办数量标记（右上角圆角方形，数量越多颜色越深）；待办选中日期高亮联动
+- **待办清单** — 左侧可折叠面板，完整 CRUD（创建/修改弹窗、删除二次确认、星期 chip 多选），颜色圆点 + 剩余天数标记，点击选中联动日历跳转月份并高亮日期
+- **日详情面板** — 底部弹窗组件，上滑动画，双栏布局；左栏展示当日待办列表（状态圆圈点击切换，乐观更新 UI），右栏日记 textarea 编辑 + 保存
+- **语音助手** — 右侧可折叠面板，多会话管理（下拉选择器切换/新建/删除），对话气泡展示 + typing 动画，AI 消息操作栏（复制/朗读暂停继续/撤回），Web Speech API 语音识别（中文连续识别，默认关闭手动/语音双模式切换），语音关键词控制（说"发送"提交 / "确认"执行 / "取消"放弃），Enter 键盘发送，语音模式 AI 回复后自动朗读，真实音频分贝检测条（Web Audio API + AnalyserNode 10 段频段）
+- **帮助指南** — 底部弹窗，2 列命令卡片（查看待办/查看安排/创建/修改/删除/完成任务/写日记），语音操作 + 键盘快捷键说明
+- **API 层** — `request.ts` 统一封装 axios，Vite 代理转发 `/api`，自动注入 `yvli-token`，401 拦截显示登录弹窗
 
 ### 快速启动
 
@@ -268,16 +337,21 @@ npm run dev
 - [x] 主页三栏布局 + 日历组件
 - [x] 待办 API 模块（`api/todo.ts`）
 - [x] 日历 API 模块（`api/calendar.ts`）
-- [x] 语音助手面板 UI + 麦克风按钮
-- [x] 待办清单面板 UI
-- [x] 日历对接 `month-count` 接口（每日待办数量 + 颜色深浅）
-- [x] 待办清单对接 CRUD 接口（创建/修改/删除弹窗 + 星期选择）
-- [x] 农历 + 节日/节气显示（`utils/lunar.ts`）
+- [x] 对话 API 模块（`api/chat.ts`，6 个函数）
+- [x] 待办清单面板（完整 CRUD 弹窗 + 日历联动高亮）
+- [x] 日历对接 month-count + 彩色圆点（按待办颜色渲染，匹配左侧列表）
+- [x] 农历 + 节日/节气显示（1900-2100 年数据 + 24 节气 + 除夕）
 - [x] 待办选中联动日历高亮（跳转月份 + dates 日期高亮）
-- [x] 非强制登录（登录弹窗可关闭，未登录可浏览，NavBar 显示"去登录"）
+- [x] 日历上下月切换按钮 + 月份快速选择器
+- [x] 日详情面板（DayDetailPanel，双栏 + 乐观状态切换 + 日记保存）
+- [x] 语音助手面板（多会话管理 + 语音识别 + 打字动画 + 消息操作）
+- [x] 语音模式（手动/语音双模式，切换后持久化，AI 返回后自动恢复）
+- [x] 分贝检测条（Web Audio API 真实音频检测，10 段频段，抽屉式展开/收起动画）
+- [x] TTS 朗读（语音模式自动朗读 AI 回复，每条消息可暂停/继续/重播）
+- [x] 语音错误自动恢复（识别失败静默重启，不弹错误提示）
+- [x] 帮助指南（Help.vue，命令卡片 + 操作流程）
+- [x] 非强制登录（登录弹窗可关闭，未登录可浏览）
 - [x] 退出登录对接 `/user/logout` 接口
-- [x] `.env` 环境变量配置（`VITE_TOKEN_KEY` / `VITE_API_BASE_URL`）
-- [x] 日历日详情面板（当日待办列表 + 日记编辑保存）
-- [x] 日历格子响应式宽高比
-- [ ] 浏览器麦克风录音（STT）
-- [ ] AI 对话对接 + TTS 播放
+- [x] `.env` 环境变量配置（`VITE_TOKEN_KEY`）
+- [x] Vite 开发代理配置
+- [x] 聊天超时 30s（组件级超时提示）
