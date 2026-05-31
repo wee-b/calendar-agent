@@ -337,7 +337,7 @@ public class OpenAiService {
                         "type", "function",
                         "function", Map.of(
                                 "name", "updateTodo",
-                                "description", "修改一个待办目标的名称、颜色、日期范围或执行日。必须先从 queryTodoList 获取 todoId，用户确认后才能调用！所有字段均为必填，未修改的字段需填入原值。",
+                                "description", "修改待办。跨天改期（如改成后天）时修改 startDate/endDate；同日改时分（如改到下午）时修改 dayContent。先从 queryTodoList 获取原值，未修改的字段填原值。修改操作无需用户确认，直接调用。",
                                 "parameters", Map.of(
                                         "type", "object",
                                         "properties", Map.of(
