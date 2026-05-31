@@ -487,6 +487,9 @@ watch(inputText, (newVal) => {
   sendGuard = true;
   inputText.value = newVal.substring(0, idx).trim();
   stopVoice();
+  window.speechSynthesis.cancel();
+  isReading.value = false;
+  isPaused.value = false;
   confirmSendVisible.value = true;
   startConfirmRecognition();
 });
@@ -534,7 +537,7 @@ const handleSend = async () => {
     scrollToBottom();
     emit('refresh');
     if (inputMudle.value === 2) {
-      handleRead(lastMsg?.content || res.aiResult || '操作已完成');
+      handleRead(lastMsg?.content || res.aiResult || '操作已完成', messages.value.length - 1);
     }
     fetchSessions();
   } catch (error) {
