@@ -62,11 +62,22 @@ public class TodoServiceImpl implements TodoService {
                 .eq(Todo::getUserId, userId)
                 .orderByDesc(Todo::getCreateTime));
 
-        return todos.stream().map(todo -> {
-            List<LocalDate> dates = todoDateMapper.selectList(
+        // 批量查询所有待办的日期，避免 N+1
+        List<Long> todoIds = todos.stream().map(Todo::getTodoId).toList();
+        Map<Long, List<LocalDate>> dateMap = Map.of();
+        if (!todoIds.isEmpty()) {
+            dateMap = todoDateMapper.selectList(
                     new LambdaQueryWrapper<TodoDate>()
-                            .eq(TodoDate::getTodoId, todo.getTodoId()))
-                    .stream().map(TodoDate::getTodoDate).collect(Collectors.toList());
+                            .in(TodoDate::getTodoId, todoIds))
+                    .stream()
+                    .collect(Collectors.groupingBy(
+                            TodoDate::getTodoId,
+                            Collectors.mapping(TodoDate::getTodoDate, Collectors.toList())));
+        }
+        final Map<Long, List<LocalDate>> finalDateMap = dateMap;
+
+        return todos.stream().map(todo -> {
+            List<LocalDate> dates = finalDateMap.getOrDefault(todo.getTodoId(), List.of());
             return toTodoVO(todo, dates);
         }).collect(Collectors.toList());
     }
@@ -194,14 +205,17 @@ public class TodoServiceImpl implements TodoService {
     }
 
     private void batchInsertTodoDates(Long todoId, List<LocalDate> dates, String dayContent) {
+        if (dates.isEmpty()) return;
+        List<TodoDate> entities = new ArrayList<>(dates.size());
         for (LocalDate date : dates) {
             TodoDate td = new TodoDate();
             td.setTodoId(todoId);
             td.setTodoDate(date);
             td.setDayContent(dayContent);
             td.setStatus(0);
-            todoDateMapper.insert(td);
+            entities.add(td);
         }
+        todoDateMapper.insertBatch(entities);
     }
 
     private TodoVO toTodoVO(Todo todo, List<LocalDate> dates) {

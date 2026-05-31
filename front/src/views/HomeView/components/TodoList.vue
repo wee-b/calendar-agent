@@ -117,6 +117,7 @@ const props = defineProps<{ isOpen: boolean; selectedTodoId?: number }>();
 
 const emit = defineEmits<{
   (e: 'select', todo: TodoVO): void;
+  (e: 'update', todos: TodoVO[]): void;
 }>();
 
 const weekLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -150,13 +151,14 @@ const fetchTodos = async (): Promise<TodoVO[]> => {
   if (!isLoggedIn()) return [];
   try {
     todos.value = await listTodosAPI();
+    emit('update', todos.value);
     return todos.value;
   } catch {
     return [];
   }
 };
 
-defineExpose({ fetchTodos });
+defineExpose({ fetchTodos, todos });
 
 const resetForm = () => {
   form.title = '';

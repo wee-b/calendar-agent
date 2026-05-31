@@ -105,10 +105,9 @@ public class ChatServiceImpl implements ChatService {
 
         if (last.size() < 2) return;
 
-        // 删最后2条（用户+助手各一条）
-        for (AiDialogue d : last) {
-            aiDialogueMapper.deleteById(d.getDialogueId());
-        }
+        // 删最后2条（用户+助手各一条），批量删除
+        aiDialogueMapper.deleteBatchIds(
+                last.stream().map(AiDialogue::getDialogueId).toList());
     }
 
     @Override
