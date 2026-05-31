@@ -16,6 +16,7 @@
           :isOpen="isTodoOpen"
           :selectedTodoId="selectedTodo?.todoId"
           @select="handleTodoSelect"
+          @update="allTodos = $event"
       />
 
       <section class="calendar-center">
@@ -52,15 +53,22 @@
                 @click="toggleEditPanel(day)"
             >
               <span class="date-num">{{ day.date }}</span>
-              <span
-                  v-if="day.isCurrentMonth && monthCounts[day.fullDate]"
-                  class="day-count"
-                  :title="`这一天有${monthCounts[day.fullDate]}个待办`"
-                  :style="{
-                  background: getCountColor(monthCounts[day.fullDate]),
-                  color: monthCounts[day.fullDate] >= 3 ? '#fdfae9' : '#5c4b37'
-                }"
-              >{{ monthCounts[day.fullDate] }}</span>
+              <div
+                  v-if="day.isCurrentMonth && calendarTodoDots[day.fullDate]?.length"
+                  class="todo-dots"
+              >
+                <span
+                    v-for="(dot, di) in calendarTodoDots[day.fullDate].slice(0, 4)"
+                    :key="di"
+                    class="todo-dot"
+                    :style="{ background: dot.color }"
+                    :title="dot.title"
+                ></span>
+                <span
+                    v-if="calendarTodoDots[day.fullDate].length > 4"
+                    class="todo-dot-more"
+                >+{{ calendarTodoDots[day.fullDate].length - 4 }}</span>
+              </div>
 
               <div class="lunar-info">
                 <span v-if="day.festival" class="lunar-festival">{{ day.festival }}</span>
@@ -119,6 +127,7 @@ const todoListRef = ref<InstanceType<typeof TodoList> | null>(null);
 const handleLoginSuccess = () => showAuthModal.value = false;
 
 const selectedTodo = ref<TodoVO | null>(null);
+const allTodos = ref<TodoVO[]>([]);
 const highlightDates = computed(() => {
   if (!selectedTodo.value) return new Set<string>();
   return new Set(selectedTodo.value.dates);
@@ -280,6 +289,23 @@ const handleSaveDiary = async () => {
     savingDiary.value = false;
   }
 };
+
+// ================= 日历彩色圆点（按待办颜色） =================
+const calendarTodoDots = computed(() => {
+  const todos = allTodos.value;
+  const [yearStr, monthStr] = selectedMonthStr.value.split('-');
+  const prefix = `${yearStr}-${monthStr}-`;
+  const map: Record<string, { color: string; title: string }[]> = {};
+  for (const todo of todos) {
+    for (const d of todo.dates) {
+      if (d.startsWith(prefix)) {
+        if (!map[d]) map[d] = [];
+        map[d].push({ color: todo.color, title: todo.title });
+      }
+    }
+  }
+  return map;
+});
 
 // ================= 角标数量统计 =================
 const monthCounts = ref<Record<string, number>>({});
@@ -477,6 +503,26 @@ const getCountColor = (count: number) => {
   font-weight: bold;
   box-sizing: border-box;
   box-shadow: 0 2px 4px rgba(92, 75, 55, 0.1);
+}
+
+/* 日历格子内彩色圆点 */
+.todo-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+.todo-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+.todo-dot-more {
+  font-size: 10px;
+  color: #b5a992;
+  line-height: 8px;
 }
 
 /* 格子状态类 */

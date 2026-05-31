@@ -53,7 +53,11 @@
 
             <div class="msg-actions" v-if="!msg.loading && !isUserRole(msg.role)">
               <span class="action-icon" @click="handleCopy(msg.content)">复制</span>
-              <span class="action-icon" @click="handleRead(msg.content)">朗读</span>
+              <span
+                  class="action-icon"
+                  :class="{ active: readingMsgIndex === index && !isPaused, paused: readingMsgIndex === index && isPaused }"
+                  @click="handleRead(msg.content, index)"
+              >{{ readingMsgIndex === index ? (isPaused ? '继续' : '暂停') : '朗读' }}</span>
               <span class="action-icon danger" @click="handleDeleteLastRound">撤回</span>
             </div>
           </div>
@@ -252,11 +256,31 @@ const handleCopy = async (text: string) => {
   }
 };
 
-const handleRead = (text: string) => {
+const isReading = ref(false);
+const isPaused = ref(false);
+const readingMsgIndex = ref<number | null>(null);
+
+const handleRead = (text: string, msgIndex?: number) => {
   if ('speechSynthesis' in window) {
+    // 点击同一条消息 → 暂停/恢复
+    if (msgIndex !== undefined && readingMsgIndex.value === msgIndex && isReading.value) {
+      if (isPaused.value) {
+        window.speechSynthesis.resume();
+      } else {
+        window.speechSynthesis.pause();
+      }
+      return;
+    }
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'zh-CN';
+    utterance.onstart = () => {
+      isReading.value = true; isPaused.value = false;
+      readingMsgIndex.value = msgIndex ?? null;
+    };
+    utterance.onend = () => { isReading.value = false; isPaused.value = false; readingMsgIndex.value = null; };
+    utterance.onpause = () => { isPaused.value = true; };
+    utterance.onresume = () => { isPaused.value = false; };
     window.speechSynthesis.speak(utterance);
   } else {
     ElMessage.warning('当前浏览器不支持语音播报');
@@ -294,6 +318,9 @@ const toggleVoice = () => {
     clearVoiceTimer();
     stopVoice();
     cleanupConfirmRecognition();
+    window.speechSynthesis.cancel();
+    isReading.value = false;
+    isPaused.value = false;
   } else {
     inputMudle.value = 2;
     resetVoiceTimer();
@@ -465,7 +492,7 @@ watch(inputText, (newVal) => {
 });
 
 // ================= 发送消息 =================
-const CHAT_TIMEOUT = 10000;
+const CHAT_TIMEOUT = 30000;
 
 const handleSend = async () => {
   let text = inputText.value.trim();
@@ -506,7 +533,9 @@ const handleSend = async () => {
     await nextTick();
     scrollToBottom();
     emit('refresh');
-    handleRead(lastMsg?.content || res.aiResult || '操作已完成');
+    if (inputMudle.value === 2) {
+      handleRead(lastMsg?.content || res.aiResult || '操作已完成');
+    }
     fetchSessions();
   } catch (error) {
     clearTimeout(slowTimer);
@@ -645,6 +674,11 @@ watch(isUserLoggedIn, async (newVal) => {
 .voice-record-btn { padding: 2px 6px; background: none; border: none; font-size: 16px; cursor: pointer; transition: all 0.2s; user-select: none; border-radius: 4px; flex-shrink: 0; }
 .voice-record-btn:hover:not(:disabled) { background-color: #eaddc4; }
 .voice-record-btn.recording { background-color: #bc423f; color: white; animation: pulse 1.5s infinite; }
+
+.read-toggle-btn { padding: 2px 5px; background: none; border: none; font-size: 13px; cursor: pointer; transition: all 0.2s; user-select: none; border-radius: 4px; flex-shrink: 0; color: #b5a992; }
+.read-toggle-btn:hover { background-color: #eaddc4; color: #5c4b37; }
+.read-toggle-btn.active { color: #5c4b37; }
+.read-toggle-btn.paused { color: #bc423f; animation: pulse 2s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(188, 66, 63, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(188, 66, 63, 0); } 100% { box-shadow: 0 0 0 0 rgba(188, 66, 63, 0); } }
 
 .decibel-meter { display: flex; align-items: flex-end; gap: 3px; height: 22px; max-width: 0; overflow: hidden; transition: max-width 0.35s cubic-bezier(0.4, 0, 0.2, 1); background: rgba(92, 75, 55, 0.06); border-radius: 4px; padding: 0; }
