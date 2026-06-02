@@ -164,6 +164,54 @@ public class TodoServiceImpl implements TodoService {
     }
 
     @Override
+    @Transactional
+    public TodoDate removeTodoDay(Long todoId, LocalDate date) {
+        Long userId = LoginUserContext.getUserId();
+        Todo todo = todoMapper.selectById(todoId);
+        if (todo == null || !todo.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "待办不存在");
+        }
+
+        TodoDate todoDate = todoDateMapper.selectOne(new LambdaQueryWrapper<TodoDate>()
+                .eq(TodoDate::getTodoId, todoId)
+                .eq(TodoDate::getTodoDate, date));
+        if (todoDate == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "该日期 (" + date + ") 没有对应的任务记录");
+        }
+
+        todoDateMapper.deleteById(todoDate.getId());
+        return todoDate;
+    }
+
+    @Override
+    @Transactional
+    public TodoDate addTodoDay(Long todoId, LocalDate date, String dayContent) {
+        Long userId = LoginUserContext.getUserId();
+        Todo todo = todoMapper.selectById(todoId);
+        if (todo == null || !todo.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "待办不存在");
+        }
+
+        // 检查该天是否已存在
+        TodoDate existing = todoDateMapper.selectOne(new LambdaQueryWrapper<TodoDate>()
+                .eq(TodoDate::getTodoId, todoId)
+                .eq(TodoDate::getTodoDate, date));
+        if (existing != null) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST,
+                    "该日期 (" + date + ") 已存在任务记录，无需重复添加");
+        }
+
+        TodoDate td = new TodoDate();
+        td.setTodoId(todoId);
+        td.setTodoDate(date);
+        td.setDayContent(dayContent);
+        td.setStatus(0);
+        todoDateMapper.insert(td);
+
+        return td;
+    }
+
+    @Override
     public List<TodoVO> listByDate(String date) {
         return null; // DayTodosVO 在 DailyNoteService 中组装
     }

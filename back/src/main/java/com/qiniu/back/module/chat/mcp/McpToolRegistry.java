@@ -42,6 +42,8 @@ public class McpToolRegistry {
         registerUpdateTodo();
         registerToggleTodoDate();
         registerSaveDailyNote();
+        registerRemoveTodoDay();
+        registerAddTodoDay();
     }
 
     /**
@@ -230,6 +232,43 @@ public class McpToolRegistry {
                 ))
                 .executor(args -> toolService.saveDailyNote(
                         (String) args.get("date"), (String) args.get("content")))
+                .build());
+    }
+
+    private void registerRemoveTodoDay() {
+        tools.put("removeTodoDay", McpToolDefinition.builder()
+                .name("removeTodoDay")
+                .description("从待办目标中移除指定的一天，其他天不受影响。仅在用户明确说\"取消某天\"、\"跳过某天\"、\"删除某天的计划\"时调用。绝对不要对整个待办目标调用此工具，deleteTodo 才是删除整个目标的。")
+                .inputSchema(Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "todoId", Map.of("type", "integer", "description", "待办目标ID（从 queryTodoList 获取）"),
+                                "date", Map.of("type", "string", "description", "要移除的日期 yyy-MM-dd")
+                        ),
+                        "required", List.of("todoId", "date")
+                ))
+                .executor(args -> toolService.removeTodoDay(
+                        toLong(args.get("todoId")), (String) args.get("date")))
+                .build());
+    }
+
+    private void registerAddTodoDay() {
+        tools.put("addTodoDay", McpToolDefinition.builder()
+                .name("addTodoDay")
+                .description("给已有待办目标增加一天。用于补打卡、临时加一天、把某天调换到另一个日期等场景。先调用 removeTodoDay 移除旧日期，再调用 addTodoDay 添加新日期即可实现单天调换。")
+                .inputSchema(Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "todoId", Map.of("type", "integer", "description", "待办目标ID（从 queryTodoList 获取）"),
+                                "date", Map.of("type", "string", "description", "要新增的日期 yyy-MM-dd"),
+                                "dayContent", Map.of("type", "string", "description", "当天的具体任务描述，可选")
+                        ),
+                        "required", List.of("todoId", "date")
+                ))
+                .executor(args -> toolService.addTodoDay(
+                        toLong(args.get("todoId")),
+                        (String) args.get("date"),
+                        args.get("dayContent") instanceof String s ? s : null))
                 .build());
     }
 

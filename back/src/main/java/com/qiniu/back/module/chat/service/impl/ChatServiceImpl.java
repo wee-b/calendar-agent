@@ -5,58 +5,34 @@ import com.qiniu.back.domain.chat.AiDialogue;
 import com.qiniu.back.domain.chat.vo.ChatHistoryItemVO;
 import com.qiniu.back.domain.chat.vo.ChatResponseVO;
 import com.qiniu.back.domain.chat.vo.ChatSessionVO;
+import com.qiniu.back.module.chat.agent.AgentOrchestrator;
 import com.qiniu.back.module.chat.mapper.AiDialogueMapper;
-import com.qiniu.back.module.chat.mcp.McpToolRegistry;
 import com.qiniu.back.module.chat.service.ChatService;
 import com.qiniu.back.util.LoginUserContext;
-import com.qiniu.back.util.PromptLoader;
-import dev.langchain4j.agent.tool.ToolExecutionRequest;
-import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.StreamingChatModel;
-import dev.langchain4j.model.chat.request.ChatRequest;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.io.IOException;
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.time.format.TextStyle;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.function.Consumer;
 
 @Slf4j
 @Service
 public class ChatServiceImpl implements ChatService {
 
     private static final int MAX_HISTORY = 20;
-    private static final int MAX_TOOL_ROUNDS = 5;
-    private static final String SYSTEM_PROMPT = PromptLoader.load("chat-system.txt");
-    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy年M月d日");
 
     @Autowired
-    private ChatModel chatModel;
-
-    @Autowired
-    private StreamingChatModel streamingChatModel;
-
-    @Autowired
-    private McpToolRegistry toolRegistry;
+    private AgentOrchestrator agentOrchestrator;
 
     @Autowired
     private AiDialogueMapper aiDialogueMapper;
+
+    // ==================== Agent 对话入口 ====================
 
     @Override
     public ChatResponseVO chat(String sessionId, String message) {
@@ -65,15 +41,13 @@ public class ChatServiceImpl implements ChatService {
 
         saveDialogue(userId, sid, "user", message, null);
 
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(new SystemMessage(buildSystemPrompt(message)));
-        messages.addAll(buildMessageList(loadHistory(userId, sid)));
+        List<ChatMessage> history = buildMessageList(loadHistory(userId, sid));
 
         String aiResult;
         try {
-            aiResult = chatWithTools(messages);
+            aiResult = agentOrchestrator.orchestrate(message, history);
         } catch (Exception e) {
-            log.error("AI 调用失败", e);
+            log.error("Agent 编排调用失败", e);
             aiResult = "抱歉，我暂时无法处理这个请求，请稍后再试。";
         }
 
@@ -92,20 +66,17 @@ public class ChatServiceImpl implements ChatService {
 
         saveDialogue(userId, sid, "user", message, null);
 
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(new SystemMessage(buildSystemPrompt(message)));
-        messages.addAll(buildMessageList(loadHistory(userId, sid)));
+        List<ChatMessage> history = buildMessageList(loadHistory(userId, sid));
 
-        SseEmitter emitter = new SseEmitter(120_000L);
-        List<ToolSpecification> toolSpecs = toolRegistry.toLangChain4jSpecifications();
+        SseEmitter emitter = new SseEmitter(300_000L);
 
         CompletableFuture.runAsync(() -> {
             LoginUserContext.setUserId(userId);
             try {
-                streamWithToolLoop(emitter, messages, toolSpecs,
+                agentOrchestrator.orchestrateStreamInternal(emitter, message, history,
                         fullResponse -> saveDialogue(userId, sid, "assistant", null, fullResponse));
             } catch (Exception e) {
-                log.error("流式调用失败", e);
+                log.error("Agent 流式编排失败", e);
                 emitter.completeWithError(e);
             } finally {
                 LoginUserContext.remove();
@@ -115,115 +86,6 @@ public class ChatServiceImpl implements ChatService {
         emitter.onTimeout(() -> log.warn("SSE 连接超时"));
         emitter.onError(e -> log.error("SSE 连接异常", e));
         return emitter;
-    }
-
-    // ==================== 工具调用循环 ====================
-
-    /** 非流式工具调用循环 */
-    private String chatWithTools(List<ChatMessage> messages) {
-        List<ToolSpecification> toolSpecs = toolRegistry.toLangChain4jSpecifications();
-
-        for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
-            ChatRequest.Builder requestBuilder = ChatRequest.builder()
-                    .messages(messages)
-                    .temperature(0.7);
-
-            if (round < MAX_TOOL_ROUNDS - 1) {
-                requestBuilder.toolSpecifications(toolSpecs);
-            }
-
-            ChatResponse response = chatModel.chat(requestBuilder.build());
-            AiMessage aiMsg = response.aiMessage();
-
-            if (!aiMsg.hasToolExecutionRequests()) {
-                return aiMsg.text();
-            }
-
-            messages.add(aiMsg);
-            for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
-                log.info("Tool call: {} args: {}", req.name(), req.arguments());
-                String result = toolRegistry.execute(req.name(), req.arguments());
-                messages.add(ToolExecutionResultMessage.from(req, result));
-            }
-        }
-
-        // 超出最大轮次，强制文本回复
-        ChatResponse response = chatModel.chat(ChatRequest.builder()
-                .messages(messages).temperature(0.7).build());
-        return response.aiMessage().text();
-    }
-
-    /** 流式工具调用循环 */
-    private void streamWithToolLoop(SseEmitter emitter, List<ChatMessage> messages,
-                                    List<ToolSpecification> toolSpecs, Consumer<String> onComplete) {
-        try {
-            for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
-                ChatRequest.Builder requestBuilder = ChatRequest.builder()
-                        .messages(messages)
-                        .temperature(0.7);
-
-                if (round < MAX_TOOL_ROUNDS - 1) {
-                    requestBuilder.toolSpecifications(toolSpecs);
-                }
-
-                CompletableFuture<ChatResponse> future = new CompletableFuture<>();
-                StringBuilder fullText = new StringBuilder();
-
-                streamingChatModel.chat(requestBuilder.build(), new StreamingChatResponseHandler() {
-                    @Override
-                    public void onPartialResponse(String partialResponse) {
-                        fullText.append(partialResponse);
-                        try {
-                            emitter.send(SseEmitter.event().data(partialResponse));
-                        } catch (IOException e) {
-                            future.completeExceptionally(e);
-                        }
-                    }
-
-                    @Override
-                    public void onCompleteResponse(ChatResponse completeResponse) {
-                        future.complete(completeResponse);
-                    }
-
-                    @Override
-                    public void onError(Throwable error) {
-                        future.completeExceptionally(error);
-                    }
-                });
-
-                ChatResponse response;
-                try {
-                    response = future.get();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    emitter.complete();
-                    return;
-                } catch (ExecutionException e) {
-                    log.error("Streaming call failed", e.getCause());
-                    emitter.completeWithError(e.getCause());
-                    return;
-                }
-
-                AiMessage aiMsg = response.aiMessage();
-
-                if (!aiMsg.hasToolExecutionRequests()) {
-                    emitter.complete();
-                    if (onComplete != null) onComplete.accept(fullText.toString());
-                    return;
-                }
-
-                messages.add(aiMsg);
-                for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
-                    log.info("Tool call: {} args: {}", req.name(), req.arguments());
-                    String result = toolRegistry.execute(req.name(), req.arguments());
-                    messages.add(ToolExecutionResultMessage.from(req, result));
-                }
-            }
-            emitter.complete();
-        } catch (Exception e) {
-            log.error("Tool loop failed", e);
-            emitter.completeWithError(e);
-        }
     }
 
     // ==================== 会话管理 ====================
@@ -316,40 +178,6 @@ public class ChatServiceImpl implements ChatService {
     }
 
     // ==================== 内部工具 ====================
-
-    private String buildSystemPrompt(String userMessage) {
-        LocalDate today = LocalDate.now();
-        DayOfWeek dow = today.getDayOfWeek();
-        String weekDayCn = dow.getDisplayName(TextStyle.FULL, Locale.CHINESE);
-        String todayStr = today.format(DATE_FMT) + "（" + weekDayCn + "）";
-
-        StringBuilder sb = new StringBuilder(SYSTEM_PROMPT);
-        sb.append("\n\n## 时间上下文\n当前日期是 ").append(todayStr)
-          .append("。用户说\"今天\"就是指").append(todayStr).append("，说\"明天\"就是加一天，以此类推。");
-
-        if (userMessage != null) {
-            String msg = userMessage.trim();
-            boolean isDelete = msg.contains("删除") || msg.contains("去掉") || msg.contains("移除") || msg.contains("取消");
-            boolean isCreate = msg.contains("创建") || msg.contains("添加") || msg.contains("新增") || msg.contains("安排") || msg.contains("加一个") || msg.contains("建一个");
-            boolean isPlan = msg.contains("规划") || msg.contains("计划") || msg.contains("备考");
-            boolean isToggle = msg.contains("完成") || msg.contains("搞定") || msg.contains("做完了") || msg.contains("打卡");
-            boolean isUpdate = msg.contains("修改") || msg.contains("改成") || msg.contains("改一下");
-
-            if (isDelete && !isCreate) {
-                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【删除】。你必须走删除流程：先查列表→匹配→确认→删除→再查列表验证。deleteTodo可能失败，必须以验证查询的结果为准，如果待办仍在列表中则如实告知用户删除失败。如果需要再次调用工具，必须通过系统的函数调用机制，绝对不要在文字中写<invoke>等XML标签！绝对禁止创建！绝对禁止调用createTodo！");
-            } else if (isPlan && !isDelete) {
-                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【规划】。走规划流程：理解目标→设计分阶段方案→问用户拆成多个待办还是合并→创建。如果用户语气急切则跳过确认直接拆成多个创建。");
-            } else if (isCreate && !isDelete) {
-                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【创建】。走创建流程。");
-            } else if (isToggle) {
-                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【标记完成】。调用toggleTodoDate。");
-            } else if (isUpdate && !isDelete) {
-                sb.append("\n\n!!!用户刚才说：\"").append(msg).append("\"，意图是【修改】。先判断是跨天修改（日期变了）还是同日修改（只改时分），然后直接调用updateTodo，无需确认。updateTodo所有字段必填，未修改的字段从查询结果中取原值。");
-            }
-        }
-
-        return sb.toString();
-    }
 
     private List<AiDialogue> loadHistory(Long userId, String sessionId) {
         List<AiDialogue> list = aiDialogueMapper.selectList(

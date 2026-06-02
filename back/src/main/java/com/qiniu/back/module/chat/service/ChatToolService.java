@@ -99,6 +99,42 @@ public class ChatToolService {
         return "待办 ID=" + todoId + " 在 " + date + " " + statusText + "。";
     }
 
+    public String removeTodoDay(Long todoId, String date) {
+        log.info("Tool-removeTodoDay: todoId={}, date={}", todoId, date);
+        List<TodoVO> todos = todoService.listByUser();
+        TodoVO target = todos.stream()
+                .filter(t -> t.getTodoId().equals(todoId))
+                .findFirst()
+                .orElse(null);
+        if (target == null) {
+            return "移除失败：未找到 ID=" + todoId + " 的待办，可能已被删除。请调用 queryTodoList 获取最新数据。";
+        }
+        try {
+            todoService.removeTodoDay(todoId, LocalDate.parse(date));
+            return "已从【" + target.getTitle() + "】中移除 " + date + "，其他天不受影响。请调用 queryDayDetail 验证。";
+        } catch (Exception e) {
+            return "移除失败: " + e.getMessage();
+        }
+    }
+
+    public String addTodoDay(Long todoId, String date, String dayContent) {
+        log.info("Tool-addTodoDay: todoId={}, date={}, content={}", todoId, date, dayContent);
+        List<TodoVO> todos = todoService.listByUser();
+        TodoVO target = todos.stream()
+                .filter(t -> t.getTodoId().equals(todoId))
+                .findFirst()
+                .orElse(null);
+        if (target == null) {
+            return "添加失败：未找到 ID=" + todoId + " 的待办。请调用 queryTodoList 获取最新数据。";
+        }
+        try {
+            todoService.addTodoDay(todoId, LocalDate.parse(date), dayContent);
+            return "已给【" + target.getTitle() + "】增加 " + date + " 这一天。请调用 queryDayDetail 验证。";
+        } catch (Exception e) {
+            return "添加失败: " + e.getMessage();
+        }
+    }
+
     public String saveDailyNote(String date, String content) {
         log.info("Tool-saveDailyNote: date={}", date);
         DailyNoteSaveDTO dto = new DailyNoteSaveDTO();
