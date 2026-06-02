@@ -6,31 +6,54 @@ import com.qiniu.back.domain.chat.vo.ChatHistoryItemVO;
 import com.qiniu.back.domain.chat.vo.ChatResponseVO;
 import com.qiniu.back.domain.chat.vo.ChatSessionVO;
 import com.qiniu.back.module.chat.mapper.AiDialogueMapper;
+import com.qiniu.back.module.chat.mcp.McpToolRegistry;
 import com.qiniu.back.module.chat.service.ChatService;
-import com.qiniu.back.module.chat.service.OpenAiService;
 import com.qiniu.back.util.LoginUserContext;
 import com.qiniu.back.util.PromptLoader;
-
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.time.DayOfWeek;
-import java.time.format.TextStyle;
-import java.util.Locale;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.TextStyle;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.function.Consumer;
 
 @Slf4j
 @Service
 public class ChatServiceImpl implements ChatService {
 
     private static final int MAX_HISTORY = 20;
+    private static final int MAX_TOOL_ROUNDS = 5;
     private static final String SYSTEM_PROMPT = PromptLoader.load("chat-system.txt");
+    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy年M月d日");
 
     @Autowired
-    private OpenAiService openAiService;
+    private ChatModel chatModel;
+
+    @Autowired
+    private StreamingChatModel streamingChatModel;
+
+    @Autowired
+    private McpToolRegistry toolRegistry;
 
     @Autowired
     private AiDialogueMapper aiDialogueMapper;
@@ -42,12 +65,13 @@ public class ChatServiceImpl implements ChatService {
 
         saveDialogue(userId, sid, "user", message, null);
 
-        List<AiDialogue> history = loadHistory(userId, sid);
-        List<Map<String, String>> messages = buildMessageList(history);
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(new SystemMessage(buildSystemPrompt(message)));
+        messages.addAll(buildMessageList(loadHistory(userId, sid)));
 
         String aiResult;
         try {
-            aiResult = openAiService.chat(buildSystemPrompt(message), messages);
+            aiResult = chatWithTools(messages);
         } catch (Exception e) {
             log.error("AI 调用失败", e);
             aiResult = "抱歉，我暂时无法处理这个请求，请稍后再试。";
@@ -60,6 +84,149 @@ public class ChatServiceImpl implements ChatService {
         vo.setAiResult(aiResult);
         return vo;
     }
+
+    @Override
+    public SseEmitter streamChat(String sessionId, String message) {
+        Long userId = LoginUserContext.getUserId();
+        String sid = (sessionId == null || sessionId.isEmpty()) ? UUID.randomUUID().toString() : sessionId;
+
+        saveDialogue(userId, sid, "user", message, null);
+
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(new SystemMessage(buildSystemPrompt(message)));
+        messages.addAll(buildMessageList(loadHistory(userId, sid)));
+
+        SseEmitter emitter = new SseEmitter(120_000L);
+        List<ToolSpecification> toolSpecs = toolRegistry.toLangChain4jSpecifications();
+
+        CompletableFuture.runAsync(() -> {
+            LoginUserContext.setUserId(userId);
+            try {
+                streamWithToolLoop(emitter, messages, toolSpecs,
+                        fullResponse -> saveDialogue(userId, sid, "assistant", null, fullResponse));
+            } catch (Exception e) {
+                log.error("流式调用失败", e);
+                emitter.completeWithError(e);
+            } finally {
+                LoginUserContext.remove();
+            }
+        });
+
+        emitter.onTimeout(() -> log.warn("SSE 连接超时"));
+        emitter.onError(e -> log.error("SSE 连接异常", e));
+        return emitter;
+    }
+
+    // ==================== 工具调用循环 ====================
+
+    /** 非流式工具调用循环 */
+    private String chatWithTools(List<ChatMessage> messages) {
+        List<ToolSpecification> toolSpecs = toolRegistry.toLangChain4jSpecifications();
+
+        for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            ChatRequest.Builder requestBuilder = ChatRequest.builder()
+                    .messages(messages)
+                    .temperature(0.7);
+
+            if (round < MAX_TOOL_ROUNDS - 1) {
+                requestBuilder.toolSpecifications(toolSpecs);
+            }
+
+            ChatResponse response = chatModel.chat(requestBuilder.build());
+            AiMessage aiMsg = response.aiMessage();
+
+            if (!aiMsg.hasToolExecutionRequests()) {
+                return aiMsg.text();
+            }
+
+            messages.add(aiMsg);
+            for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
+                log.info("Tool call: {} args: {}", req.name(), req.arguments());
+                String result = toolRegistry.execute(req.name(), req.arguments());
+                messages.add(ToolExecutionResultMessage.from(req, result));
+            }
+        }
+
+        // 超出最大轮次，强制文本回复
+        ChatResponse response = chatModel.chat(ChatRequest.builder()
+                .messages(messages).temperature(0.7).build());
+        return response.aiMessage().text();
+    }
+
+    /** 流式工具调用循环 */
+    private void streamWithToolLoop(SseEmitter emitter, List<ChatMessage> messages,
+                                    List<ToolSpecification> toolSpecs, Consumer<String> onComplete) {
+        try {
+            for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+                ChatRequest.Builder requestBuilder = ChatRequest.builder()
+                        .messages(messages)
+                        .temperature(0.7);
+
+                if (round < MAX_TOOL_ROUNDS - 1) {
+                    requestBuilder.toolSpecifications(toolSpecs);
+                }
+
+                CompletableFuture<ChatResponse> future = new CompletableFuture<>();
+                StringBuilder fullText = new StringBuilder();
+
+                streamingChatModel.chat(requestBuilder.build(), new StreamingChatResponseHandler() {
+                    @Override
+                    public void onPartialResponse(String partialResponse) {
+                        fullText.append(partialResponse);
+                        try {
+                            emitter.send(SseEmitter.event().data(partialResponse));
+                        } catch (IOException e) {
+                            future.completeExceptionally(e);
+                        }
+                    }
+
+                    @Override
+                    public void onCompleteResponse(ChatResponse completeResponse) {
+                        future.complete(completeResponse);
+                    }
+
+                    @Override
+                    public void onError(Throwable error) {
+                        future.completeExceptionally(error);
+                    }
+                });
+
+                ChatResponse response;
+                try {
+                    response = future.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    emitter.complete();
+                    return;
+                } catch (ExecutionException e) {
+                    log.error("Streaming call failed", e.getCause());
+                    emitter.completeWithError(e.getCause());
+                    return;
+                }
+
+                AiMessage aiMsg = response.aiMessage();
+
+                if (!aiMsg.hasToolExecutionRequests()) {
+                    emitter.complete();
+                    if (onComplete != null) onComplete.accept(fullText.toString());
+                    return;
+                }
+
+                messages.add(aiMsg);
+                for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
+                    log.info("Tool call: {} args: {}", req.name(), req.arguments());
+                    String result = toolRegistry.execute(req.name(), req.arguments());
+                    messages.add(ToolExecutionResultMessage.from(req, result));
+                }
+            }
+            emitter.complete();
+        } catch (Exception e) {
+            log.error("Tool loop failed", e);
+            emitter.completeWithError(e);
+        }
+    }
+
+    // ==================== 会话管理 ====================
 
     @Override
     public String newSession() {
@@ -95,7 +262,6 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public void deleteLastRound(String sessionId) {
         Long userId = LoginUserContext.getUserId();
-        // 找到该 session 最后一条消息
         List<AiDialogue> last = aiDialogueMapper.selectList(
                 new LambdaQueryWrapper<AiDialogue>()
                         .eq(AiDialogue::getUserId, userId)
@@ -105,7 +271,6 @@ public class ChatServiceImpl implements ChatService {
 
         if (last.size() < 2) return;
 
-        // 删最后2条（用户+助手各一条），批量删除
         aiDialogueMapper.deleteBatchIds(
                 last.stream().map(AiDialogue::getDialogueId).toList());
     }
@@ -113,14 +278,14 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public List<ChatSessionVO> listSessions() {
         Long userId = LoginUserContext.getUserId();
-        // 按 session 分组，取每个 session 的第一条用户消息作为标题
         List<AiDialogue> all = aiDialogueMapper.selectList(
                 new LambdaQueryWrapper<AiDialogue>()
                         .eq(AiDialogue::getUserId, userId)
                         .orderByAsc(AiDialogue::getCreateTime));
 
         Map<String, List<AiDialogue>> grouped = all.stream()
-                .collect(java.util.stream.Collectors.groupingBy(AiDialogue::getSessionId, LinkedHashMap::new, java.util.stream.Collectors.toList()));
+                .collect(java.util.stream.Collectors.groupingBy(
+                        AiDialogue::getSessionId, LinkedHashMap::new, java.util.stream.Collectors.toList()));
 
         List<ChatSessionVO> result = new ArrayList<>();
         for (Map.Entry<String, List<AiDialogue>> entry : grouped.entrySet()) {
@@ -139,7 +304,6 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public List<ChatHistoryItemVO> getLatestSession() {
         Long userId = LoginUserContext.getUserId();
-        // 找最新一条记录的 session
         AiDialogue latest = aiDialogueMapper.selectOne(
                 new LambdaQueryWrapper<AiDialogue>()
                         .eq(AiDialogue::getUserId, userId)
@@ -152,8 +316,6 @@ public class ChatServiceImpl implements ChatService {
     }
 
     // ==================== 内部工具 ====================
-
-    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy年M月d日");
 
     private String buildSystemPrompt(String userMessage) {
         LocalDate today = LocalDate.now();
@@ -200,14 +362,14 @@ public class ChatServiceImpl implements ChatService {
         return list;
     }
 
-    private List<Map<String, String>> buildMessageList(List<AiDialogue> history) {
-        List<Map<String, String>> messages = new ArrayList<>();
+    private List<ChatMessage> buildMessageList(List<AiDialogue> history) {
+        List<ChatMessage> messages = new ArrayList<>();
         for (AiDialogue d : history) {
             if (d.getUserText() != null && !d.getUserText().isEmpty()) {
-                messages.add(Map.of("role", "user", "content", d.getUserText()));
+                messages.add(new UserMessage(d.getUserText()));
             }
             if (d.getAiResult() != null && !d.getAiResult().isEmpty()) {
-                messages.add(Map.of("role", "assistant", "content", d.getAiResult()));
+                messages.add(new AiMessage(d.getAiResult()));
             }
         }
         return messages;

@@ -137,7 +137,7 @@
 import { ref, computed, nextTick, onMounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
-  newSessionAPI, sendChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
+  newSessionAPI, sendChatAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
 } from '../../../api/chat';
 import { tokenRef } from '../../../utils/auth';
 
@@ -522,31 +522,35 @@ const handleSend = async () => {
       ElMessage.warning('响应较慢，请耐心等待...');
     }, CHAT_TIMEOUT);
 
-    const res = await sendChatAPI({
-      sessionId: currentSessionId.value,
-      message: text
-    });
-    clearTimeout(slowTimer);
-
-    const lastMsg = messages.value[messages.value.length - 1];
-    if (lastMsg && lastMsg.loading) {
-      lastMsg.loading = false;
-      lastMsg.content = res.aiResult || '操作已完成';
-    }
-    await nextTick();
-    scrollToBottom();
-    emit('refresh');
-    if (inputMudle.value === 2) {
-      handleRead(lastMsg?.content || res.aiResult || '操作已完成', messages.value.length - 1);
-    }
-    fetchSessions();
-  } catch (error) {
-    clearTimeout(slowTimer);
-    const lastMsg = messages.value[messages.value.length - 1];
-    if (lastMsg && lastMsg.loading) {
-      lastMsg.loading = false;
-      lastMsg.content = '抱歉，网络开小差了，请重试。';
-    }
+    let firstToken = true;
+    await streamChatAPI(
+      { sessionId: currentSessionId.value, message: text },
+      (token) => {
+        clearTimeout(slowTimer);
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai') {
+          if (lastMsg.loading) lastMsg.loading = false;
+          lastMsg.content += token;
+          scrollToBottom();
+        }
+      },
+      () => {
+        emit('refresh');
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai' && inputMudle.value === 2) {
+          handleRead(lastMsg.content, messages.value.length - 1);
+        }
+        fetchSessions();
+      },
+      (error) => {
+        clearTimeout(slowTimer);
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.loading) {
+          lastMsg.loading = false;
+          lastMsg.content = error || '抱歉，网络开小差了，请重试。';
+        }
+      }
+    );
   } finally {
     isSending.value = false;
     scrollToBottom();
@@ -597,6 +601,7 @@ watch(isUserLoggedIn, async (newVal) => {
 .right-sidebar { border-left: 2px solid #d3c4a1; }
 .sidebar-content { position: relative; width: 100%; padding: 20px 20px 0 20px; min-width: 280px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
 .sidebar.is-collapsed { width: 0 !important; min-width: 0 !important; border: none; }
+.sidebar.is-collapsed .sidebar-content { min-width: 0; padding: 0; overflow: hidden; }
 
 /* 头部 */
 .chat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 2px dashed #d3c4a1; padding-bottom: 12px; }

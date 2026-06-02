@@ -5,6 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
 import com.qiniu.back.domain.todo.dto.TodoUpdateDTO;
 import com.qiniu.back.module.chat.service.ChatToolService;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.model.chat.request.json.JsonArraySchema;
+import dev.langchain4j.model.chat.request.json.JsonIntegerSchema;
+import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +20,7 @@ import java.util.function.Function;
 
 /**
  * MCP 工具注册中心，统一管理所有工具的定义与执行逻辑。
- * OpenAiService 和 McpController 共用此注册中心。
+ * ChatServiceImpl 和 McpController 共用此注册中心。
  */
 @Slf4j
 @Component
@@ -287,5 +291,65 @@ public class McpToolRegistry {
             ));
         }
         return result;
+    }
+
+    /**
+     * 转为 LangChain4j ToolSpecification 列表（用于 OpenAiChatModel / OpenAiStreamingChatModel）
+     */
+    public List<ToolSpecification> toLangChain4jSpecifications() {
+        List<ToolSpecification> result = new ArrayList<>();
+        for (McpToolDefinition tool : tools.values()) {
+            result.add(ToolSpecification.builder()
+                    .name(tool.getName())
+                    .description(tool.getDescription())
+                    .parameters(buildJsonSchema(tool.getName(), tool.getInputSchema()))
+                    .build());
+        }
+        return result;
+    }
+
+    private JsonObjectSchema buildJsonSchema(String toolName, Map<String, Object> schema) {
+        JsonObjectSchema.Builder builder = JsonObjectSchema.builder();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
+        if (properties != null) {
+            for (Map.Entry<String, Object> prop : properties.entrySet()) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> propDef = (Map<String, Object>) prop.getValue();
+                String type = (String) propDef.get("type");
+                String desc = (String) propDef.get("description");
+
+                builder.addProperty(prop.getKey(), toJsonSchemaElement(type, desc, propDef));
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        List<String> required = (List<String>) schema.get("required");
+        if (required != null && !required.isEmpty()) {
+            builder.required(required);
+        }
+
+        return builder.build();
+    }
+
+    private dev.langchain4j.model.chat.request.json.JsonSchemaElement toJsonSchemaElement(
+            String type, String description, Map<String, Object> propDef) {
+        return switch (type) {
+            case "string" -> dev.langchain4j.model.chat.request.json.JsonStringSchema.builder()
+                    .description(description).build();
+            case "integer" -> JsonIntegerSchema.builder().description(description).build();
+            case "array" -> {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> items = (Map<String, Object>) propDef.get("items");
+                String itemType = items != null ? (String) items.get("type") : "string";
+                yield JsonArraySchema.builder()
+                        .description(description)
+                        .items(toJsonSchemaElement(itemType, null, items != null ? items : Map.of()))
+                        .build();
+            }
+            default -> dev.langchain4j.model.chat.request.json.JsonStringSchema.builder()
+                    .description(description).build();
+        };
     }
 }

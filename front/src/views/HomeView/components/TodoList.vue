@@ -312,6 +312,7 @@ onUnmounted(() => {
   min-width: 0 !important;
   border: none;
 }
+.sidebar.is-collapsed .sidebar-content { min-width: 0; padding: 0; overflow: hidden; }
 
 /* 头部 */
 .todo-header {

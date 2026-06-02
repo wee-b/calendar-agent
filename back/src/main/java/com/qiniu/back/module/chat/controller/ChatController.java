@@ -10,7 +10,9 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.Map;
@@ -27,6 +29,12 @@ public class ChatController {
     @Operation(summary = "发送对话消息")
     public ResponseDTO<ChatResponseVO> chat(@RequestBody @Valid ChatRequestDTO request) {
         return ResponseDTO.ok(chatService.chat(request.getSessionId(), request.getMessage()));
+    }
+
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @Operation(summary = "流式对话（SSE）")
+    public SseEmitter streamChat(@RequestBody @Valid ChatRequestDTO request) {
+        return chatService.streamChat(request.getSessionId(), request.getMessage());
     }
 
     @PostMapping("/new-session")
