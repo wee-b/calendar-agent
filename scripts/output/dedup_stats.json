@@ -1,0 +1,26 @@
+{
+  "total_before": 49,
+  "tfidf_removed": 0,
+  "simhash_removed": 0,
+  "minhash_removed": 0,
+  "total_removed": 0,
+  "final_count": 49,
+  "dedup_ratio": "0.0%",
+  "embedding": {
+    "backend": "ollama",
+    "model": "bge-m3",
+    "dim": 1024,
+    "skipped": false
+  },
+  "milvus": {
+    "enabled": true,
+    "collection": "rag_corpus"
+  },
+  "sources": {
+    "md_files": [
+      "多Agent日程RAG专用语料库｜学习规划合集（四六级_驾照_期末_考研）.md",
+      "多Agent日程RAG专用语料库｜学习规划合集（新增拓展版）.md"
+    ],
+    "history_file": null
+  }
+}

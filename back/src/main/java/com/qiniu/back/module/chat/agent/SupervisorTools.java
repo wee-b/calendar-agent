@@ -2,11 +2,14 @@ package com.qiniu.back.module.chat.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qiniu.back.module.chat.mcp.McpToolRegistry;
+import com.qiniu.back.module.chat.rag.RagHit;
+import com.qiniu.back.module.chat.rag.RagService;
 import com.qiniu.back.util.PromptLoader;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -15,6 +18,7 @@ import java.util.*;
 /**
  * Supervisor 的工具箱——管理三个子 Agent 实例，并提供 Supervisor 视角的工具定义和执行。
  */
+@Slf4j
 @Component
 public class SupervisorTools {
 
@@ -23,6 +27,9 @@ public class SupervisorTools {
 
     @Autowired
     private McpToolRegistry toolRegistry;
+
+    @Autowired(required = false)
+    private RagService ragService;
 
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -99,13 +106,39 @@ public class SupervisorTools {
             Map<String, Object> args = mapper.readValue(argumentsJson, Map.class);
 
             return switch (toolName) {
-                case "plan_task" -> plannerAgent.execute((String) args.get("requirement"));
+                case "plan_task" -> {
+                    String requirement = (String) args.get("requirement");
+                    yield plannerAgent.execute(buildPlannerRagContext(requirement) + requirement);
+                }
                 case "query_calendar" -> queryAgent.execute((String) args.get("query"));
                 case "execute_task" -> executorAgent.execute((String) args.get("instruction"));
                 default -> "未知的 Supervisor 工具: " + toolName;
             };
         } catch (Exception e) {
             return "Supervisor 工具调用失败 (" + toolName + "): " + e.getMessage();
+        }
+    }
+
+    // ==================== Planner RAG 上下文 ====================
+
+    private String buildPlannerRagContext(String requirement) {
+        if (ragService == null) return "";
+
+        try {
+            List<RagHit> hits = ragService.search(requirement);
+            if (hits.isEmpty()) return "";
+
+            StringBuilder sb = new StringBuilder("## 参考语料\n");
+            sb.append("以下是从知识库检索到的相关规划参考，请优先参考这些内容制定计划：\n");
+            for (int i = 0; i < hits.size(); i++) {
+                RagHit h = hits.get(i);
+                sb.append(String.format("- (%s) %s\n", h.getSection(), h.getText()));
+            }
+            sb.append("\n## 用户需求\n");
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("[Planner] RAG 检索失败: {}", e.getMessage());
+            return "";
         }
     }
 

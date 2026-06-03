@@ -16,3 +16,13 @@ app:
     api-key: sk-1efd200fba634a289cbc152751c1db75
     base-url: https://api.deepseek.com
     model: deepseek-v4-flash
+  rag:
+    ollama-url: http://localhost:11434
+    embedding-model: bge-m3
+    milvus-host: localhost
+    milvus-port: 19530
+    milvus-collection: rag_corpus
+    top-k: 5
+    bm25-top-k: 20
+    dense-top-k: 20
+    lucene-index-dir: ./data/lucene-rag-index
