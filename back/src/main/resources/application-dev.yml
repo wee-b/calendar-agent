@@ -28,3 +28,6 @@ app:
     recall-threshold: 0.1 # 新增，RRF 融合后低于此分数的直接丢弃
     embedding-cache-ttl: 360  # 新增，embedding 缓存秒数
     lucene-index-dir: ./data/lucene-rag-index
+
+    result-cache-ttl: 180
+

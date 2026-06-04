@@ -2,6 +2,7 @@ package com.qiniu.back.module.chat.rag;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qiniu.back.constant.RedisConstant;
+import com.qiniu.back.util.DigestUtil;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -155,6 +156,20 @@ public class RagService {
      * 混合检索：BM25 + Dense → RRF → LLM Rerank → Top-K
      */
     public List<RagHit> search(String query) {
+
+        String cacheKey = RedisConstant.Rag_Cache_Key + DigestUtil.md5(query);
+        try {
+            String cached = redis.opsForValue().get(cacheKey);
+            if (cached != null) {
+                List<RagHit> hits = objectMapper.readValue(cached,
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, RagHit.class));
+                log.info("[RAG] L2 缓存命中, {} 条结果", hits.size());
+                return hits;
+            }
+        } catch (Exception e) {
+            log.warn("[RAG] 读取 RAG 结果缓存失败: {}", e.getMessage());
+        }
+
         List<RagHit> bm25Hits = searchBm25(query);
         List<RagHit> denseHits = searchDense(query);
         log.info("[RAG] BM25={}, Dense={}", bm25Hits.size(), denseHits.size());
@@ -173,6 +188,14 @@ public class RagService {
         List<RagHit> topK = ranked.subList(0, finalK);
         log.info("[RAG] Rerank → Top-{}: scores={}", props.getTopK(),
                 topK.stream().map(h -> String.format("%.3f", h.getScore())).toList());
+
+        // 返回前写缓存
+        try {
+            redis.opsForValue().set(cacheKey, objectMapper.writeValueAsString(topK),
+                    Duration.ofSeconds(props.getResultCacheTtl()));
+        } catch (Exception e) {
+            log.warn("[RAG] 写入 RAG 结果缓存失败: {}", e.getMessage());
+        }
         return topK;
     }
 
@@ -256,7 +279,7 @@ public class RagService {
     List<Float> embedQuery(String text) {
 
         // 1. 检查 Redis 缓存
-        String cacheKey = RedisConstant.Rag_Emb_Key + md5(text);
+        String cacheKey = RedisConstant.Rag_Emb_Key + DigestUtil.md5(text);
         try {
             String cached = redis.opsForValue().get(cacheKey);
             if (cached != null) {
@@ -303,19 +326,6 @@ public class RagService {
         } catch (RestClientException e) {
             log.warn("[RAG] Ollama embedding 请求失败: {}", e.getMessage());
             return List.of();
-        }
-    }
-
-    // 辅助方法：计算 MD5
-    private static String md5(String input) {
-        try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
-            byte[] digest = md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            for (byte b : digest) sb.append(String.format("%02x", b));
-            return sb.toString();
-        } catch (Exception e) {
-            return Integer.toHexString(input.hashCode());
         }
     }
 

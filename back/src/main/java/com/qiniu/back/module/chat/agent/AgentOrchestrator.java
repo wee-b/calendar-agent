@@ -33,6 +33,8 @@ import java.util.function.Consumer;
 @Component
 public class AgentOrchestrator {
 
+    // 子 Agent 结果 >1500 字符截断
+    private static final int MAX_SUBAGENT_RESULT_LEN = 1500;
     private static final double Supervisor_Temperature = 0.3;
     private static final int MAX_SUPERVISOR_ROUNDS = 10;
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy年M月d日");
@@ -103,7 +105,7 @@ public class AgentOrchestrator {
             for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
                 log.info("[Supervisor] 调度: {} -> args length: {}", req.name(), req.arguments().length());
                 String result = supervisorTools.executeSupervisorTool(req.name(), req.arguments());
-                messages.add(ToolExecutionResultMessage.from(req, result));
+                messages.add(ToolExecutionResultMessage.from(req, truncateSubAgentResult(result)));
             }
         }
 
@@ -176,7 +178,7 @@ public class AgentOrchestrator {
                 for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
                     log.info("[Supervisor] 调度: {} -> args length: {}", req.name(), req.arguments().length());
                     String result = supervisorTools.executeSupervisorTool(req.name(), req.arguments());
-                    messages.add(ToolExecutionResultMessage.from(req, result));
+                    messages.add(ToolExecutionResultMessage.from(req, truncateSubAgentResult(result)));
                 }
             }
             emitter.complete();
@@ -199,4 +201,13 @@ public class AgentOrchestrator {
                 + "\n用户说\"今天\"就是" + today.format(DATE_FMT)
                 + "，\"明天\"就是" + today.plusDays(1).format(DATE_FMT) + "，以此类推。";
     }
+
+
+    private String truncateSubAgentResult(String result) {
+        if (result == null) return "";
+        if (result.length() <= MAX_SUBAGENT_RESULT_LEN) return result;
+        return result.substring(0, MAX_SUBAGENT_RESULT_LEN)
+                + "...(已截断，原" + result.length() + "字符)";
+    }
+
 }

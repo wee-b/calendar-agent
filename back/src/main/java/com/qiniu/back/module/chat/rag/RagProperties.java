@@ -22,4 +22,7 @@ public class RagProperties {
     private double recallThreshold = 0.0;     // + getter/setter
     private int embeddingCacheTtl = 360;      // + getter/setter
 
+    // 在现有字段后追加
+    private int resultCacheTtl = 180;  // RAG 结果缓存，默认 30 分钟
+
 }

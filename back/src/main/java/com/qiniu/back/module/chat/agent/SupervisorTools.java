@@ -65,32 +65,35 @@ public class SupervisorTools {
                 .filter(t -> EXECUTOR_TOOLS.contains(t.name()))
                 .toList();
 
-        this.plannerAgent = new SubAgent(
-                "Planner",
-                chatModel,
-                PromptLoader.load("planner-system.txt"),
-                Planner_Tem,
-                List.of(), // 无工具，纯推理
-                (name, args) -> "[Planner] 不应该被调用工具: " + name
-        );
+        this.plannerAgent = SubAgent.builder()
+                .name("Planner")
+                .chatModel(chatModel)
+                .systemPrompt(PromptLoader.load("planner-system.txt"))
+                .toolExecutor((name, args) -> "[Planner] 不应该被调用工具: " + name)
+                .temperature(0.1)
+                .maxRounds(1)
+                .build();
 
-        this.queryAgent = new SubAgent(
-                "Query",
-                chatModel,
-                PromptLoader.load("query-system.txt"),
-                Query_Tem,
-                readTools,
-                toolRegistry::execute
-        );
+        this.queryAgent = SubAgent.builder()
+                .name("Query")
+                .chatModel(chatModel)
+                .systemPrompt(PromptLoader.load("query-system.txt"))
+                .tools(readTools)
+                .toolExecutor(toolRegistry::execute)
+                .temperature(0.3)
+                .maxRounds(3)
+                .build();
 
-        this.executorAgent = new SubAgent(
-                "Executor",
-                chatModel,
-                PromptLoader.load("executor-system.txt"),
-                Executor_Tem,
-                writeTools,
-                toolRegistry::execute
-        );
+        this.executorAgent = SubAgent.builder()
+                .name("Executor")
+                .chatModel(chatModel)
+                .systemPrompt(PromptLoader.load("executor-system.txt"))
+                .tools(writeTools)
+                .toolExecutor(toolRegistry::execute)
+                .temperature(0.3)
+                .maxRounds(3)
+                .build();
+
 
         this.supervisorToolSpecs = buildSupervisorSpecs();
     }
