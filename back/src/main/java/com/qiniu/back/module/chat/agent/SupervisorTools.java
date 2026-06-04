@@ -70,8 +70,10 @@ public class SupervisorTools {
                 .chatModel(chatModel)
                 .systemPrompt(PromptLoader.load("planner-system.txt"))
                 .toolExecutor((name, args) -> "[Planner] 不应该被调用工具: " + name)
-                .temperature(0.1)
+                .temperature(Planner_Tem)
                 .maxRounds(1)
+                .maxRetries(1)
+                .correctionHint("\n\n[纠正提示] 你上次的输出不是有效JSON。请只输出JSON对象，以{开头以}结尾，不要加任何markdown代码块标记或额外文字。")
                 .build();
 
         this.queryAgent = SubAgent.builder()
@@ -80,8 +82,10 @@ public class SupervisorTools {
                 .systemPrompt(PromptLoader.load("query-system.txt"))
                 .tools(readTools)
                 .toolExecutor(toolRegistry::execute)
-                .temperature(0.3)
+                .temperature(Query_Tem)
                 .maxRounds(3)
+                .maxRetries(1)
+                .correctionHint("\n\n[纠正提示] 上次查询返回无数据或结果为空。请使用更通用的查询条件，如先调queryTodoList列出所有待办，再精确定位。")
                 .build();
 
         this.executorAgent = SubAgent.builder()
@@ -90,8 +94,10 @@ public class SupervisorTools {
                 .systemPrompt(PromptLoader.load("executor-system.txt"))
                 .tools(writeTools)
                 .toolExecutor(toolRegistry::execute)
-                .temperature(0.3)
+                .temperature(Executor_Tem)
                 .maxRounds(3)
+                .maxRetries(1)
+                .correctionHint("\n\n[纠正提示] 部分工具返回了错误（{\"error\":...）。请先调queryTodoList确认当前数据状态，再重试失败的操作，必要时尝试替代方案。")
                 .build();
 
 

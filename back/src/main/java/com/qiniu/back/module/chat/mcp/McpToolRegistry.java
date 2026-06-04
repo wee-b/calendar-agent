@@ -61,22 +61,71 @@ public class McpToolRegistry {
     }
 
     /**
-     * 执行工具并返回结果字符串
+     * 执行工具并返回结果字符串（含自动重试）
      */
     public String execute(String name, String argumentsJson) {
         McpToolDefinition tool = tools.get(name);
         if (tool == null) {
             return "未知的工具: " + name;
         }
+        Map<String, Object> args;
         try {
-            Map<String, Object> args = mapper.readValue(argumentsJson, Map.class);
-            return tool.getExecutor().apply(args);
+            args = mapper.readValue(argumentsJson, Map.class);
         } catch (JsonProcessingException e) {
             log.error("MCP 工具参数解析失败: {}", name, e);
             return "参数解析失败: " + e.getMessage();
-        } catch (Exception e) {
-            log.error("MCP 工具执行失败: {}", name, e);
-            return "执行失败: " + e.getMessage();
+        }
+        return executeWithRetry(tool, args);
+    }
+
+    private String executeWithRetry(McpToolDefinition tool, Map<String, Object> args) {
+        int maxAttempts = tool.getRetryCount() + 1;
+        long delayMs = tool.getRetryDelayMs();
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            try {
+                return tool.getExecutor().apply(args);
+            } catch (Exception e) {
+                if (attempt < maxAttempts - 1 && isRetryable(e)) {
+                    log.warn("MCP 工具 {} 执行异常(可重试) 第{}/{}次, {}",
+                            tool.getName(), attempt + 1, maxAttempts, e.getMessage());
+                    sleep(delayMs);
+                } else {
+                    log.error("MCP 工具 {} 执行失败: {}", tool.getName(), e);
+                    return "{\"error\":\"" + escapeJson(e.getMessage()) + "\", \"retried\":" + attempt + "}";
+                }
+            }
+        }
+        return "{\"error\":\"重试耗尽\", \"retried\":" + maxAttempts + "}";
+    }
+
+    /**
+     * 判断异常是否可重试（仅瞬态故障：DB超时、连接断开、网络抖动）
+     */
+    private boolean isRetryable(Throwable e) {
+        Throwable cause = e;
+        while (cause != null) {
+            String cls = cause.getClass().getName();
+            if (cls.contains("SQLException") || cls.contains("TimeoutException")
+                    || cls.contains("ConnectException") || cls.contains("SocketException")
+                    || cls.contains("DataAccessException") || cls.contains("QueryTimeoutException")
+                    || cls.contains("CommandAcceptanceException"))
+                return true;
+            cause = cause.getCause();
+        }
+        return false;
+    }
+
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static void sleep(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

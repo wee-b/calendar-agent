@@ -26,6 +26,8 @@ public class SubAgent {
     private final BiFunction<String, String, String> toolExecutor;
     private final double temperature;
     private final int maxRounds;
+    private final int maxRetries;
+    private final String correctionHint;
 
     private SubAgent(Builder builder) {
         this.name = builder.name;
@@ -35,13 +37,32 @@ public class SubAgent {
         this.toolExecutor = builder.toolExecutor;
         this.temperature = builder.temperature;
         this.maxRounds = builder.maxRounds;
+        this.maxRetries = builder.maxRetries;
+        this.correctionHint = builder.correctionHint;
     }
 
     public static Builder builder() {
         return new Builder();
     }
 
+    /**
+     * 执行子 Agent 任务，含输出自纠错。
+     */
     public String execute(String task) {
+        String result = executeOnce(task);
+
+        for (int attempt = 0; attempt < maxRetries && needsCorrection(result); attempt++) {
+            log.info("[{}] 输出异常，第{}次纠正", name, attempt + 1);
+            String retryTask = task + correctionHint;
+            result = executeOnce(retryTask);
+        }
+
+        return result;
+    }
+
+    // ==================== 单次执行 ====================
+
+    private String executeOnce(String task) {
         log.info("[{}] 接收任务: {}", name,
                 task.length() > 120 ? task.substring(0, 120) + "..." : task);
 
@@ -72,7 +93,7 @@ public class SubAgent {
             for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
                 log.info("[{}] 调用工具: {} args: {}", name, req.name(), req.arguments());
                 String raw = toolExecutor.apply(req.name(), req.arguments());
-                messages.add(ToolExecutionResultMessage.from(req, truncate(raw)));
+                messages.add(ToolExecutionResultMessage.from(req, truncateToolResult(raw)));
             }
         }
 
@@ -81,7 +102,25 @@ public class SubAgent {
         return response.aiMessage().text();
     }
 
-    private static String truncate(String result) {
+    // ==================== 输出校验 ====================
+
+    private boolean needsCorrection(String result) {
+        if (correctionHint == null || correctionHint.isBlank()) return false;
+        if (result == null || result.isBlank()) return true;
+        if ("Planner".equals(name)) return !looksLikeJson(result);
+        if (result.startsWith("{\"error\"")) return true;
+        return false;
+    }
+
+    private static boolean looksLikeJson(String s) {
+        String trimmed = s.trim();
+        return (trimmed.startsWith("{") && trimmed.endsWith("}"))
+                || (trimmed.startsWith("[") && trimmed.endsWith("]"));
+    }
+
+    // ==================== 工具结果裁剪 ====================
+
+    private static String truncateToolResult(String result) {
         if (result == null) return "";
         if (result.length() <= MAX_TOOL_RESULT_LEN) return result;
         return result.substring(0, MAX_TOOL_RESULT_LEN)
@@ -98,6 +137,8 @@ public class SubAgent {
         private BiFunction<String, String, String> toolExecutor;
         private double temperature = DEFAULT_TEMPERATURE;
         private int maxRounds = DEFAULT_MAX_ROUNDS;
+        private int maxRetries = 0;
+        private String correctionHint;
 
         public Builder name(String name) { this.name = name; return this; }
         public Builder chatModel(ChatModel chatModel) { this.chatModel = chatModel; return this; }
@@ -106,6 +147,8 @@ public class SubAgent {
         public Builder toolExecutor(BiFunction<String, String, String> f) { this.toolExecutor = f; return this; }
         public Builder temperature(double t) { this.temperature = t; return this; }
         public Builder maxRounds(int n) { this.maxRounds = n; return this; }
+        public Builder maxRetries(int n) { this.maxRetries = n; return this; }
+        public Builder correctionHint(String hint) { this.correctionHint = hint; return this; }
 
         public SubAgent build() {
             return new SubAgent(this);
