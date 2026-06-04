@@ -38,3 +38,6 @@ PR_SUMMARY_DAY2.md
 PR_SUMMARY_DAY3.md
 
 docs/
+
+# 用于存放密钥
+application-unknown.yml

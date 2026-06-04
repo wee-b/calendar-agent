@@ -33,6 +33,7 @@ import java.util.function.Consumer;
 @Component
 public class AgentOrchestrator {
 
+    private static final double Supervisor_Temperature = 0.3;
     private static final int MAX_SUPERVISOR_ROUNDS = 10;
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy年M月d日");
 
@@ -85,7 +86,7 @@ public class AgentOrchestrator {
         for (int round = 0; round < MAX_SUPERVISOR_ROUNDS; round++) {
             ChatRequest.Builder builder = ChatRequest.builder()
                     .messages(messages)
-                    .temperature(0.7);
+                    .temperature(Supervisor_Temperature);
 
             if (round < MAX_SUPERVISOR_ROUNDS - 1) {
                 builder.toolSpecifications(toolSpecs);

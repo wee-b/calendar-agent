@@ -1,5 +1,7 @@
 package com.qiniu.back.module.chat.rag;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qiniu.back.constant.RedisConstant;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -28,6 +30,7 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.MMapDirectory;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -38,6 +41,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -57,17 +61,24 @@ public class RagService {
     private final RagProperties props;
     private final RestTemplate rest;
     private final MilvusServiceClient milvus;
-    private final ChatModel chatModel;
+    private final ChatModel chatModel;// 现有 4 个参数：props, rest, milvus, chatModel
+
+    private final StringRedisTemplate redis;
+    private final ObjectMapper objectMapper;
+
+
 
     private final AtomicReference<IndexSearcher> bm25Searcher = new AtomicReference<>();
     private SmartChineseAnalyzer analyzer;
 
     public RagService(RagProperties props, RestTemplate rest,
-                      MilvusServiceClient milvus, ChatModel chatModel) {
+                      MilvusServiceClient milvus, ChatModel chatModel,StringRedisTemplate redis,ObjectMapper objectMapper) {
         this.props = props;
         this.rest = rest;
         this.milvus = milvus;
         this.chatModel = chatModel;
+        this.redis = redis;
+        this.objectMapper = objectMapper;
     }
 
     // ========================================================================
@@ -149,6 +160,8 @@ public class RagService {
         log.info("[RAG] BM25={}, Dense={}", bm25Hits.size(), denseHits.size());
 
         List<RagHit> fused = rrfFusion(bm25Hits, denseHits, props.getTopK() * 3);
+        // 阈值过滤
+        fused = fused.stream().filter(h -> h.getScore() >= props.getRecallThreshold()).toList();
         log.info("[RAG] RRF 融合后={}", fused.size());
 
         if (fused.isEmpty()) {
@@ -241,6 +254,20 @@ public class RagService {
 
     @SuppressWarnings("unchecked")
     List<Float> embedQuery(String text) {
+
+        // 1. 检查 Redis 缓存
+        String cacheKey = RedisConstant.Rag_Emb_Key + md5(text);
+        try {
+            String cached = redis.opsForValue().get(cacheKey);
+            if (cached != null) {
+                return objectMapper.readValue(cached,
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, Float.class));
+            }
+        } catch (Exception e) {
+            log.warn("[RAG] 读取 embedding 缓存失败: {}", e.getMessage());
+        }
+
+        // 2. 缓存未命中，请求 Ollama
         String url = props.getOllamaUrl() + "/api/embeddings";
         Map<String, String> body = Map.of("model", props.getEmbeddingModel(), "prompt", text);
 
@@ -263,12 +290,32 @@ public class RagService {
                 for (Object item : list) {
                     floats.add(((Number) item).floatValue());
                 }
+                // 3. 写入 Redis 缓存
+                try {
+                    redis.opsForValue().set(cacheKey, objectMapper.writeValueAsString(floats),
+                            Duration.ofSeconds(props.getEmbeddingCacheTtl()));
+                } catch (Exception e) {
+                    log.warn("[RAG] 写入 embedding 缓存失败: {}", e.getMessage());
+                }
                 return floats;
             }
             return List.of();
         } catch (RestClientException e) {
             log.warn("[RAG] Ollama embedding 请求失败: {}", e.getMessage());
             return List.of();
+        }
+    }
+
+    // 辅助方法：计算 MD5
+    private static String md5(String input) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(input.hashCode());
         }
     }
 

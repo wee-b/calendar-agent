@@ -26,16 +26,18 @@ public class SubAgent {
     private final String name;
     private final ChatModel chatModel;
     private final String systemPrompt;
+    private final double temperature;
     private final List<ToolSpecification> tools;
     /** (toolName, argumentsJson) -> resultText */
     private final BiFunction<String, String, String> toolExecutor;
 
     public SubAgent(String name, ChatModel chatModel, String systemPrompt,
-                    List<ToolSpecification> tools,
+                    double temperature,List<ToolSpecification> tools,
                     BiFunction<String, String, String> toolExecutor) {
         this.name = name;
         this.chatModel = chatModel;
         this.systemPrompt = systemPrompt;
+        this.temperature = temperature;
         this.tools = tools;
         this.toolExecutor = toolExecutor;
     }
@@ -53,7 +55,7 @@ public class SubAgent {
         for (int round = 0; round < MAX_ROUNDS; round++) {
             ChatRequest.Builder builder = ChatRequest.builder()
                     .messages(messages)
-                    .temperature(0.7);
+                    .temperature(this.temperature);
 
             if (!tools.isEmpty() && round < MAX_ROUNDS - 1) {
                 builder.toolSpecifications(tools);

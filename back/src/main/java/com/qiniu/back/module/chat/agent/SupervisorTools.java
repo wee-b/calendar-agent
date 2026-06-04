@@ -22,6 +22,10 @@ import java.util.*;
 @Component
 public class SupervisorTools {
 
+    private static final double Planner_Tem = 0.1;
+    private static final double Query_Tem = 0.3;
+    private static final double Executor_Tem = 0.3;
+
     @Autowired
     private ChatModel chatModel;
 
@@ -65,6 +69,7 @@ public class SupervisorTools {
                 "Planner",
                 chatModel,
                 PromptLoader.load("planner-system.txt"),
+                Planner_Tem,
                 List.of(), // 无工具，纯推理
                 (name, args) -> "[Planner] 不应该被调用工具: " + name
         );
@@ -73,6 +78,7 @@ public class SupervisorTools {
                 "Query",
                 chatModel,
                 PromptLoader.load("query-system.txt"),
+                Query_Tem,
                 readTools,
                 toolRegistry::execute
         );
@@ -81,6 +87,7 @@ public class SupervisorTools {
                 "Executor",
                 chatModel,
                 PromptLoader.load("executor-system.txt"),
+                Executor_Tem,
                 writeTools,
                 toolRegistry::execute
         );
