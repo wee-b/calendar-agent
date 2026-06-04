@@ -22,6 +22,10 @@ import java.util.*;
 @Component
 public class SupervisorTools {
 
+    private static final double Planner_Tem = 0.1;
+    private static final double Query_Tem = 0.3;
+    private static final double Executor_Tem = 0.3;
+
     @Autowired
     private ChatModel chatModel;
 
@@ -61,29 +65,41 @@ public class SupervisorTools {
                 .filter(t -> EXECUTOR_TOOLS.contains(t.name()))
                 .toList();
 
-        this.plannerAgent = new SubAgent(
-                "Planner",
-                chatModel,
-                PromptLoader.load("planner-system.txt"),
-                List.of(), // 无工具，纯推理
-                (name, args) -> "[Planner] 不应该被调用工具: " + name
-        );
+        this.plannerAgent = SubAgent.builder()
+                .name("Planner")
+                .chatModel(chatModel)
+                .systemPrompt(PromptLoader.load("planner-system.txt"))
+                .toolExecutor((name, args) -> "[Planner] 不应该被调用工具: " + name)
+                .temperature(Planner_Tem)
+                .maxRounds(1)
+                .maxRetries(1)
+                .correctionHint("\n\n[纠正提示] 你上次的输出不是有效JSON。请只输出JSON对象，以{开头以}结尾，不要加任何markdown代码块标记或额外文字。")
+                .build();
 
-        this.queryAgent = new SubAgent(
-                "Query",
-                chatModel,
-                PromptLoader.load("query-system.txt"),
-                readTools,
-                toolRegistry::execute
-        );
+        this.queryAgent = SubAgent.builder()
+                .name("Query")
+                .chatModel(chatModel)
+                .systemPrompt(PromptLoader.load("query-system.txt"))
+                .tools(readTools)
+                .toolExecutor(toolRegistry::execute)
+                .temperature(Query_Tem)
+                .maxRounds(3)
+                .maxRetries(1)
+                .correctionHint("\n\n[纠正提示] 上次查询返回无数据或结果为空。请使用更通用的查询条件，如先调queryTodoList列出所有待办，再精确定位。")
+                .build();
 
-        this.executorAgent = new SubAgent(
-                "Executor",
-                chatModel,
-                PromptLoader.load("executor-system.txt"),
-                writeTools,
-                toolRegistry::execute
-        );
+        this.executorAgent = SubAgent.builder()
+                .name("Executor")
+                .chatModel(chatModel)
+                .systemPrompt(PromptLoader.load("executor-system.txt"))
+                .tools(writeTools)
+                .toolExecutor(toolRegistry::execute)
+                .temperature(Executor_Tem)
+                .maxRounds(3)
+                .maxRetries(1)
+                .correctionHint("\n\n[纠正提示] 部分工具返回了错误（{\"error\":...）。请先调queryTodoList确认当前数据状态，再重试失败的操作，必要时尝试替代方案。")
+                .build();
+
 
         this.supervisorToolSpecs = buildSupervisorSpecs();
     }

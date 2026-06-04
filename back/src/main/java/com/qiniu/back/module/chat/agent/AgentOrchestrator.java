@@ -33,6 +33,9 @@ import java.util.function.Consumer;
 @Component
 public class AgentOrchestrator {
 
+    // 子 Agent 结果 >1500 字符截断
+    private static final int MAX_SUBAGENT_RESULT_LEN = 1500;
+    private static final double Supervisor_Temperature = 0.3;
     private static final int MAX_SUPERVISOR_ROUNDS = 10;
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy年M月d日");
 
@@ -81,11 +84,12 @@ public class AgentOrchestrator {
 
     private String chatWithSupervisor(List<ChatMessage> messages) {
         List<ToolSpecification> toolSpecs = supervisorTools.getSupervisorSpecs();
+        boolean hadPlan = false;
 
         for (int round = 0; round < MAX_SUPERVISOR_ROUNDS; round++) {
             ChatRequest.Builder builder = ChatRequest.builder()
                     .messages(messages)
-                    .temperature(0.7);
+                    .temperature(Supervisor_Temperature);
 
             if (round < MAX_SUPERVISOR_ROUNDS - 1) {
                 builder.toolSpecifications(toolSpecs);
@@ -99,15 +103,28 @@ public class AgentOrchestrator {
             }
 
             messages.add(aiMsg);
+            boolean justExecuted = false;
             for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
                 log.info("[Supervisor] 调度: {} -> args length: {}", req.name(), req.arguments().length());
+                if ("plan_task".equals(req.name())) hadPlan = true;
+                if ("execute_task".equals(req.name())) justExecuted = true;
                 String result = supervisorTools.executeSupervisorTool(req.name(), req.arguments());
-                messages.add(ToolExecutionResultMessage.from(req, result));
+                messages.add(ToolExecutionResultMessage.from(req, truncateSubAgentResult(result)));
+            }
+
+            // 管线验证：execute_task 执行后自动查重确认操作落地
+            if (justExecuted && hadPlan) {
+                hadPlan = false;
+                String verifyResult = supervisorTools.executeSupervisorTool("query_calendar",
+                        "{\"query\":\"查询所有待办列表，验证刚才的创建/修改操作是否生效\"}");
+                messages.add(new SystemMessage(
+                        "[自动验证] 以下是执行后的数据验证（确认操作是否生效）：\n"
+                                + truncateSubAgentResult(verifyResult)));
             }
         }
 
         ChatResponse response = chatModel.chat(ChatRequest.builder()
-                .messages(messages).temperature(0.7).build());
+                .messages(messages).temperature(Supervisor_Temperature).build());
         return response.aiMessage().text();
     }
 
@@ -116,11 +133,12 @@ public class AgentOrchestrator {
     private void streamWithSupervisor(SseEmitter emitter, List<ChatMessage> messages,
                                       List<ToolSpecification> toolSpecs,
                                       Consumer<String> onComplete) {
+        boolean hadPlan = false;
         try {
             for (int round = 0; round < MAX_SUPERVISOR_ROUNDS; round++) {
                 ChatRequest.Builder builder = ChatRequest.builder()
                         .messages(messages)
-                        .temperature(0.7);
+                        .temperature(Supervisor_Temperature);
 
                 if (round < MAX_SUPERVISOR_ROUNDS - 1) {
                     builder.toolSpecifications(toolSpecs);
@@ -172,10 +190,22 @@ public class AgentOrchestrator {
                 }
 
                 messages.add(aiMsg);
+                boolean justExecuted = false;
                 for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
                     log.info("[Supervisor] 调度: {} -> args length: {}", req.name(), req.arguments().length());
+                    if ("plan_task".equals(req.name())) hadPlan = true;
+                    if ("execute_task".equals(req.name())) justExecuted = true;
                     String result = supervisorTools.executeSupervisorTool(req.name(), req.arguments());
-                    messages.add(ToolExecutionResultMessage.from(req, result));
+                    messages.add(ToolExecutionResultMessage.from(req, truncateSubAgentResult(result)));
+                }
+
+                if (justExecuted && hadPlan) {
+                    hadPlan = false;
+                    String verifyResult = supervisorTools.executeSupervisorTool("query_calendar",
+                            "{\"query\":\"查询所有待办列表，验证刚才的创建/修改操作是否生效\"}");
+                    messages.add(new SystemMessage(
+                            "[自动验证] 以下是执行后的数据验证（确认操作是否生效）：\n"
+                                    + truncateSubAgentResult(verifyResult)));
                 }
             }
             emitter.complete();
@@ -198,4 +228,13 @@ public class AgentOrchestrator {
                 + "\n用户说\"今天\"就是" + today.format(DATE_FMT)
                 + "，\"明天\"就是" + today.plusDays(1).format(DATE_FMT) + "，以此类推。";
     }
+
+
+    private String truncateSubAgentResult(String result) {
+        if (result == null) return "";
+        if (result.length() <= MAX_SUBAGENT_RESULT_LEN) return result;
+        return result.substring(0, MAX_SUBAGENT_RESULT_LEN)
+                + "...(已截断，原" + result.length() + "字符)";
+    }
+
 }

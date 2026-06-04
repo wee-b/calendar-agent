@@ -1,5 +1,8 @@
 package com.qiniu.back.module.chat.rag;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qiniu.back.constant.RedisConstant;
+import com.qiniu.back.util.DigestUtil;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -28,6 +31,7 @@ import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.MMapDirectory;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -38,6 +42,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -57,17 +62,24 @@ public class RagService {
     private final RagProperties props;
     private final RestTemplate rest;
     private final MilvusServiceClient milvus;
-    private final ChatModel chatModel;
+    private final ChatModel chatModel;// 现有 4 个参数：props, rest, milvus, chatModel
+
+    private final StringRedisTemplate redis;
+    private final ObjectMapper objectMapper;
+
+
 
     private final AtomicReference<IndexSearcher> bm25Searcher = new AtomicReference<>();
     private SmartChineseAnalyzer analyzer;
 
     public RagService(RagProperties props, RestTemplate rest,
-                      MilvusServiceClient milvus, ChatModel chatModel) {
+                      MilvusServiceClient milvus, ChatModel chatModel,StringRedisTemplate redis,ObjectMapper objectMapper) {
         this.props = props;
         this.rest = rest;
         this.milvus = milvus;
         this.chatModel = chatModel;
+        this.redis = redis;
+        this.objectMapper = objectMapper;
     }
 
     // ========================================================================
@@ -144,11 +156,27 @@ public class RagService {
      * 混合检索：BM25 + Dense → RRF → LLM Rerank → Top-K
      */
     public List<RagHit> search(String query) {
+
+        String cacheKey = RedisConstant.Rag_Cache_Key + DigestUtil.md5(query);
+        try {
+            String cached = redis.opsForValue().get(cacheKey);
+            if (cached != null) {
+                List<RagHit> hits = objectMapper.readValue(cached,
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, RagHit.class));
+                log.info("[RAG] L2 缓存命中, {} 条结果", hits.size());
+                return hits;
+            }
+        } catch (Exception e) {
+            log.warn("[RAG] 读取 RAG 结果缓存失败: {}", e.getMessage());
+        }
+
         List<RagHit> bm25Hits = searchBm25(query);
         List<RagHit> denseHits = searchDense(query);
         log.info("[RAG] BM25={}, Dense={}", bm25Hits.size(), denseHits.size());
 
         List<RagHit> fused = rrfFusion(bm25Hits, denseHits, props.getTopK() * 3);
+        // 阈值过滤
+        fused = fused.stream().filter(h -> h.getScore() >= props.getRecallThreshold()).toList();
         log.info("[RAG] RRF 融合后={}", fused.size());
 
         if (fused.isEmpty()) {
@@ -160,6 +188,14 @@ public class RagService {
         List<RagHit> topK = ranked.subList(0, finalK);
         log.info("[RAG] Rerank → Top-{}: scores={}", props.getTopK(),
                 topK.stream().map(h -> String.format("%.3f", h.getScore())).toList());
+
+        // 返回前写缓存
+        try {
+            redis.opsForValue().set(cacheKey, objectMapper.writeValueAsString(topK),
+                    Duration.ofSeconds(props.getResultCacheTtl()));
+        } catch (Exception e) {
+            log.warn("[RAG] 写入 RAG 结果缓存失败: {}", e.getMessage());
+        }
         return topK;
     }
 
@@ -241,6 +277,20 @@ public class RagService {
 
     @SuppressWarnings("unchecked")
     List<Float> embedQuery(String text) {
+
+        // 1. 检查 Redis 缓存
+        String cacheKey = RedisConstant.Rag_Emb_Key + DigestUtil.md5(text);
+        try {
+            String cached = redis.opsForValue().get(cacheKey);
+            if (cached != null) {
+                return objectMapper.readValue(cached,
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, Float.class));
+            }
+        } catch (Exception e) {
+            log.warn("[RAG] 读取 embedding 缓存失败: {}", e.getMessage());
+        }
+
+        // 2. 缓存未命中，请求 Ollama
         String url = props.getOllamaUrl() + "/api/embeddings";
         Map<String, String> body = Map.of("model", props.getEmbeddingModel(), "prompt", text);
 
@@ -262,6 +312,13 @@ public class RagService {
                 List<Float> floats = new ArrayList<>();
                 for (Object item : list) {
                     floats.add(((Number) item).floatValue());
+                }
+                // 3. 写入 Redis 缓存
+                try {
+                    redis.opsForValue().set(cacheKey, objectMapper.writeValueAsString(floats),
+                            Duration.ofSeconds(props.getEmbeddingCacheTtl()));
+                } catch (Exception e) {
+                    log.warn("[RAG] 写入 embedding 缓存失败: {}", e.getMessage());
                 }
                 return floats;
             }

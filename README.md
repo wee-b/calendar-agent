@@ -14,8 +14,11 @@
 | 后端 | Spring Boot 3.5 + Sa-Token + MyBatis-Plus |
 | 数据库 | MySQL 8.0 |
 | 连接池 | Druid |
-| 缓存 | Redis（Sa-Token 持久化） |
-| AI | 原生 OpenAI API + Tool Calling + 意图路由 |
+| 缓存 | Redis（Token 持久化 + RAG Embedding/结果多级缓存） |
+| AI 框架 | LangChain4j 1.3 + DeepSeek v4（OpenAI 兼容 API） |
+| AI 架构 | Supervisor 多智能体编排 + Tool Calling + 流式 SSE |
+| 向量检索 | Milvus 2.4 + BGE-M3 Embedding（Ollama 本地部署） |
+| 全文检索 | Lucene 9.11 + SmartChineseAnalyzer（BM25） |
 | 语音 | Web Speech API（浏览器 STT + TTS） |
 | 密码加密 | BCrypt |
 | 文档 | Knife4j (OpenAPI 3) |
@@ -32,6 +35,7 @@ back/src/main/java/com/qiniu/back/
 │   ├── NoNeedLogin.java     #   标记接口无需登录
 │   └── CheckPhone.java      #   手机号格式校验
 ├── config/                  # 配置
+│   ├── LangChainConfig.java    # DeepSeek ChatModel Bean（流式 + 非流式）
 │   ├── ClientTokenConfig.java  # Sa-Token 客户端 Token 配置
 │   ├── MvcConfigure.java       # 拦截器 + CORS 注册
 │   └── StartupListener.java    # 启动成功打印文档地址
@@ -84,22 +88,38 @@ back/src/main/java/com/qiniu/back/
 │   │   ├── controller/DailyNoteController.java
 │   │   ├── mapper/DailyNoteMapper.java
 │   │   └── service/...
-│   └── chat/                #   AI 对话模块
-│       ├── controller/ChatController.java
+│   └── chat/                #   AI 对话模块（Supervisor 多智能体编排）
+│       ├── controller/ChatController.java   # 对话接口（流式 SSE + 非流式）
 │       ├── mapper/AiDialogueMapper.java
+│       ├── mcp/
+│       │   ├── McpController.java          # MCP JSON-RPC 端点（tools/list + tools/call）
+│       │   ├── McpToolDefinition.java      # 工具定义（名称/描述/Schema/执行器/重试配置）
+│       │   └── McpToolRegistry.java        # 工具注册中心（10 个工具 + 自动重试）
+│       ├── rag/
+│       │   ├── RagService.java             # 混合检索引擎（BM25 + Dense + RRF + Rerank）
+│       │   ├── RagConfig.java              # Milvus/RestTemplate Bean 配置
+│       │   ├── RagProperties.java          # RAG 参数配置（TopK/阈值/缓存 TTL）
+│       │   └── RagHit.java                 # 检索结果实体
+│       ├── agent/
+│       │   ├── AgentOrchestrator.java      # Supervisor 主控（调度 + 管线验证）
+│       │   ├── SupervisorTools.java        # 子 Agent 管理 + RAG 上下文注入
+│       │   └── SubAgent.java               # 子 Agent 抽象（Builder 模式 + 自纠错）
 │       └── service/
-│           ├── ChatService.java          # 对话管理接口
-│           ├── ChatServiceImpl.java      # 对话管理实现（会话增删查 + 意图增强）
-│           ├── OpenAiService.java        # OpenAI API 客户端（Tool Calling 循环）
-│           └── ChatToolService.java      # 工具桥接层（8 个业务工具函数）
+│           ├── ChatService.java            # 对话管理接口
+│           ├── ChatServiceImpl.java        # 对话管理实现（会话 CRUD + 历史管理）
+│           └── ChatToolService.java        # 工具桥接层（10 个业务工具函数）
 ├── util/
-│   ├── SaTokenUtil.java       # Token 工具（生成/校验/解析/注销）
-│   ├── LoginUserContext.java  # 当前用户上下文（ThreadLocal）
-│   ├── ResponseUtil.java      # HttpServletResponse 写 JSON
-│   └── PromptLoader.java      # 提示词文件加载器
+│   ├── DigestUtil.java         # MD5 哈希工具（缓存 Key 生成）
+│   ├── SaTokenUtil.java        # Token 工具（生成/校验/解析/注销）
+│   ├── LoginUserContext.java   # 当前用户上下文（ThreadLocal）
+│   ├── ResponseUtil.java       # HttpServletResponse 写 JSON
+│   └── PromptLoader.java       # 提示词文件加载器
 └── resources/
     └── prompt/
-        └── chat-system.txt    # AI 系统提示词（意图路由 + 确认流程）
+        ├── supervisor-system.txt   # Supervisor 系统提示词（路由规则）
+        ├── planner-system.txt      # 规划师 Agent 提示词（JSON 计划输出）
+        ├── query-system.txt        # 查询 Agent 提示词（只读约束）
+        └── executor-system.txt     # 执行者 Agent 提示词（写入 + 自检）
 ```
 
 ### 数据库表
@@ -154,6 +174,12 @@ back/src/main/java/com/qiniu/back/
 | GET | `/chat/sessions` | 获取用户所有历史会话列表 | 是 |
 | GET | `/chat/latest` | 获取用户最新对话历史记录 | 是 |
 
+#### MCP 协议 `/mcp`
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/mcp` | JSON-RPC 端点（method: tools/list / tools/call） | 是 |
+
 #### 测试模块 `/test`
 
 | 方法 | 路径 | 说明 | 认证 |
@@ -181,37 +207,69 @@ back/src/main/java/com/qiniu/back/
 点击每日任务 → PUT /todo/toggle-date → 完成/取消完成（乐观更新）
 ```
 
-#### AI 语音助手
+#### AI 语音助手（Supervisor 多智能体编排）
+
 ```
 用户语音/文字输入 → POST /chat { sessionId, message }
-→ ChatServiceImpl 构建系统提示词（注入日期上下文 + 意图关键词增强）
-→ OpenAiService 调用 OpenAI API（携带 8 个 Tool Definitions）
-→ LLM 返回 tool_call → executeToolCalls() 执行对应业务函数
-→ 工具结果回传 LLM → LLM 生成自然语言总结
-→ 保存对话记录（user + assistant） → 返回 ChatResponseVO
+→ ChatServiceImpl 加载历史消息（最近 20 对）
+→ AgentOrchestrator 构建 Supervisor 提示词（注入日期上下文）
+→ Supervisor(DeepSeek, t=0.3) 决策路由：
+    ├── plan_task → RagService.search() 检索 RAG 语料
+    │              → Planner Agent(t=0.1) 输出 JSON 计划
+    ├── query_calendar → Query Agent(t=0.3) 执行只读查询
+    └── execute_task → Executor Agent(t=0.3) 执行写入操作
+                         └── 管线验证：plan→execute 后自动查重确认
+→ 工具调用层自动重试（瞬态异常 500ms 后重试 1 次）
+→ Agent 输出自纠错（无效 JSON / 错误结果自动纠正 1 次）
+→ 保存对话记录（user + assistant）→ SSE 流式输出 / 返回完整响应
 ```
 
-### AI 意图路由
+#### RAG 混合检索流程
 
-系统提示词 `prompt/chat-system.txt` 实现了 6 种意图的标准化处理流程：
+```
+RagService.search(query)
+  ├─ [L2 缓存检查] rag:result:{md5} → 命中直接返回
+  ├─ searchBm25(query) → Lucene BM25 → Top-10
+  ├─ searchDense(query)
+  │    ├─ [L1 缓存检查] rag:emb:{md5} → 命中跳过 Ollama
+  │    ├─ Ollama /api/embeddings → BGE-M3 1024d
+  │    └─ Milvus COSINE 检索 → Top-10
+  ├─ rrfFusion(bm25, dense, topK*3) → RRF(K=60) → 阈值过滤(≥0.01) → Top-9
+  ├─ LLM Rerank(t=0.0) → DeepSeek 重排 → Top-3
+  └─ [写 L2 缓存] rag:result:{md5} → TTL 30min
+```
 
-| 意图 | 触发关键词 | 流程 |
-|------|-----------|------|
-| 规划 | 规划/计划/备考/复习计划 | 理解目标→设计分阶段方案→询问拆成多个还是合并→批量 createTodo |
-| 创建 | 创建/添加/新增/安排/加一个 | 追问缺失信息→展示方案→确认→createTodo（急切语气跳过确认） |
-| 删除 | 删除/去掉/移除/取消/删了 | queryTodoList→匹配→确认→deleteTodo→再查列表验证 |
-| 查询 | 查看/有哪些/今天/明天/几号 | 直接调用对应查询工具 |
-| 标记完成 | 完成/搞定/做完了/打卡 | 调用 toggleTodoDate |
-| 修改 | 修改/改成/改一下/调整 | 跨天（改日期）直接 updateTodo，同日（改时分）更新 dayContent |
+### Supervisor 多智能体编排
 
-8 个 AI 可调用工具：`createTodo` / `queryTodoList` / `queryMonthCount` / `queryDayDetail` / `deleteTodo` / `updateTodo` / `toggleTodoDate` / `saveDailyNote`
+系统采用 **Supervisor + 3 个子 Agent** 的协作架构，替代旧版单 Agent + 意图路由模式：
 
-核心机制：
-- **多轮 Tool Calling 循环**：支持最多 5 轮工具调用，模型可连续调用 queryTodoList→deleteTodo→queryTodoList（验证）再返回文本
-- **删除验证**：删除后必须重新查询列表确认，失败时如实告知而非伪造成功
-- **批量创建**：规划类请求在同一轮 tool_calls 中并行调用多个 createTodo
-- **操作即查询**：始终以查询工具返回的实际数据为准，禁止根据对话历史推断状态
-- 回复限制 150 字以内纯文本，禁止 XML 标签格式
+| 角色 | Agent | 温度 | 工具 | 职责 |
+|------|-------|------|------|------|
+| 调度者 | Supervisor | 0.3 | plan_task / query_calendar / execute_task | 分析需求，路由到正确的子 Agent |
+| 规划师 | Planner | 0.1 | 无（纯推理） | 将复杂需求拆解为结构化 JSON 计划 |
+| 检测员 | Query | 0.3 | queryTodoList / queryMonthCount / queryDayDetail | 只读查询，查重验证 |
+| 执行者 | Executor | 0.3 | 全部 10 个工具 | 创建/修改/删除 + 操作后自查 |
+
+**路由规则**：
+- 简单操作（删除/修改/toggle/≤2 个待办创建）→ 直接 `execute_task`
+- 查询询问 → 直接 `query_calendar`
+- 复杂规划（模糊需求/批量创建）→ `plan_task` → `query_calendar`（查重）→ `execute_task`（分批执行）
+
+**10 个 AI 可调用工具**：`createTodo` / `deleteTodo` / `updateTodo` / `toggleTodoDate` / `saveDailyNote` / `removeTodoDay` / `addTodoDay` / `queryTodoList` / `queryMonthCount` / `queryDayDetail`
+
+### AI 容错与性能优化
+
+| 机制 | 层级 | 说明 |
+|------|------|------|
+| 工具级重试 | McpToolRegistry | 瞬态异常（DB 超时/连接断开/网络抖动）自动重试 1 次，间隔 500ms |
+| Agent 自纠错 | SubAgent | Planner 输出非 JSON / 工具返回 error 时，追加纠正提示重新执行 1 次 |
+| 管线验证 | AgentOrchestrator | plan_task → execute_task 链路走完后自动注入 query_calendar 验证操作落地 |
+| Embedding 缓存 | RagService L1 | `rag:emb:{md5(query)}` TTL 1h，命中免 Ollama 调用 |
+| RAG 结果缓存 | RagService L2 | `rag:result:{md5(query)}` TTL 30min，命中跳过全链路 |
+| 上下文截断 | SubAgent / Orchestrator | 工具结果 800 字符 / 子 Agent 结果 1500 字符截断，控制 prompt token |
+| 温度分离 | 各 Agent | Planner 0.1（确定性 JSON）→ Supervisor/Query/Executor 0.3（低幻觉）→ Rerank 0.0 |
+| 召回阈值 | RagService | RRF 融合后过滤 score < 0.01 的低质语料，减少 Rerank 噪声 |
+| Prompt 精简 | prompt/*.txt | 去表格/去冗余否定/合并重复，每条消息减少 ~33% token |
 
 ### 快速启动
 
@@ -259,11 +317,20 @@ npm install && npm run dev
 - [x] 每日任务完成/取消完成（含自动联动待办整体状态）
 - [x] 日历模块（当月每日待办数量 / 某天详情）
 - [x] 日记模块（保存/修改某天日记）
-- [x] AI 对话模块（7 个接口 / 8 个 Tool Definitions / 多轮 Tool Calling 循环 / 6 意图路由）
-- [x] 多轮 Tool Calling 循环（最多 5 轮，删除后可验证）
-- [x] 删除验证流程（删后重查列表，失败如实告知）
-- [x] 规划意图（备考/复习计划，批量创建 vs 合并创建）
-- [x] 修改意图（跨天改日期 vs 同日改时分）
+- [x] AI 对话模块（7 个接口 / SSE 流式输出 / 会话管理 / 历史撤回）
+- [x] Supervisor 多智能体编排（AgentOrchestrator + 3 子 Agent 分治协作）
+- [x] MCP 协议支持（tools/list + tools/call JSON-RPC 端点）
+- [x] RAG 混合检索（BM25 + BGE-M3 Milvus + RRF 融合 + LLM Rerank）
+- [x] 日程规划领域 RAG 知识库（备考/课业/考试 8 大场景语料）
+- [x] 10 个工具完整覆盖（含 removeTodoDay / addTodoDay 按日精细化管控）
+- [x] Redis 多级缓存（Embedding L1 + RAG 结果 L2）
+- [x] 温度分离（Planner 0.1 / Supervisor 0.3 / Query 0.3 / Executor 0.3 / Rerank 0.0）
+- [x] 工具级重试（瞬态异常自动重试，可重试/不可重试分类判断）
+- [x] Agent 输出自纠错（非 JSON 自动纠正，错误结果启发式重试）
+- [x] 管线验证（plan→execute 后自动查重确认操作落地）
+- [x] 上下文截断（工具结果 800 字符 / 子 Agent 结果 1500 字符）
+- [x] Prompt 精简 + TopK 参数调优 + 召回阈值过滤
+- [x] 工具结果结构化错误响应（`{"error":"...","retried":N}`）
 - [x] N+1 查询优化（listByUser 批量 IN 查询 / batchInsert 一条 SQL）
 - [x] 历史消息加载修复（ASC→DESC+reverse，始终取最新 N 条）
 - [x] TTS 语音合成朗读（SpeechSynthesisUtterance + 暂停/继续/重播）
