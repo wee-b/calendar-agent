@@ -1,29 +1,44 @@
 // src/router/index.ts
 import { createRouter, createWebHistory } from 'vue-router'
-import HomeView from '../views/HomeView/HomeView.vue'
+import LayoutView from '../views/LayoutView/LayoutView.vue'
 
 const router = createRouter({
     history: createWebHistory(),
     routes: [
-        // {
-        //     path: '/login',
-        //     name: 'Login',
-        //     component: LoginView
-        // },
         {
             path: '/',
-            name: 'Home',
-            component: HomeView
+            component: LayoutView,
+            children: [
+                {
+                    path: '',
+                    redirect: '/conversation'
+                },
+                {
+                    path: 'calendar-view',
+                    name: 'Calendar',
+                    component: () => import('../views/HomeView/HomeView.vue')
+                },
+                {
+                    path: 'today',
+                    name: 'Today',
+                    component: () => import('../views/TodayView/TodayView.vue')
+                },
+                {
+                    path: 'conversation',
+                    name: 'Chat',
+                    component: () => import('../views/ChatView/ChatView.vue')
+                }
+            ]
         }
     ]
 })
 
-// 简单的路由守卫拦截 (如果没匹配到路由，默认去首页)
-router.beforeEach((to, from, next) => {
-    if (to.path === '/login' || to.path === '/') {
-        next()
-    } else {
+// 路由守卫：未匹配的路径重定向到首页
+router.beforeEach((to, _from, next) => {
+    if (to.matched.length === 0) {
         next('/')
+    } else {
+        next()
     }
 })
 

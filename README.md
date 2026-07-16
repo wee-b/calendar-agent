@@ -2,8 +2,6 @@
 
 基于语音交互的智能日历管理工具，支持通过语音添加/删除/查看待办事件。
 
-项目展示视频链接：https://www.bilibili.com/video/BV1H8VQ6DEnG/?share_source=copy_web&vd_source=8d30cab6f7cb97e4e6ee0405425e18f5
-
 ---
 
 ## 技术栈

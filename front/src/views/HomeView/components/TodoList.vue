@@ -638,4 +638,210 @@ onUnmounted(() => {
 .cancel-btn:hover {
   background: #eaddc4;
 }
+
+/* Modern agent sidebar refresh */
+.sidebar {
+  width: 300px;
+  min-width: 300px;
+  max-width: 340px;
+  background: #ffffff;
+}
+
+.left-sidebar {
+  border-right: 1px solid #e4e7ec;
+}
+
+.sidebar-content {
+  padding: 22px 18px;
+}
+
+.todo-header {
+  border-bottom: 1px solid #e4e7ec;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+}
+
+.todo-header h2 {
+  color: #101828;
+  font-size: 16px;
+  font-weight: 780;
+}
+
+.create-btn {
+  padding: 7px 12px;
+  background: linear-gradient(135deg, #2563eb, #0891b2);
+  color: #ffffff;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 750;
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18);
+}
+
+.create-btn:hover {
+  background: linear-gradient(135deg, #1d4ed8, #0e7490);
+}
+
+.todo-row {
+  margin-bottom: 8px;
+  padding: 10px 8px;
+  border: 1px solid transparent;
+  border-bottom-color: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.2s;
+}
+
+.todo-row:hover {
+  background: #f8fafc;
+  border-color: #e4e7ec;
+}
+
+.todo-row.is-selected {
+  border-color: rgba(37, 99, 235, 0.18);
+}
+
+.todo-title {
+  color: #344054;
+  font-weight: 650;
+}
+
+.todo-count {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.todo-count-done {
+  background: #ecfdf3;
+  color: #039855;
+}
+
+.more-btn {
+  color: #98a2b3;
+}
+
+.more-btn:hover {
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.action-menu,
+.modal-card {
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.14);
+}
+
+.menu-item {
+  color: #344054;
+}
+
+.menu-item:hover {
+  background: #f1f5f9;
+}
+
+.modal-overlay {
+  background-color: rgba(15, 23, 42, 0.46);
+}
+
+.modal-card {
+  border-radius: 12px;
+}
+
+.modal-card h3,
+.form-group label {
+  color: #101828;
+}
+
+.form-group input[type="text"],
+.form-group input[type="date"] {
+  background: #ffffff;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  color: #101828;
+}
+
+.form-group input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.weekday-chip {
+  border-color: #d0d5dd;
+  border-radius: 8px;
+  color: #344054;
+}
+
+.weekday-chip.active,
+.save-btn {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+
+.save-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.cancel-btn {
+  border-color: #d0d5dd;
+  color: #344054;
+  border-radius: 8px;
+}
+
+.cancel-btn:hover {
+  background: #f8fafc;
+}
+
+/* Calendar compact todo rail: keep dots clickable while saving space. */
+.sidebar.is-collapsed {
+  width: 64px !important;
+  min-width: 64px !important;
+  max-width: 64px !important;
+  border-right: 1px solid #e4e7ec;
+}
+
+.sidebar.is-collapsed .sidebar-content {
+  min-width: 0;
+  padding: 18px 10px;
+  overflow: hidden;
+}
+
+.sidebar.is-collapsed .todo-header {
+  display: none;
+}
+
+.sidebar.is-collapsed .todo-items {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.sidebar.is-collapsed .todo-row {
+  width: 36px;
+  height: 36px;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  border-radius: 999px;
+}
+
+.sidebar.is-collapsed .todo-row:hover,
+.sidebar.is-collapsed .todo-row.is-selected {
+  background: #eff6ff !important;
+  border-color: rgba(37, 99, 235, 0.2);
+}
+
+.sidebar.is-collapsed .color-dot {
+  width: 14px;
+  height: 14px;
+  margin-left: 0;
+}
+
+.sidebar.is-collapsed .todo-title,
+.sidebar.is-collapsed .todo-count,
+.sidebar.is-collapsed .actions-wrapper,
+.sidebar.is-collapsed .empty-tip {
+  display: none;
+}
 </style>

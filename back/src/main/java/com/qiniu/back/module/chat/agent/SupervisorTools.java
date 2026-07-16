@@ -11,6 +11,7 @@ import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -28,6 +29,10 @@ public class SupervisorTools {
 
     @Autowired
     private ChatModel chatModel;
+
+    @Autowired
+    @Qualifier("plannerChatModel")
+    private ChatModel plannerChatModel;
 
     @Autowired
     private McpToolRegistry toolRegistry;
@@ -67,7 +72,7 @@ public class SupervisorTools {
 
         this.plannerAgent = SubAgent.builder()
                 .name("Planner")
-                .chatModel(chatModel)
+                .chatModel(plannerChatModel)
                 .systemPrompt(PromptLoader.load("planner-system.txt"))
                 .toolExecutor((name, args) -> "[Planner] 不应该被调用工具: " + name)
                 .temperature(Planner_Tem)

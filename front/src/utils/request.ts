@@ -9,6 +9,7 @@ import { ElMessage } from 'element-plus';
 const whiteList = [
     '/user/login',
     '/user/register',
+    '/almanac/day',
     '/test/testConnection',
     '/test/getToken'
 ];

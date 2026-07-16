@@ -1,12 +1,12 @@
-<template>
-  <aside class="sidebar right-sidebar" :class="{ 'is-collapsed': !isOpen }">
-    <div class="sidebar-content" ref="sidebarContentRef">
+﻿<template>
+  <div class="chat-page">
+    <div class="chat-content" ref="sidebarContentRef">
 
       <div class="chat-header">
         <div class="session-selector" @click="toggleDropdown">
           <h2>
             {{ isUserLoggedIn ? (currentSessionTitle || '新对话') : '语音助手' }}
-            <span v-if="isUserLoggedIn" class="arrow" :class="{ open: isDropdownOpen }">▼</span>
+            <span v-if="isUserLoggedIn" class="arrow" :class="{ open: isDropdownOpen }">⌄</span>
           </h2>
         </div>
 
@@ -25,16 +25,23 @@
             @click="selectSession(s)"
         >
           <span class="session-name" :title="s.title">{{ s.title || '新对话' }}</span>
-          <button class="delete-btn" @click.stop="promptDelete(s.sessionId)" title="删除对话">✕</button>
+          <button class="delete-btn" @click.stop="promptDelete(s.sessionId)" title="删除对话">×</button>
         </div>
         <div v-if="sessions.length === 0" class="empty-sessions">暂无历史对话</div>
       </div>
 
-      <div class="chat-history" ref="chatHistoryRef">
+      <div class="chat-history" :class="{ 'has-messages': messages.length > 0 }" ref="chatHistoryRef">
 
         <div v-if="messages.length === 0" class="empty-chat">
-          <div class="empty-avatar">AI</div>
-          <p>你好！我是你的智能日程助手。<br>你可以让我“帮我安排明天的会议”，或者“取消后天的日程”。</p>
+          <h2>有什么我能帮你的吗？</h2>
+          <div class="prompt-grid">
+            <button>帮我规划明天的日程</button>
+            <button>本周有哪些待办需要优先处理？</button>
+            <button>安排一个复习计划</button>
+            <button>帮我创建一个会议提醒</button>
+            <button>总结今天的日程完成情况</button>
+            <button>取消后天的日程</button>
+          </div>
         </div>
 
         <div
@@ -69,7 +76,7 @@
           <textarea
               v-model="inputText"
               class="chat-input"
-              :placeholder="inputMudle === 2 ? (isRecording ? '正在聆听...' : '正在聆听，说完后说【发送】提交...') : '输入指令或点击🎤开启语音'"
+              :placeholder="inputMudle === 2 ? (isRecording ? '正在聆听...' : '正在聆听，说完后说发送提交') : '发消息...'"
               @keydown.enter.exact.prevent="handleSend"
               :disabled="isSending || !isUserLoggedIn"
               :rows="isExpanded ? 10 : 3"
@@ -82,7 +89,7 @@
                   @click="toggleVoice"
                   :disabled="isSending || !isUserLoggedIn"
               >
-                {{ inputMudle === 2 ? '🎤' : '🔇' }}
+                {{ inputMudle === 2 ? '听' : '语' }}
               </button>
               <div class="decibel-meter">
                 <div
@@ -102,7 +109,7 @@
             </button>
           </div>
           <span class="expand-icon" @click="isExpanded = !isExpanded" :title="isExpanded ? '收起' : '展开'">
-            {{ isExpanded ? '↕' : '↕' }}
+            {{ isExpanded ? '收起' : '展开' }}
           </span>
         </div>
       </div>
@@ -115,7 +122,7 @@
             <button class="confirm-btn danger" @click="cleanupConfirmRecognition(); confirmSendVisible = false; sendGuard = false; handleSend()">确认发送</button>
             <button class="confirm-btn cancel" @click="cleanupConfirmRecognition(); confirmSendVisible = false; sendGuard = false">取消</button>
           </div>
-          <p class="confirm-hint">也可以说"确认"或"取消"来控制</p>
+          <p class="confirm-hint">也可以说“确认”或“取消”来控制</p>
         </div>
       </div>
 
@@ -130,19 +137,21 @@
       </div>
 
     </div>
-  </aside>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
   newSessionAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
 } from '../../../api/chat';
 import { tokenRef } from '../../../utils/auth';
 
-const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'refresh'): void }>();
+const route = useRoute();
+const router = useRouter();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
 
 interface ChatMessage { role: string; content: string; loading?: boolean; }
@@ -161,12 +170,12 @@ const chatHistoryRef = ref<HTMLElement | null>(null);
 const isRecording = ref(false);
 const isExpanded = ref(false);
 const confirmSendVisible = ref(false);
-const inputMudle = ref(1); // 1-手动，2-语音
+const inputMudle = ref(1); // 1-鎵嬪姩锛?-璇煶
 let recognition: any = null;
 let confirmRecognition: any = null;
 let sendGuard = false;
 let voiceTimer: any = null;
-const VOICE_TIMEOUT = 10 * 60 * 1000; // 10分钟
+const VOICE_TIMEOUT = 10 * 60 * 1000; // 10鍒嗛挓
 const dbBars = ref([4, 4, 4, 4, 4, 4, 4, 4, 4, 4]);
 let audioContext: AudioContext | null = null;
 let analyser: AnalyserNode | null = null;
@@ -189,7 +198,7 @@ const scrollToBottom = async () => {
 
 const toggleDropdown = () => { if (isUserLoggedIn.value) isDropdownOpen.value = !isDropdownOpen.value; };
 
-// ================= 会话管理 =================
+// ================= 浼氳瘽绠＄悊 =================
 const fetchSessions = async () => {
   if (!isUserLoggedIn.value) return;
   try {
@@ -198,10 +207,26 @@ const fetchSessions = async () => {
   } catch (error) {}
 };
 
+const getRouteSessionId = () => {
+  const id = route.query.sessionId;
+  return Array.isArray(id) ? id[0] || null : id || null;
+};
+
+const loadSessionById = async (sessionId: string) => {
+  currentSessionId.value = sessionId;
+  messages.value = [];
+  try {
+    const history = await getHistoryAPI(sessionId);
+    messages.value = history.map(h => ({ role: h.role, content: h.content }));
+    scrollToBottom();
+  } catch (error) {}
+};
+
 const selectSession = async (session: ChatSessionVO) => {
   currentSessionId.value = session.sessionId;
   isDropdownOpen.value = false;
   messages.value = [];
+  router.replace({ path: '/conversation', query: { sessionId: session.sessionId } });
   try {
     const history = await getHistoryAPI(session.sessionId);
     messages.value = history.map(h => ({ role: h.role, content: h.content }));
@@ -213,14 +238,16 @@ const createNewSession = async () => {
   if (!isUserLoggedIn.value) { ElMessage.warning('请先登录'); return; }
   isDropdownOpen.value = false;
   messages.value = [];
+  await router.replace({ path: '/conversation' });
   try {
     const res = await newSessionAPI();
     currentSessionId.value = res.sessionId || Object.values(res)[0];
+    await router.replace({ path: '/conversation', query: { sessionId: currentSessionId.value } });
     await fetchSessions();
   } catch (error) {}
 };
 
-// ================= 删除操作 =================
+// ================= 鍒犻櫎鎿嶄綔 =================
 const promptDelete = (sessionId: string) => {
   isDropdownOpen.value = false;
   pendingDeleteId.value = sessionId;
@@ -246,7 +273,7 @@ const executeDelete = async () => {
   }
 };
 
-// ================= 消息交互：复制 / 朗读 / 撤回 =================
+// ================= 娑堟伅浜や簰锛氬鍒?/ 鏈楄 / 鎾ゅ洖 =================
 const handleCopy = async (text: string) => {
   try {
     await navigator.clipboard.writeText(text);
@@ -262,7 +289,6 @@ const readingMsgIndex = ref<number | null>(null);
 
 const handleRead = (text: string, msgIndex?: number) => {
   if ('speechSynthesis' in window) {
-    // 点击同一条消息 → 暂停/恢复
     if (msgIndex !== undefined && readingMsgIndex.value === msgIndex && isReading.value) {
       if (isPaused.value) {
         window.speechSynthesis.resume();
@@ -298,7 +324,7 @@ const handleDeleteLastRound = async () => {
   } catch (error) {}
 };
 
-// ================= 语音识别录入 =================
+// ================= 璇煶璇嗗埆褰曞叆 =================
 const clearVoiceTimer = () => {
   if (voiceTimer) { clearTimeout(voiceTimer); voiceTimer = null; }
 };
@@ -344,7 +370,6 @@ const startDbMeter = async () => {
     const tick = () => {
       if (!analyser) return;
       analyser.getByteFrequencyData(dataArray);
-      // 分10个频段取平均值，映射到 4~20px
       const bands = [0, 3, 7, 12, 18, 26, 36, 48, 63, 82, bufferLength];
       dbBars.value = Array.from({ length: 10 }, (_, i) => {
         let sum = 0;
@@ -357,7 +382,6 @@ const startDbMeter = async () => {
     };
     animFrameId = requestAnimationFrame(tick);
   } catch (e) {
-    // 无法获取麦克风时降级为随机动画
     audioContext = null;
     analyser = null;
     mediaStream = null;
@@ -382,7 +406,7 @@ const startVoice = () => {
 
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    ElMessage.warning('您的浏览器不支持语音识别功能');
+    ElMessage.warning('当前浏览器不支持语音识别');
     inputMudle.value = 1;
     return;
   }
@@ -403,7 +427,7 @@ const startVoice = () => {
     for (let i = 0; i < event.results.length; i++) {
       currentText += event.results[i][0].transcript;
     }
-    inputText.value = currentText.replace(/[。！？，、；：]\)\}»』】〉》]+$/g, '').trim();
+    inputText.value = currentText.replace(/[。！？，“”、；：\)\}】』」）]+$/g, '').trim();
   };
 
   recognition.onerror = () => {
@@ -412,7 +436,6 @@ const startVoice = () => {
 
   recognition.onend = () => {
     isRecording.value = false;
-    // 非主动停止时自动重启
     if (inputMudle.value === 2 && recognition !== null) {
       setTimeout(() => startVoice(), 300);
     }
@@ -430,7 +453,7 @@ const stopVoice = () => {
   stopDbMeter();
 };
 
-// ================= 语音发送确认 =================
+// ================= 璇煶鍙戦€佺‘璁?=================
 const cleanupConfirmRecognition = () => {
   if (confirmRecognition) {
     try { confirmRecognition.stop(); } catch {}
@@ -494,12 +517,12 @@ watch(inputText, (newVal) => {
   startConfirmRecognition();
 });
 
-// ================= 发送消息 =================
+// ================= 鍙戦€佹秷鎭?=================
 const CHAT_TIMEOUT = 30000;
 
 const handleSend = async () => {
   let text = inputText.value.trim();
-  text = text.replace(/发送[。！？，、；：]*$/g, '').trim();
+  text = text.replace(/发送[。！？，“”、；：\s]*$/g, '').trim();
   if (!text || isSending.value || !isUserLoggedIn.value) return;
 
   if (!currentSessionId.value) {
@@ -558,7 +581,6 @@ const handleSend = async () => {
       resetVoiceTimer();
       setTimeout(() => startVoice(), 400);
     }
-    // 手动模式下自动聚焦输入框
     if (inputMudle.value === 1) {
       nextTick(() => {
         const ta = document.querySelector('.chat-input') as HTMLTextAreaElement;
@@ -568,21 +590,30 @@ const handleSend = async () => {
   }
 };
 
-// ================= 生命周期 =================
+// ================= 鐢熷懡鍛ㄦ湡 =================
 onMounted(async () => {
   if (isUserLoggedIn.value) {
     await fetchSessions();
-    if (sessions.value.length > 0) selectSession(sessions.value[0]);
-    else createNewSession();
-    // 默认手动模式，不自动开启语音
+    const routeSessionId = getRouteSessionId();
+    if (routeSessionId) {
+      await loadSessionById(routeSessionId);
+    } else {
+      currentSessionId.value = null;
+      messages.value = [];
+    }
   }
 });
 
 watch(isUserLoggedIn, async (newVal) => {
   if (newVal) {
     await fetchSessions();
-    if (sessions.value.length > 0) selectSession(sessions.value[0]);
-    else createNewSession();
+    const routeSessionId = getRouteSessionId();
+    if (routeSessionId) {
+      await loadSessionById(routeSessionId);
+    } else {
+      currentSessionId.value = null;
+      messages.value = [];
+    }
     inputMudle.value = 1;
   } else {
     clearVoiceTimer();
@@ -592,17 +623,45 @@ watch(isUserLoggedIn, async (newVal) => {
     currentSessionId.value = null;
   }
 });
+
+watch(
+  () => route.query.sessionId,
+  async () => {
+    if (!isUserLoggedIn.value) return;
+    const routeSessionId = getRouteSessionId();
+    if (routeSessionId) {
+      await loadSessionById(routeSessionId);
+    } else {
+      currentSessionId.value = null;
+      messages.value = [];
+    }
+  }
+);
 </script>
 
 <style scoped>
-/* 侧边栏基础结构 */
-.sidebar { width: 20%; min-width: 280px; max-width: 400px; background-color: #fdfae9; transition: all 0.3s; display: flex; flex-direction: column; z-index: 5; overflow: hidden; }
-.right-sidebar { border-left: 2px solid #d3c4a1; }
-.sidebar-content { position: relative; width: 100%; padding: 20px 20px 0 20px; min-width: 280px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; }
-.sidebar.is-collapsed { width: 0 !important; min-width: 0 !important; border: none; }
-.sidebar.is-collapsed .sidebar-content { min-width: 0; padding: 0; overflow: hidden; }
+/* 鍏ㄩ〉鑱婂ぉ鍖哄煙 */
+.chat-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: #fdfae9;
+}
 
-/* 头部 */
+.chat-content {
+  position: relative;
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px 24px 0;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 澶撮儴 */
 .chat-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 2px dashed #d3c4a1; padding-bottom: 12px; }
 .session-selector { flex: 1; cursor: pointer; overflow: hidden; user-select: none; }
 .session-selector h2 { color: #5c4b37; font-size: 1.1rem; margin: 0; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -611,9 +670,9 @@ watch(isUserLoggedIn, async (newVal) => {
 .new-chat-btn { background: none; border: 1px solid #d3c4a1; color: #5c4b37; font-size: 13px; font-weight: bold; padding: 4px 10px; border-radius: 4px; cursor: pointer; transition: all 0.2s; white-space: nowrap; margin-left: 10px; }
 .new-chat-btn:hover { background: #eaddc4; }
 
-/* 下拉菜单 */
+/* 涓嬫媺鑿滃崟 */
 .dropdown-overlay { position: absolute; top: 56px; left: 0; right: 0; bottom: 0; z-index: 10; }
-.session-dropdown { position: absolute; top: 56px; left: 20px; right: 20px; background: #fdfae9; border: 2px solid #d3c4a1; border-radius: 8px; box-shadow: 0 8px 24px rgba(92, 75, 55, 0.15); max-height: 250px; overflow-y: auto; z-index: 11; }
+.session-dropdown { position: absolute; top: 56px; left: 24px; right: 24px; max-width: 752px; margin: 0 auto; background: #fdfae9; border: 2px solid #d3c4a1; border-radius: 8px; box-shadow: 0 8px 24px rgba(92, 75, 55, 0.15); max-height: 250px; overflow-y: auto; z-index: 11; }
 .session-dropdown::-webkit-scrollbar { width: 4px; }
 .session-dropdown::-webkit-scrollbar-thumb { background: #d3c4a1; border-radius: 2px; }
 .session-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid #f2ecd9; cursor: pointer; transition: background 0.2s; }
@@ -625,7 +684,7 @@ watch(isUserLoggedIn, async (newVal) => {
 .delete-btn:hover { color: #bc423f; background: #fdfae9; }
 .empty-sessions { padding: 20px; text-align: center; color: #b5a992; font-size: 13px; }
 
-/* 聊天历史区 */
+/* 鑱婂ぉ鍘嗗彶鍖?*/
 .chat-history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding-right: 5px; padding-bottom: 20px; }
 .chat-history::-webkit-scrollbar { width: 4px; }
 .chat-history::-webkit-scrollbar-thumb { background: #d3c4a1; border-radius: 2px; }
@@ -633,7 +692,7 @@ watch(isUserLoggedIn, async (newVal) => {
 .empty-avatar { width: 48px; height: 48px; background: #eaddc4; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #5c4b37; font-size: 18px; margin-bottom: 16px; }
 .empty-chat p { margin: 0; font-size: 13px; line-height: 1.6; }
 
-/* 对话气泡通用样式 */
+/* 瀵硅瘽姘旀场 */
 .msg-bubble { display: flex; flex-direction: column; gap: 4px; max-width: 90%; }
 .avatar { font-size: 12px; color: #b5a992; font-weight: bold; }
 .bubble-content { border-radius: 12px; padding: 10px 14px; box-shadow: 0 2px 6px rgba(92, 75, 55, 0.05); }
@@ -644,35 +703,28 @@ watch(isUserLoggedIn, async (newVal) => {
 .ai-msg { align-self: flex-start; align-items: flex-start; }
 .ai-msg .bubble-content { background-color: #fcf9ee; border: 1px solid #d3c4a1; border-bottom-left-radius: 2px; }
 
-/* 气泡下方工具栏样式 (纯文本) */
+/* 姘旀场宸ュ叿鏍?*/
 .msg-actions { display: flex; gap: 16px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed #eaddc4; }
 .action-icon { font-size: 12px; font-weight: bold; color: #b5a992; cursor: pointer; transition: color 0.2s; }
 .action-icon:hover { color: #5c4b37; text-decoration: underline; }
 .action-icon.danger:hover { color: #bc423f; }
 
-/* 加载动画 */
+/* 鍔犺浇鍔ㄧ敾 */
 .typing-indicator { display: flex; gap: 4px; align-items: center; height: 20px; }
 .typing-indicator span { width: 6px; height: 6px; background-color: #b5a992; border-radius: 50%; animation: typing 1.4s infinite ease-in-out both; }
 .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
 .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
 @keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); background-color: #5c4b37; } }
 
-/* 输入区域布局 */
+/* 杈撳叆鍖哄煙 */
 .chat-input-area { padding: 10px 0; border-top: 1px solid #eaddc4; background-color: #fdfae9; z-index: 2; flex-shrink: 0; }
-
 .textarea-wrapper { position: relative; }
-
-/* 修改点1：增加 padding-bottom 到 42px，为底部的动作按钮留出安全的文字防踩踏空间 */
 .chat-input { width: 100%; padding: 8px 32px 42px 12px; background-color: #fcf9ee; border: 1px solid #d3c4a1; border-radius: 6px; font-size: 13px; color: #5c4b37; outline: none; transition: border-color 0.2s; line-height: 1.5; resize: none; box-sizing: border-box; font-family: inherit; }
 .chat-input:focus { border-color: #5c4b37; }
 .chat-input:disabled { background-color: #f2ecd9; cursor: not-allowed; }
-
 .expand-icon { position: absolute; top: 8px; right: 8px; font-size: 13px; color: #b5a992; cursor: pointer; padding: 2px 6px; border-radius: 3px; transition: all 0.2s; user-select: none; z-index: 1; }
 .expand-icon:hover { color: #5c4b37; background: #eaddc4; }
-
-/* 修改点2：将 bottom 距离调整至 8px，并且微调左右间距（left/right），使按钮距离输入框最底部边缘有呼吸感 */
 .input-actions { position: absolute; bottom: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between; align-items: center; }
-
 .send-btn { padding: 4px 12px; background-color: #5c4b37; color: #fdfae9; border: none; border-radius: 4px; font-size: 12px; font-weight: bold; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
 .send-btn:hover:not(:disabled) { background-color: #4a3c2c; }
 .send-btn:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -681,21 +733,19 @@ watch(isUserLoggedIn, async (newVal) => {
 .voice-record-btn { padding: 2px 6px; background: none; border: none; font-size: 16px; cursor: pointer; transition: all 0.2s; user-select: none; border-radius: 4px; flex-shrink: 0; }
 .voice-record-btn:hover:not(:disabled) { background-color: #eaddc4; }
 .voice-record-btn.recording { background-color: #bc423f; color: white; animation: pulse 1.5s infinite; }
-
 .read-toggle-btn { padding: 2px 5px; background: none; border: none; font-size: 13px; cursor: pointer; transition: all 0.2s; user-select: none; border-radius: 4px; flex-shrink: 0; color: #b5a992; }
 .read-toggle-btn:hover { background-color: #eaddc4; color: #5c4b37; }
 .read-toggle-btn.active { color: #5c4b37; }
 .read-toggle-btn.paused { color: #bc423f; animation: pulse 2s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(188, 66, 63, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(188, 66, 63, 0); } 100% { box-shadow: 0 0 0 0 rgba(188, 66, 63, 0); } }
-
 .decibel-meter { display: flex; align-items: flex-end; gap: 3px; height: 22px; max-width: 0; overflow: hidden; transition: max-width 0.35s cubic-bezier(0.4, 0, 0.2, 1); background: rgba(92, 75, 55, 0.06); border-radius: 4px; padding: 0; }
 .is-voice-mode .decibel-meter { max-width: 90px; padding: 3px 6px; }
 .db-segment { width: 3px; min-width: 3px; background: #d3c4a1; border-radius: 1.5px; transition: height 0.15s ease, background-color 0.15s ease; }
 .is-voice-mode .db-segment { background: #5c4b37; }
 
-/* 删除二次确认弹窗 */
+/* 纭寮圭獥 */
 .confirm-modal-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(92, 75, 55, 0.4); backdrop-filter: blur(2px); display: flex; justify-content: center; align-items: center; z-index: 100; }
-.confirm-modal { background: #fdfae9; padding: 20px; border: 2px solid #d3c4a1; border-radius: 12px; box-shadow: 0 10px 20px rgba(0,0,0,0.1); text-align: center; width: 80%; }
+.confirm-modal { background: #fdfae9; padding: 20px; border: 2px solid #d3c4a1; border-radius: 12px; box-shadow: 0 10px 20px rgba(0,0,0,0.1); text-align: center; width: 80%; max-width: 400px; }
 .confirm-modal p { color: #5c4b37; font-weight: bold; margin: 0 0 20px 0; font-size: 14px; }
 .confirm-preview { font-weight: normal !important; font-size: 13px !important; color: #8c7a65 !important; background: #fcf9ee; padding: 8px 12px; border-radius: 6px; border: 1px solid #eaddc4; margin-bottom: 16px !important; word-break: break-word; max-height: 80px; overflow-y: auto; }
 .confirm-hint { font-weight: normal !important; font-size: 12px !important; color: #b5a992 !important; margin: 12px 0 0 0 !important; }
@@ -706,31 +756,28 @@ watch(isUserLoggedIn, async (newVal) => {
 .confirm-btn.danger { background: #bc423f; color: white; }
 .confirm-btn.danger:hover { background: #a13431; }
 
-/* Modern agent chat panel refresh */
-.sidebar {
-  width: 340px;
-  min-width: 320px;
-  max-width: 380px;
-  background: #ffffff;
+/* Modern full-page agent chat refresh */
+.chat-page {
+  background: #f8fafc;
 }
 
-.right-sidebar {
-  border-left: 1px solid #e4e7ec;
-}
-
-.sidebar-content {
-  padding: 22px 18px 0;
+.chat-content {
+  max-width: 920px;
+  padding: 26px 28px 0;
 }
 
 .chat-header {
-  border-bottom: 1px solid #e4e7ec;
-  padding-bottom: 14px;
-  margin-bottom: 14px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  background: #ffffff;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.06);
 }
 
 .session-selector h2 {
   color: #101828;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 780;
 }
 
@@ -739,7 +786,7 @@ watch(isUserLoggedIn, async (newVal) => {
   background: #eff6ff;
   color: #1d4ed8;
   border-radius: 8px;
-  padding: 7px 11px;
+  padding: 8px 12px;
 }
 
 .new-chat-btn:hover {
@@ -768,14 +815,10 @@ watch(isUserLoggedIn, async (newVal) => {
   color: #344054;
 }
 
-.chat-history::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-}
-
 .empty-avatar {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
   background: linear-gradient(135deg, #2563eb, #0891b2);
   color: #ffffff;
 }
@@ -802,7 +845,7 @@ watch(isUserLoggedIn, async (newVal) => {
 }
 
 .ai-msg .bubble-content {
-  background: #f8fafc;
+  background: #ffffff;
   border: 1px solid #e4e7ec;
 }
 
@@ -823,20 +866,22 @@ watch(isUserLoggedIn, async (newVal) => {
 }
 
 .chat-input-area {
-  border-top: 1px solid #e4e7ec;
-  background: #ffffff;
+  border-top: 0;
+  background: #f8fafc;
+  padding: 12px 0 18px;
 }
 
 .chat-input {
   background: #ffffff;
   border: 1px solid #d0d5dd;
-  border-radius: 10px;
+  border-radius: 12px;
   color: #101828;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08);
 }
 
 .chat-input:focus {
   border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12), 0 14px 36px rgba(15, 23, 42, 0.08);
 }
 
 .send-btn {
@@ -867,4 +912,359 @@ watch(isUserLoggedIn, async (newVal) => {
 .confirm-modal p {
   color: #101828;
 }
+
+/* Doubao-like client layout refinement */
+.chat-page {
+  background: #ffffff;
+}
+
+.chat-content {
+  max-width: none;
+  width: 100%;
+  padding: 0;
+}
+
+.chat-header {
+  height: 66px;
+  margin: 0;
+  padding: 0 22px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  border: 0;
+  border-bottom: 1px solid #eeeeef;
+  border-radius: 0;
+  box-shadow: none;
+  background: #ffffff;
+}
+
+.session-selector {
+  grid-column: 2;
+  text-align: center;
+}
+
+.session-selector h2 {
+  justify-content: center;
+  color: #18181b;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.session-selector h2::after {
+  content: "AI 生成可能有误 注意核实";
+  position: absolute;
+  left: 50%;
+  top: 38px;
+  transform: translateX(-50%);
+  color: #d4d4d8;
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.new-chat-btn {
+  grid-column: 3;
+  justify-self: end;
+  background: #ffffff;
+  border: 1px solid #dedee3;
+  color: #18181b;
+  border-radius: 20px;
+  padding: 8px 18px;
+  box-shadow: none;
+}
+
+.new-chat-btn:hover {
+  background: #f4f4f5;
+}
+
+.chat-history {
+  padding: 0 32px 150px;
+}
+
+.empty-chat {
+  min-height: calc(100vh - 216px);
+  height: auto;
+  justify-content: center;
+  color: #18181b;
+}
+
+.empty-chat h2 {
+  margin: 0 0 34px;
+  color: #030712;
+  font-size: 34px;
+  line-height: 1.2;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.prompt-grid {
+  width: min(1040px, 78vw);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px 10px;
+}
+
+.prompt-grid button {
+  height: 50px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 14px;
+  background: #f4f4f5;
+  color: #18181b;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.16s, transform 0.16s;
+}
+
+.prompt-grid button:hover {
+  background: #ececef;
+  transform: translateY(-1px);
+}
+
+.chat-input-area {
+  position: absolute;
+  left: 50%;
+  right: auto;
+  bottom: 20px;
+  width: min(1200px, calc(100% - 160px));
+  transform: translateX(-50%);
+  padding: 0;
+  background: transparent;
+}
+
+.textarea-wrapper {
+  min-height: 118px;
+  padding: 18px 20px 14px;
+  background: #ffffff;
+  border: 1px solid #ececef;
+  border-radius: 28px;
+  box-shadow: 0 16px 46px rgba(15, 23, 42, 0.12);
+}
+
+.chat-input {
+  min-height: 44px;
+  padding: 0 40px 44px 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: #18181b;
+  font-size: 17px;
+}
+
+.chat-input:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.input-actions {
+  left: 18px;
+  right: 16px;
+  bottom: 14px;
+}
+
+.send-btn {
+  min-width: 58px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: #18181b;
+  font-size: 14px;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: #000000;
+}
+
+.voice-record-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #f4f4f5;
+}
+
+.expand-icon {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .chat-input-area {
+    width: calc(100% - 32px);
+  }
+
+  .prompt-grid {
+    width: calc(100vw - 80px);
+  }
+
+  .empty-chat h2 {
+    font-size: 28px;
+  }
+}
+
+/* Redline polish: prevent overlap and tighten the shell proportions. */
+.chat-header {
+  height: 78px;
+}
+
+.session-selector h2 {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  line-height: 1.25;
+  overflow: visible;
+}
+
+.session-selector h2 .arrow {
+  position: absolute;
+  right: -16px;
+  top: 3px;
+}
+
+.session-selector h2::after {
+  position: static;
+  transform: none;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.chat-history {
+  padding: 22px 32px 250px;
+  scroll-padding-bottom: 250px;
+}
+
+.msg-bubble {
+  max-width: min(760px, 68%);
+}
+
+.chat-input-area {
+  bottom: 24px;
+  width: min(1040px, calc(100% - 220px));
+}
+
+.textarea-wrapper {
+  min-height: 112px;
+}
+
+@media (max-width: 1100px) {
+  .chat-input-area {
+    width: calc(100% - 48px);
+  }
+
+  .msg-bubble {
+    max-width: 86%;
+  }
+}
+
+/* Logout and compact-window fixes. */
+.chat-header {
+  display: none;
+}
+
+.chat-page,
+.chat-content {
+  overflow: hidden;
+}
+
+.chat-history {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+
+.chat-history.has-messages {
+  overflow-y: auto;
+}
+
+.empty-chat {
+  min-height: 0;
+  height: 100%;
+  padding: 0 28px;
+}
+
+.prompt-grid {
+  width: min(780px, 100%);
+  max-width: 100%;
+}
+
+.prompt-grid button {
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.chat-input:disabled {
+  background: #ffffff;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.chat-input-area {
+  max-width: calc(100% - 48px);
+}
+
+@media (max-width: 960px) {
+  .chat-header {
+    height: 84px;
+    padding: 0 16px;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+  }
+
+  .session-selector {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  .new-chat-btn {
+    grid-column: 3;
+    padding: 7px 14px;
+  }
+
+  .empty-chat h2 {
+    font-size: 30px;
+    margin-bottom: 28px;
+  }
+
+  .prompt-grid {
+    gap: 10px;
+  }
+
+  .prompt-grid button {
+    height: 46px;
+    padding: 0 18px;
+    font-size: 16px;
+  }
+
+  .chat-input-area {
+    bottom: 18px;
+    width: calc(100% - 42px);
+  }
+
+  .textarea-wrapper {
+    min-height: 112px;
+    border-radius: 24px;
+  }
+}
+
+@media (max-height: 760px) {
+  .chat-history {
+    padding-top: 8px;
+    padding-bottom: 190px;
+    scroll-padding-bottom: 190px;
+  }
+
+  .empty-chat h2 {
+    font-size: 28px;
+    margin-bottom: 20px;
+  }
+
+  .prompt-grid button {
+    height: 42px;
+  }
+
+  .textarea-wrapper {
+    min-height: 96px;
+  }
+}
 </style>
+

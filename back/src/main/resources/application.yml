@@ -35,3 +35,15 @@ sa-token:
   is-share: true
   token-style: uuid
   is-log: false
+
+
+rag:
+
+  top-k: 3
+  bm25-top-k: 10     # 原 20 → 10，BM25 候选数
+  dense-top-k: 10
+  recall-threshold: 0.1 # 新增，RRF 融合后低于此分数的直接丢弃
+  embedding-cache-ttl: 360  # 新增，embedding 缓存秒数
+  lucene-index-dir: ./data/lucene-rag-index
+
+  result-cache-ttl: 180

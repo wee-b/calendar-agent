@@ -6,14 +6,9 @@ import org.springframework.stereotype.Component;
 
 @Data
 @Component
-@ConfigurationProperties(prefix = "app.rag")
+@ConfigurationProperties(prefix = "rag")
 public class RagProperties {
 
-    private String ollamaUrl = "http://localhost:11434";
-    private String embeddingModel = "bge-m3";
-    private String milvusHost = "localhost";
-    private int milvusPort = 19530;
-    private String milvusCollection = "rag_corpus";
     private int topK = 3;
     private int bm25TopK = 10;
     private int denseTopK = 10;

@@ -13,21 +13,28 @@ app:
     token-name: yvli-token
     timeout: 604800
   ai:
-    api-key: ${unknown.deepseek.api-key}
-    base-url: https://api.deepseek.com
-    model: deepseek-v4-flash
-  rag:
-    ollama-url: http://localhost:11434
-    embedding-model: bge-m3
-    milvus-host: localhost
-    milvus-port: 19530
-    milvus-collection: rag_corpus
-    top-k: 3
-    bm25-top-k: 10     # 原 20 → 10，BM25 候选数
-    dense-top-k: 10
-    recall-threshold: 0.1 # 新增，RRF 融合后低于此分数的直接丢弃
-    embedding-cache-ttl: 360  # 新增，embedding 缓存秒数
-    lucene-index-dir: ./data/lucene-rag-index
+    api-key: ${unknown.aliyun.api-key}
+    base-url: ${ALIYUN_AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
+    planner-model: ${ALIYUN_PLANNER_MODEL:deepseek-v4-flash}
+  qdrant:
+    host: localhost
+    port: 6334
+    collection: rag_corpus
 
-    result-cache-ttl: 180
+  rag:
+    # 本地默认使用 ollama；部署时设置 RAG_EMBEDDING_PROVIDER=aliyun 切到阿里云百炼
+#    embedding-provider: ${RAG_EMBEDDING_PROVIDER:ollama}
+    embedding-provider: aliyun
+
+    ollama:
+      url: ${RAG_OLLAMA_URL:http://localhost:11434}
+      model: ${RAG_OLLAMA_MODEL:bge-m3}
+
+    aliyun:
+      base-url: ${RAG_ALIYUN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${unknown.aliyun.api-key}
+      model: ${RAG_ALIYUN_MODEL:text-embedding-v4}
+
+
 
