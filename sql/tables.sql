@@ -142,6 +142,30 @@ CREATE TABLE `yl_daily_note`
 
 
 
+-- yl_plan_draft
+DROP TABLE IF EXISTS `yl_plan_draft`;
+
+CREATE TABLE `yl_plan_draft`
+(
+    `draft_id`       BIGINT        NOT NULL AUTO_INCREMENT COMMENT 'plan draft id',
+    `user_id`        BIGINT        NOT NULL COMMENT 'user id',
+    `session_id`     VARCHAR(64)   NOT NULL COMMENT 'chat session id',
+    `goal`           VARCHAR(255)  NULL DEFAULT NULL COMMENT 'plan goal',
+    `plan_json`      TEXT          NOT NULL COMMENT 'planner raw json',
+    `status`         VARCHAR(20)   NOT NULL DEFAULT 'pending' COMMENT 'pending/synced/cancelled/expired',
+    `source_message` VARCHAR(1000) NULL DEFAULT NULL COMMENT 'source requirement',
+    `create_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'created time',
+    `update_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'updated time',
+
+    PRIMARY KEY (`draft_id`),
+    KEY `idx_user_session_status` (`user_id`, `session_id`, `status`),
+    KEY `idx_user_create_time` (`user_id`, `create_time`),
+    CONSTRAINT `fk_plan_draft_user`
+        FOREIGN KEY (`user_id`)
+            REFERENCES `yl_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='plan draft table';
+
+
 -- yl_ai_dialogue（对话记录表）
 DROP TABLE IF EXISTS `yl_ai_dialogue`;
 

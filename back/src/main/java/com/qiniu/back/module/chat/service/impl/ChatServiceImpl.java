@@ -2,12 +2,15 @@ package com.qiniu.back.module.chat.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.qiniu.back.domain.chat.AiDialogue;
+import com.qiniu.back.domain.chat.PlanDraft;
 import com.qiniu.back.domain.chat.vo.ChatHistoryItemVO;
 import com.qiniu.back.domain.chat.vo.ChatResponseVO;
 import com.qiniu.back.domain.chat.vo.ChatSessionVO;
 import com.qiniu.back.module.chat.agent.AgentOrchestrator;
 import com.qiniu.back.module.chat.mapper.AiDialogueMapper;
 import com.qiniu.back.module.chat.service.ChatService;
+import com.qiniu.back.module.chat.service.PlanDraftService;
+import com.qiniu.back.util.ChatSessionContext;
 import com.qiniu.back.util.LoginUserContext;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
@@ -17,7 +20,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 @Slf4j
@@ -32,63 +41,88 @@ public class ChatServiceImpl implements ChatService {
     @Autowired
     private AiDialogueMapper aiDialogueMapper;
 
-    // ==================== Agent 对话入口 ====================
+    @Autowired
+    private PlanDraftService planDraftService;
 
     @Override
     public ChatResponseVO chat(String sessionId, String message) {
         Long userId = LoginUserContext.getUserId();
-        String sid = (sessionId == null || sessionId.isEmpty()) ? UUID.randomUUID().toString() : sessionId;
+        String sid = normalizeSessionId(sessionId);
 
         saveDialogue(userId, sid, "user", message, null);
 
-        List<ChatMessage> history = buildMessageList(loadHistory(userId, sid));
+        Optional<PlanDraft> pendingDraft = planDraftService.findLatestPending(userId, sid);
+        if (pendingDraft.isPresent() && planDraftService.isConfirmMessage(message)) {
+            String aiResult = planDraftService.buildSyncReply(planDraftService.syncDraft(pendingDraft.get()));
+            saveDialogue(userId, sid, "assistant", null, aiResult);
+            return response(sid, aiResult);
+        }
 
+        List<ChatMessage> history = buildMessageList(loadHistory(userId, sid));
         String aiResult;
         try {
+            ChatSessionContext.setSessionId(sid);
             aiResult = agentOrchestrator.orchestrate(message, history);
         } catch (Exception e) {
-            log.error("Agent 编排调用失败", e);
-            aiResult = "抱歉，我暂时无法处理这个请求，请稍后再试。";
+            log.error("Agent orchestration failed", e);
+            aiResult = "\u62b1\u6b49\uff0c\u6211\u6682\u65f6\u65e0\u6cd5\u5904\u7406\u8fd9\u4e2a\u8bf7\u6c42\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002";
+        } finally {
+            ChatSessionContext.remove();
         }
 
         saveDialogue(userId, sid, "assistant", null, aiResult);
-
-        ChatResponseVO vo = new ChatResponseVO();
-        vo.setSessionId(sid);
-        vo.setAiResult(aiResult);
-        return vo;
+        return response(sid, aiResult);
     }
 
     @Override
     public SseEmitter streamChat(String sessionId, String message) {
         Long userId = LoginUserContext.getUserId();
-        String sid = (sessionId == null || sessionId.isEmpty()) ? UUID.randomUUID().toString() : sessionId;
+        String sid = normalizeSessionId(sessionId);
 
         saveDialogue(userId, sid, "user", message, null);
 
-        List<ChatMessage> history = buildMessageList(loadHistory(userId, sid));
+        Optional<PlanDraft> pendingDraft = planDraftService.findLatestPending(userId, sid);
+        if (pendingDraft.isPresent() && planDraftService.isConfirmMessage(message)) {
+            SseEmitter emitter = new SseEmitter(300_000L);
+            CompletableFuture.runAsync(() -> {
+                LoginUserContext.setUserId(userId);
+                try {
+                    String aiResult = planDraftService.buildSyncReply(planDraftService.syncDraft(pendingDraft.get()));
+                    saveDialogue(userId, sid, "assistant", null, aiResult);
+                    emitter.send(SseEmitter.event().data(aiResult));
+                    emitter.complete();
+                } catch (Exception e) {
+                    log.error("Plan draft sync failed", e);
+                    emitter.completeWithError(e);
+                } finally {
+                    LoginUserContext.remove();
+                }
+            });
+            return emitter;
+        }
 
+        List<ChatMessage> history = buildMessageList(loadHistory(userId, sid));
         SseEmitter emitter = new SseEmitter(300_000L);
 
         CompletableFuture.runAsync(() -> {
             LoginUserContext.setUserId(userId);
+            ChatSessionContext.setSessionId(sid);
             try {
                 agentOrchestrator.orchestrateStreamInternal(emitter, message, history,
                         fullResponse -> saveDialogue(userId, sid, "assistant", null, fullResponse));
             } catch (Exception e) {
-                log.error("Agent 流式编排失败", e);
+                log.error("Streaming agent orchestration failed", e);
                 emitter.completeWithError(e);
             } finally {
+                ChatSessionContext.remove();
                 LoginUserContext.remove();
             }
         });
 
-        emitter.onTimeout(() -> log.warn("SSE 连接超时"));
-        emitter.onError(e -> log.error("SSE 连接异常", e));
+        emitter.onTimeout(() -> log.warn("SSE connection timeout"));
+        emitter.onError(e -> log.error("SSE connection error", e));
         return emitter;
     }
-
-    // ==================== 会话管理 ====================
 
     @Override
     public String newSession() {
@@ -157,7 +191,7 @@ public class ChatServiceImpl implements ChatService {
                     .filter(d -> "user".equals(d.getRole()) && d.getUserText() != null)
                     .findFirst()
                     .map(d -> d.getUserText().length() > 30 ? d.getUserText().substring(0, 30) + "..." : d.getUserText())
-                    .orElse("新对话");
+                    .orElse("\u65b0\u5bf9\u8bdd");
             result.add(new ChatSessionVO(sid, title, msgs.get(0).getCreateTime(), msgs.size()));
         }
         return result;
@@ -177,7 +211,16 @@ public class ChatServiceImpl implements ChatService {
         return getHistory(latest.getSessionId());
     }
 
-    // ==================== 内部工具 ====================
+    private String normalizeSessionId(String sessionId) {
+        return (sessionId == null || sessionId.isEmpty()) ? UUID.randomUUID().toString() : sessionId;
+    }
+
+    private ChatResponseVO response(String sessionId, String aiResult) {
+        ChatResponseVO vo = new ChatResponseVO();
+        vo.setSessionId(sessionId);
+        vo.setAiResult(aiResult);
+        return vo;
+    }
 
     private List<AiDialogue> loadHistory(Long userId, String sessionId) {
         List<AiDialogue> list = aiDialogueMapper.selectList(
