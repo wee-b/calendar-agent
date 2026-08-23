@@ -2,10 +2,6 @@
 create database if not exists yl_database;
 
 SET NAMES utf8mb4;
-SET FOREIGN_KEY_CHECKS = 0;
-
-
-
 -- yl_user
 DROP TABLE IF EXISTS `yl_user`;
 CREATE TABLE `yl_user`
@@ -58,10 +54,7 @@ CREATE TABLE `yl_todo`
     `update_time` DATETIME   NOT NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`todo_id`),
-    KEY `idx_user_status` (`user_id`, `status`),
-    CONSTRAINT `fk_todo_user`
-        FOREIGN KEY (`user_id`)
-            REFERENCES `yl_user` (`user_id`)
+    KEY `idx_user_status` (`user_id`, `status`)
 
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='待办表（目标）';
 
@@ -99,10 +92,7 @@ CREATE TABLE `yl_todo_date`
 
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_todo_date` (`todo_id`, `todo_date`),
-    KEY `idx_date` (`todo_date`),
-    CONSTRAINT `fk_tododate_todo`
-        FOREIGN KEY (`todo_id`)
-            REFERENCES `yl_todo` (`todo_id`)
+    KEY `idx_date` (`todo_date`)
 
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='待办日期关联表';
 
@@ -133,10 +123,7 @@ CREATE TABLE `yl_daily_note`
         ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 
     PRIMARY KEY (`note_id`),
-    UNIQUE KEY `uk_user_date` (`user_id`, `note_date`),
-    CONSTRAINT `fk_dailynote_user`
-        FOREIGN KEY (`user_id`)
-            REFERENCES `yl_user` (`user_id`)
+    UNIQUE KEY `uk_user_date` (`user_id`, `note_date`)
 
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='每日日记表';
 
@@ -159,10 +146,7 @@ CREATE TABLE `yl_plan_draft`
 
     PRIMARY KEY (`draft_id`),
     KEY `idx_user_session_status` (`user_id`, `session_id`, `status`),
-    KEY `idx_user_create_time` (`user_id`, `create_time`),
-    CONSTRAINT `fk_plan_draft_user`
-        FOREIGN KEY (`user_id`)
-            REFERENCES `yl_user` (`user_id`)
+    KEY `idx_user_create_time` (`user_id`, `create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='plan draft table';
 
 
@@ -184,10 +168,7 @@ CREATE TABLE `yl_agent_flow_state`
 
     PRIMARY KEY (`state_id`),
     UNIQUE KEY `uk_user_session` (`user_id`, `session_id`),
-    KEY `idx_user_update_time` (`user_id`, `update_time`),
-    CONSTRAINT `fk_agent_flow_state_user`
-        FOREIGN KEY (`user_id`)
-            REFERENCES `yl_user` (`user_id`)
+    KEY `idx_user_update_time` (`user_id`, `update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent flow state table';
 
 
@@ -216,14 +197,8 @@ CREATE TABLE `yl_ai_dialogue`
 
     PRIMARY KEY (`dialogue_id`),
     KEY `idx_user_session` (`user_id`, `session_id`),
-    KEY `idx_user_create_time` (`user_id`, `create_time`),
-
-    CONSTRAINT `fk_dialogue_user`
-        FOREIGN KEY (`user_id`)
-            REFERENCES `yl_user` (`user_id`)
+    KEY `idx_user_create_time` (`user_id`, `create_time`)
 )ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'AI对话记录表';
-
-SET FOREIGN_KEY_CHECKS = 1;
 
 
 

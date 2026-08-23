@@ -49,7 +49,12 @@
             <div v-if="!isUserRole(msg.role) && msg.responseTimeMs != null" class="response-time">
               耗时 {{ formatResponseTime(msg.responseTimeMs) }}
             </div>
-            <p v-if="!msg.loading">{{ msg.content }}</p>
+            <p v-if="!msg.loading && isUserRole(msg.role)">{{ msg.content }}</p>
+            <div
+                v-else-if="!msg.loading"
+                class="markdown-body"
+                v-html="renderMarkdown(msg.content)"
+            ></div>
             <div v-else class="typing-indicator">
               <span></span><span></span><span></span>
             </div>
@@ -143,6 +148,7 @@ import {
   newSessionAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
 } from '../../../api/chat';
 import { tokenRef } from '../../../utils/auth';
+import { renderMarkdown } from '../../../utils/markdown';
 
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'refresh'): void }>();
@@ -653,6 +659,92 @@ watch(isUserLoggedIn, async (newVal) => {
 .avatar { font-size: 12px; color: #b5a992; font-weight: bold; }
 .bubble-content { border-radius: 12px; padding: 10px 14px; box-shadow: 0 2px 6px rgba(92, 75, 55, 0.05); }
 .bubble-content p { margin: 0; font-size: 14px; line-height: 1.5; color: #5c4b37; word-break: break-word; white-space: pre-wrap; }
+.markdown-body {
+  color: #344054;
+  font-size: 14px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+.markdown-body :deep(*) {
+  box-sizing: border-box;
+}
+.markdown-body :deep(p),
+.markdown-body :deep(ul),
+.markdown-body :deep(ol),
+.markdown-body :deep(pre),
+.markdown-body :deep(blockquote),
+.markdown-body :deep(table) {
+  margin: 0 0 8px;
+}
+.markdown-body :deep(:last-child) {
+  margin-bottom: 0;
+}
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  padding-left: 20px;
+}
+.markdown-body :deep(li + li) {
+  margin-top: 4px;
+}
+.markdown-body :deep(strong) {
+  font-weight: 700;
+  color: #101828;
+}
+.markdown-body :deep(code) {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f2f4f7;
+  color: #344054;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+.markdown-body :deep(pre) {
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #101828;
+  color: #f8fafc;
+}
+.markdown-body :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  white-space: pre;
+}
+.markdown-body :deep(a) {
+  color: #2563eb;
+  text-decoration: none;
+}
+.markdown-body :deep(a:hover) {
+  text-decoration: underline;
+}
+.markdown-body :deep(table) {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  min-width: 88px;
+  padding: 8px 10px;
+  border: 1px solid #d0d5dd;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+.markdown-body :deep(th) {
+  background: #f2f4f7;
+  color: #101828;
+  font-weight: 700;
+}
+.markdown-body :deep(tr:nth-child(even) td) {
+  background: #f8fafc;
+}
 .response-time { margin-bottom: 8px; color: #667085; font-size: 13px; line-height: 1.4; }
 
 .user-msg { align-self: flex-end; align-items: flex-end; }
