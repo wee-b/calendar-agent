@@ -34,6 +34,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 @Slf4j
 @Service
@@ -135,107 +136,57 @@ public class ChatServiceImpl implements ChatService {
         long responseStartTime = System.currentTimeMillis();
         Long userId = LoginUserContext.getUserId();
         String sid = normalizeSessionId(sessionId);
-
-        Long userDialogueId = saveDialogue(userId, sid, "user", message, null);
-
-        if (agentFlowStateService.get(userId, sid).isPresent()) {
-            SseEmitter emitter = new SseEmitter(300_000L);
-            CompletableFuture.runAsync(() -> {
-                LoginUserContext.setUserId(userId);
-                ChatSessionContext.setSessionId(sid);
-                try {
-                    sendProgress(emitter, "正在读取上一步待确认的任务...");
-                    ChatDispatchResult result = handleExistingFlowState(userId, sid, message)
-                            .orElse(new ChatDispatchResult("状态已过期，我们回到正常对话。", false, "NONE",
-                                    AgentFlowStateService.AGENT_SUPERVISOR,
-                                    AgentFlowStateService.AGENT_SUPERVISOR,
-                                    AgentFlowStateService.STAGE_IDLE));
-                    sendProgress(emitter, "正在整理回复...");
-                    Long responseTimeMs = elapsedSince(responseStartTime);
-                    saveDialogue(userId, sid, "assistant", null, result.aiResult(), responseTimeMs);
-                    emitter.send(SseEmitter.event().data(result.aiResult()));
-                    sendResponseTime(emitter, responseTimeMs);
-                    emitter.complete();
-                } catch (Exception e) {
-                    log.error("Agent flow state handling failed", e);
-                    emitter.completeWithError(e);
-                } finally {
-                    ChatSessionContext.remove();
-                    LoginUserContext.remove();
-                }
-            });
-            return emitter;
-        }
-
-        if (planDraftService.isConfirmMessage(message)) {
-            Optional<PlanDraft> pendingDraft = planDraftService.findLatestPending(userId, sid);
-            if (pendingDraft.isPresent()) {
-                SseEmitter emitter = new SseEmitter(300_000L);
-                CompletableFuture.runAsync(() -> {
-                    LoginUserContext.setUserId(userId);
-                    try {
-                        sendProgress(emitter, "正在同步规划到日历...");
-                        String aiResult = planDraftService.buildSyncReply(planDraftService.syncDraft(pendingDraft.get()));
-                        sendProgress(emitter, "正在整理同步结果...");
-                        Long responseTimeMs = elapsedSince(responseStartTime);
-                        saveDialogue(userId, sid, "assistant", null, aiResult, responseTimeMs);
-                        emitter.send(SseEmitter.event().data(aiResult));
-                        sendResponseTime(emitter, responseTimeMs);
-                        emitter.complete();
-                    } catch (Exception e) {
-                        log.error("Plan draft sync failed", e);
-                        emitter.completeWithError(e);
-                    } finally {
-                        LoginUserContext.remove();
-                    }
-                });
-                return emitter;
-            }
-        }
-
-        DirectCommandResult directResult = directCommandService.tryHandle(message);
-        if (directResult.shouldReturnDirectly()) {
-            SseEmitter emitter = new SseEmitter(300_000L);
-            CompletableFuture.runAsync(() -> {
-                LoginUserContext.setUserId(userId);
-                try {
-                    sendProgress(emitter, "已识别为快捷指令，正在处理...");
-                    String aiResult = directResult.reply();
-                    sendProgress(emitter, "正在整理回复...");
-                    Long responseTimeMs = elapsedSince(responseStartTime);
-                    saveDialogue(userId, sid, "assistant", null, aiResult, responseTimeMs);
-                    emitter.send(SseEmitter.event().data(aiResult));
-                    sendResponseTime(emitter, responseTimeMs);
-                    emitter.complete();
-                } catch (Exception e) {
-                    log.error("Direct command failed", e);
-                    emitter.completeWithError(e);
-                } finally {
-                    LoginUserContext.remove();
-                }
-            });
-            return emitter;
-        }
-        if (directResult.shouldFallbackToSupervisor()) {
-            log.info("[DirectCommand] fallback to supervisor: {}", directResult.reply());
-        }
-
         SseEmitter emitter = new SseEmitter(300_000L);
-        List<ChatMessage> history = buildReadonlyHistory(loadHistory(userId, sid, userDialogueId));
 
         CompletableFuture.runAsync(() -> {
             LoginUserContext.setUserId(userId);
             ChatSessionContext.setSessionId(sid);
             try {
-                sendProgress(emitter, "已收到消息，正在理解你的需求...");
+                Long userDialogueId = report(emitter, "保存用户消息",
+                        () -> saveDialogue(userId, sid, "user", message, null));
+
+                Optional<ChatDispatchResult> flowResult = handleExistingFlowState(userId, sid, message,
+                        progress -> sendProgress(emitter, progress));
+                if (flowResult.isPresent()) {
+                    sendFinalResult(emitter, userId, sid, flowResult.get().aiResult(), responseStartTime);
+                    return;
+                }
+
+                boolean confirmPlanDraft = report(emitter, "检查规划草稿确认语义",
+                        () -> planDraftService.isConfirmMessage(message));
+                if (confirmPlanDraft) {
+                    Optional<PlanDraft> pendingDraft = report(emitter, "读取待同步规划草稿",
+                            () -> planDraftService.findLatestPending(userId, sid));
+                    if (pendingDraft.isPresent()) {
+                        String aiResult = report(emitter, "同步规划草稿到日历",
+                                () -> planDraftService.buildSyncReply(planDraftService.syncDraft(pendingDraft.get())));
+                        sendFinalResult(emitter, userId, sid, aiResult, responseStartTime);
+                        return;
+                    }
+                }
+
+                DirectCommandResult directResult = report(emitter, "尝试快捷指令匹配",
+                        () -> directCommandService.tryHandle(message));
+                if (directResult.shouldReturnDirectly()) {
+                    sendStepStart(emitter, "执行快捷指令");
+                    String aiResult = directResult.reply();
+                    sendStepSuccess(emitter, "执行快捷指令");
+                    sendFinalResult(emitter, userId, sid, aiResult, responseStartTime);
+                    return;
+                }
+                if (directResult.shouldFallbackToSupervisor()) {
+                    log.info("[DirectCommand] fallback to supervisor: {}", directResult.reply());
+                    sendStepStart(emitter, "交给 Supervisor 兜底");
+                    sendStepSuccess(emitter, "交给 Supervisor 兜底");
+                }
+
+                List<AiDialogue> rawHistory = report(emitter, "读取历史对话",
+                        () -> loadHistory(userId, sid, userDialogueId));
+                List<ChatMessage> history = report(emitter, "构建只读上下文",
+                        () -> buildReadonlyHistory(rawHistory));
                 ChatDispatchResult dispatchResult = dispatchBySupervisor(userId, sid, message, history,
                         progress -> sendProgress(emitter, progress));
-                sendProgress(emitter, "正在整理最终回复...");
-                Long responseTimeMs = elapsedSince(responseStartTime);
-                saveDialogue(userId, sid, "assistant", null, dispatchResult.aiResult(), responseTimeMs);
-                emitter.send(SseEmitter.event().data(dispatchResult.aiResult()));
-                sendResponseTime(emitter, responseTimeMs);
-                emitter.complete();
+                sendFinalResult(emitter, userId, sid, dispatchResult.aiResult(), responseStartTime);
             } catch (Exception e) {
                 log.error("Streaming agent orchestration failed", e);
                 emitter.completeWithError(e);
@@ -248,6 +199,79 @@ public class ChatServiceImpl implements ChatService {
         emitter.onTimeout(() -> log.warn("SSE connection timeout"));
         emitter.onError(e -> log.error("SSE connection error", e));
         return emitter;
+    }
+
+    private void sendFinalResult(SseEmitter emitter, Long userId, String sessionId,
+                                 String aiResult, long responseStartTime) throws Exception {
+        sendStepStart(emitter, "保存助手回复");
+        Long responseTimeMs = elapsedSince(responseStartTime);
+        saveDialogue(userId, sessionId, "assistant", null, aiResult, responseTimeMs);
+        sendStepSuccess(emitter, "保存助手回复");
+        emitter.send(SseEmitter.event().data(aiResult));
+        sendResponseTime(emitter, responseTimeMs);
+        emitter.complete();
+    }
+
+    private <T> T report(SseEmitter emitter, String step, Supplier<T> action) {
+        sendStepStart(emitter, step);
+        try {
+            T result = action.get();
+            sendStepSuccess(emitter, step);
+            return result;
+        } catch (RuntimeException e) {
+            sendStepFailure(emitter, step);
+            throw e;
+        }
+    }
+
+    private void report(SseEmitter emitter, String step, Runnable action) {
+        report(emitter, step, () -> {
+            action.run();
+            return null;
+        });
+    }
+
+    private <T> T report(Consumer<String> progress, String step, Supplier<T> action) {
+        sendStepStart(progress, step);
+        try {
+            T result = action.get();
+            sendStepSuccess(progress, step);
+            return result;
+        } catch (RuntimeException e) {
+            sendStepFailure(progress, step);
+            throw e;
+        }
+    }
+
+    private void report(Consumer<String> progress, String step, Runnable action) {
+        report(progress, step, () -> {
+            action.run();
+            return null;
+        });
+    }
+
+    private void sendStepStart(SseEmitter emitter, String step) {
+        sendProgress(emitter, "开始：" + step);
+    }
+
+    private void sendStepSuccess(SseEmitter emitter, String step) {
+        sendProgress(emitter, "完成：" + step);
+    }
+
+    private void sendStepFailure(SseEmitter emitter, String step) {
+        sendProgress(emitter, "失败：" + step);
+    }
+
+    private void sendStepStart(Consumer<String> progress, String step) {
+        if (progress != null) progress.accept("开始：" + step);
+    }
+
+    private void sendStepSuccess(Consumer<String> progress, String step) {
+        if (progress != null) progress.accept("完成：" + step);
+    }
+
+    private void sendStepFailure(Consumer<String> progress, String step) {
+        if (progress != null) progress.accept("失败：" + step);
     }
 
     private void sendProgress(SseEmitter emitter, String message) {
@@ -405,12 +429,18 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private Optional<ChatDispatchResult> handleExistingFlowState(Long userId, String sessionId, String message) {
-        Optional<AgentFlowState> optionalState = agentFlowStateService.get(userId, sessionId);
+        return handleExistingFlowState(userId, sessionId, message, null);
+    }
+
+    private Optional<ChatDispatchResult> handleExistingFlowState(Long userId, String sessionId, String message,
+                                                                 Consumer<String> progress) {
+        Optional<AgentFlowState> optionalState = report(progress, "读取待确认任务状态",
+                () -> agentFlowStateService.get(userId, sessionId));
         if (optionalState.isEmpty()) return Optional.empty();
 
         AgentFlowState state = optionalState.get();
         if (agentFlowStateService.isRejectMessage(message)) {
-            agentFlowStateService.clear(userId, sessionId);
+            report(progress, "清理待确认任务状态", () -> agentFlowStateService.clear(userId, sessionId));
             return Optional.of(new ChatDispatchResult(
                     "好的，已取消这一步。你可以继续告诉我新的日程需求。",
                     false,
@@ -421,17 +451,24 @@ public class ChatServiceImpl implements ChatService {
         }
 
         if (planDraftService.isConfirmMessage(message)) {
-            return Optional.of(confirmFlowState(userId, sessionId, state));
+            return Optional.of(confirmFlowState(userId, sessionId, state, progress));
         }
 
-        return Optional.of(refineFlowState(userId, sessionId, state, message));
+        return Optional.of(refineFlowState(userId, sessionId, state, message, progress));
     }
 
     private ChatDispatchResult confirmFlowState(Long userId, String sessionId, AgentFlowState state) {
+        return confirmFlowState(userId, sessionId, state, null);
+    }
+
+    private ChatDispatchResult confirmFlowState(Long userId, String sessionId, AgentFlowState state,
+                                                Consumer<String> progress) {
         String nextAgent = state.getNextAgent();
         if (AgentFlowStateService.AGENT_PLANNER.equals(nextAgent)) {
-            String planResult = supervisorTools.planTask(state.getPendingTask());
-            agentFlowStateService.waitPlanFeedback(userId, sessionId, state.getPendingTask(), planResult);
+            String planResult = report(progress, "调用 Planner 生成规划草稿",
+                    () -> supervisorTools.planTask(state.getPendingTask()));
+            report(progress, "写入规划反馈状态",
+                    () -> agentFlowStateService.waitPlanFeedback(userId, sessionId, state.getPendingTask(), planResult));
             return new ChatDispatchResult(
                     buildPlanReply(planResult),
                     true,
@@ -444,14 +481,17 @@ public class ChatServiceImpl implements ChatService {
         if (AgentFlowStateService.AGENT_EXECUTOR.equals(nextAgent)) {
             String aiResult;
             if (AgentFlowStateService.AGENT_PLANNER.equals(state.getCurrentAgent())) {
-                Optional<PlanDraft> pendingDraft = planDraftService.findLatestPending(userId, sessionId);
+                Optional<PlanDraft> pendingDraft = report(progress, "读取待同步规划草稿",
+                        () -> planDraftService.findLatestPending(userId, sessionId));
                 aiResult = pendingDraft
-                        .map(draft -> planDraftService.buildSyncReply(planDraftService.syncDraft(draft)))
+                        .map(draft -> report(progress, "同步规划草稿到日历",
+                                () -> planDraftService.buildSyncReply(planDraftService.syncDraft(draft))))
                         .orElse("没有找到待同步的规划草稿，先回到对话状态。");
             } else {
-                aiResult = supervisorTools.executeTask(state.getPendingTask());
+                aiResult = report(progress, "调用 Executor 执行任务",
+                        () -> supervisorTools.executeTask(state.getPendingTask()));
             }
-            agentFlowStateService.clear(userId, sessionId);
+            report(progress, "清理待确认任务状态", () -> agentFlowStateService.clear(userId, sessionId));
             return new ChatDispatchResult(
                     aiResult,
                     true,
@@ -461,7 +501,7 @@ public class ChatServiceImpl implements ChatService {
                     AgentFlowStateService.STAGE_IDLE);
         }
 
-        agentFlowStateService.clear(userId, sessionId);
+        report(progress, "清理待确认任务状态", () -> agentFlowStateService.clear(userId, sessionId));
         return new ChatDispatchResult(
                 "好的，我们继续。",
                 false,
@@ -472,12 +512,20 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private ChatDispatchResult refineFlowState(Long userId, String sessionId, AgentFlowState state, String message) {
-        AgentFlowState refinedState = agentFlowStateService.updatePendingTask(userId, sessionId, state, message);
+        return refineFlowState(userId, sessionId, state, message, null);
+    }
+
+    private ChatDispatchResult refineFlowState(Long userId, String sessionId, AgentFlowState state, String message,
+                                               Consumer<String> progress) {
+        AgentFlowState refinedState = report(progress, "更新待确认任务内容",
+                () -> agentFlowStateService.updatePendingTask(userId, sessionId, state, message));
 
         if (AgentFlowStateService.AGENT_PLANNER.equals(refinedState.getCurrentAgent())
                 && AgentFlowStateService.AGENT_EXECUTOR.equals(refinedState.getNextAgent())) {
-            String planResult = supervisorTools.planTask(refinedState.getPendingTask());
-            agentFlowStateService.waitPlanFeedback(userId, sessionId, refinedState.getPendingTask(), planResult);
+            String planResult = report(progress, "调用 Planner 重新生成规划草稿",
+                    () -> supervisorTools.planTask(refinedState.getPendingTask()));
+            report(progress, "写入规划反馈状态",
+                    () -> agentFlowStateService.waitPlanFeedback(userId, sessionId, refinedState.getPendingTask(), planResult));
             return new ChatDispatchResult(
                     buildPlanReply(planResult),
                     true,
@@ -505,13 +553,14 @@ public class ChatServiceImpl implements ChatService {
 
     private ChatDispatchResult dispatchBySupervisor(Long userId, String sessionId, String message,
                                                     List<ChatMessage> history, Consumer<String> progress) {
-        if (progress != null) progress.accept("正在判断任务类型...");
-        SupervisorDecision decision = agentOrchestrator.supervise(message, history);
+        SupervisorDecision decision = report(progress, "调用 Supervisor 判断任务类型",
+                () -> agentOrchestrator.supervise(message, history));
         String dispatchType = decision.getDispatchType() == null ? "NONE" : decision.getDispatchType();
         String task = decision.getTask() == null || decision.getTask().isBlank() ? message : decision.getTask();
 
         if (!decision.isNeedDispatchAgent() || "NONE".equals(dispatchType)) {
-            if (progress != null) progress.accept("正在生成直接回复...");
+            sendStepStart(progress, "生成直接回复");
+            sendStepSuccess(progress, "生成直接回复");
             return new ChatDispatchResult(decision.getReply(), false, "NONE",
                     AgentFlowStateService.AGENT_SUPERVISOR,
                     AgentFlowStateService.AGENT_SUPERVISOR,
@@ -520,15 +569,16 @@ public class ChatServiceImpl implements ChatService {
 
         return switch (dispatchType) {
             case "QUERY" -> {
-                if (progress != null) progress.accept("正在查询日程和待办数据...");
-                yield new ChatDispatchResult(supervisorTools.queryCalendar(task), true, "QUERY",
+                String aiResult = report(progress, "调用 Query Agent 查询日程",
+                        () -> supervisorTools.queryCalendar(task));
+                yield new ChatDispatchResult(aiResult, true, "QUERY",
                         AgentFlowStateService.AGENT_SUPERVISOR,
                         AgentFlowStateService.AGENT_SUPERVISOR,
                         AgentFlowStateService.STAGE_IDLE);
             }
             case "EXECUTE" -> {
-                if (progress != null) progress.accept("正在确认需要执行的操作...");
-                agentFlowStateService.waitExecutorConfirm(userId, sessionId, task);
+                report(progress, "写入执行确认状态",
+                        () -> agentFlowStateService.waitExecutorConfirm(userId, sessionId, task));
                 String reply = decision.getReply() == null || decision.getReply().isBlank()
                         ? "我理解为要执行：" + task + "\n确认要执行吗？"
                         : decision.getReply();
@@ -538,8 +588,8 @@ public class ChatServiceImpl implements ChatService {
                         AgentFlowStateService.STAGE_WAIT_CONFIRM);
             }
             case "PLAN_CONFIRM" -> {
-                if (progress != null) progress.accept("正在整理规划任务并等待确认...");
-                agentFlowStateService.waitPlannerConfirm(userId, sessionId, task);
+                report(progress, "写入规划确认状态",
+                        () -> agentFlowStateService.waitPlannerConfirm(userId, sessionId, task));
                 String reply = decision.getReply() == null || decision.getReply().isBlank()
                         ? "这是一个规划类任务，需要我来帮你规划一下吗？"
                         : decision.getReply();
@@ -549,7 +599,8 @@ public class ChatServiceImpl implements ChatService {
                         AgentFlowStateService.STAGE_WAIT_CONFIRM);
             }
             default -> {
-                if (progress != null) progress.accept("正在生成回复...");
+                sendStepStart(progress, "生成默认回复");
+                sendStepSuccess(progress, "生成默认回复");
                 yield new ChatDispatchResult(decision.getReply(), false, "NONE",
                         AgentFlowStateService.AGENT_SUPERVISOR,
                         AgentFlowStateService.AGENT_SUPERVISOR,

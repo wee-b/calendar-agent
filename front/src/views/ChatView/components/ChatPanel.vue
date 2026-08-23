@@ -63,7 +63,7 @@
                     v-for="(step, stepIndex) in msg.thinking"
                     :key="`${index}-${stepIndex}`"
                     class="thinking-step"
-                    :class="{ done: msg.thinkingDone }"
+                    :class="{ done: isThinkingStepDone(step), failed: isThinkingStepFailed(step) }"
                 >
                   {{ step }}
                 </div>
@@ -186,6 +186,7 @@ const isUserLoggedIn = computed(() => !!tokenRef.value);
 interface ChatMessage {
   role: string;
   content: string;
+  pendingContent?: string;
   loading?: boolean;
   thinking?: string[];
   thinkingCollapsed?: boolean;
@@ -193,6 +194,7 @@ interface ChatMessage {
   thinkingStartedAt?: number;
   thinkingFinishedAt?: number;
   responseTimeMs?: number | null;
+  showServerResponseTime?: boolean;
 }
 
 const sessions = ref<ChatSessionVO[]>([]);
@@ -219,11 +221,17 @@ let voiceTimer: any = null;
 let thinkingTimer: any = null;
 const nowTime = ref(Date.now());
 const VOICE_TIMEOUT = 10 * 60 * 1000; // 10鍒嗛挓
+const THINKING_TIMER_INTERVAL = 100;
+const THINKING_STEP_INTERVAL = 1000;
+const THINKING_FINALIZE_INTERVAL = 160;
 const dbBars = ref([4, 4, 4, 4, 4, 4, 4, 4, 4, 4]);
 let audioContext: AudioContext | null = null;
 let analyser: AnalyserNode | null = null;
 let mediaStream: MediaStream | null = null;
 let animFrameId: number | null = null;
+let thinkingProgressQueue = Promise.resolve();
+let lastThinkingProgressAt = 0;
+let thinkingRunId = 0;
 
 const currentSessionTitle = computed(() => {
   const session = sessions.value.find(s => s.sessionId === currentSessionId.value);
@@ -243,7 +251,7 @@ const formatResponseTime = (durationMs: number) => {
 };
 
 const thinkingSummary = (msg: ChatMessage) => {
-  if (msg.thinkingDone && msg.responseTimeMs != null) {
+  if (msg.thinkingDone && msg.showServerResponseTime && msg.responseTimeMs != null) {
     return `耗时 ${formatResponseTime(msg.responseTimeMs)}`;
   }
   const start = msg.thinkingStartedAt || nowTime.value;
@@ -258,24 +266,155 @@ const toggleThinking = (index: number) => {
   }
 };
 
-const completeThinkingStep = (step: string) => {
-  return step
-      .replace(/^已收到消息，正在准备处理\.\.\.$/, '已收到消息成功 √')
-      .replace(/^已收到消息，正在理解你的需求\.\.\.$/, '已理解你的需求成功 √')
-      .replace(/^正在(.+?)(?:\.\.\.)?$/, '已$1成功 √');
+const isThinkingStepDone = (step: string) => {
+  return step.startsWith('完成：');
+};
+
+const isThinkingStepFailed = (step: string) => {
+  return step.startsWith('失败：');
+};
+
+const parseThinkingProgress = (progress: string) => {
+  const match = /^(开始|完成|失败)[:：]\s*(.+)$/.exec(progress.trim());
+  if (!match) return null;
+  return {
+    status: match[1],
+    label: match[2].trim()
+  };
+};
+
+const formatThinkingProgress = (status: string, label: string) => {
+  return `${status}：${label}`;
+};
+
+const legacyThinkingLabel = (progress: string) => {
+  const text = progress.trim().replace(/(?:\.\.\.|…)+$/g, '');
+  if (/^已收到消息/.test(text)) return '理解需求';
+  const running = /^正在(.+)$/.exec(text);
+  if (running?.[1]) return running[1].trim();
+  return '';
+};
+
+const normalizeThinkingProgress = (progress: string) => {
+  if (parseThinkingProgress(progress)) return progress;
+  const label = legacyThinkingLabel(progress);
+  return label ? formatThinkingProgress('开始', label) : progress;
+};
+
+const applySseProgress = (msg: ChatMessage, progress: string) => {
+  if (!msg.thinking) msg.thinking = [];
+
+  const normalizedProgress = normalizeThinkingProgress(progress);
+  const incoming = parseThinkingProgress(normalizedProgress);
+  if (!incoming) {
+    if (msg.thinking[msg.thinking.length - 1] !== normalizedProgress) {
+      msg.thinking.push(normalizedProgress);
+    }
+    return;
+  }
+
+  const existingIndex = msg.thinking.findIndex(step => {
+    const current = parseThinkingProgress(step);
+    return current?.label === incoming.label;
+  });
+  const nextStep = formatThinkingProgress(incoming.status, incoming.label);
+
+  if (existingIndex >= 0) {
+    msg.thinking.splice(existingIndex, 1, nextStep);
+  } else {
+    msg.thinking.push(nextStep);
+  }
+};
+
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+const resetThinkingProgressQueue = () => {
+  thinkingProgressQueue = Promise.resolve();
+  lastThinkingProgressAt = Date.now();
+  thinkingRunId++;
+  return thinkingRunId;
+};
+
+const waitThinkingStepInterval = async () => {
+  const elapsed = Date.now() - lastThinkingProgressAt;
+  if (elapsed < THINKING_STEP_INTERVAL) {
+    await delay(THINKING_STEP_INTERVAL - elapsed);
+  }
+  lastThinkingProgressAt = Date.now();
+};
+
+const enqueueSseProgress = (msg: ChatMessage, progress: string, runId = thinkingRunId) => {
+  thinkingProgressQueue = thinkingProgressQueue
+      .then(async () => {
+        if (runId !== thinkingRunId) return;
+        await waitThinkingStepInterval();
+        if (runId !== thinkingRunId) return;
+        applySseProgress(msg, progress);
+        await scrollToBottom();
+      })
+      .catch(() => {});
+  return thinkingProgressQueue;
+};
+
+const pendingThinkingLabels = (msg: ChatMessage) => {
+  return (msg.thinking || [])
+      .map(step => {
+        const current = parseThinkingProgress(step);
+        if (current?.status === '开始') return current.label;
+        if (current) return '';
+        return legacyThinkingLabel(step);
+      })
+      .filter((label): label is string => !!label);
+};
+
+const flushPendingContent = (msg: ChatMessage) => {
+  if (!msg.pendingContent) return;
+  msg.content += msg.pendingContent;
+  msg.pendingContent = '';
+  msg.loading = false;
+  msg.showServerResponseTime = msg.responseTimeMs != null;
+};
+
+const finishThinkingAfterQueue = (msg?: ChatMessage) => {
+  if (!msg) return Promise.resolve();
+  if (msg.thinkingDone) {
+    flushPendingContent(msg);
+    return Promise.resolve();
+  }
+  thinkingRunId++;
+  thinkingProgressQueue = Promise.resolve();
+  const runId = thinkingRunId;
+  return (async () => {
+    const labels = pendingThinkingLabels(msg);
+    for (const label of labels) {
+      if (runId !== thinkingRunId) return;
+      applySseProgress(msg, formatThinkingProgress('完成', label));
+      await scrollToBottom();
+      await delay(THINKING_FINALIZE_INTERVAL);
+    }
+    if (runId !== thinkingRunId) return;
+    flushPendingContent(msg);
+    completeThinking(msg);
+    msg.thinkingCollapsed = true;
+    await scrollToBottom();
+  })();
+};
+
+const finishThinkingWithFailure = (msg?: ChatMessage) => {
+  if (!msg || msg.thinkingDone) return;
+  const runId = thinkingRunId;
+  enqueueSseProgress(msg, '失败：请求处理', runId).then(() => {
+    if (runId !== thinkingRunId || msg.thinkingDone) return;
+    msg.thinkingDone = true;
+    msg.thinkingFinishedAt = Date.now();
+    msg.thinkingCollapsed = false;
+    scrollToBottom();
+  });
 };
 
 const completeThinking = (msg?: ChatMessage) => {
   if (!msg || !msg.thinking?.length) return;
   if (msg.thinkingDone) return;
-  msg.thinking = msg.thinking.map(completeThinkingStep);
-  msg.thinkingDone = true;
-  msg.thinkingFinishedAt = Date.now();
-};
-
-const failThinking = (msg?: ChatMessage) => {
-  if (!msg || !msg.thinking?.length || msg.thinkingDone) return;
-  msg.thinking = msg.thinking.map(step => step.replace(/^正在(.+?)(?:\.\.\.)?$/, '$1失败'));
   msg.thinkingDone = true;
   msg.thinkingFinishedAt = Date.now();
 };
@@ -654,11 +793,12 @@ const handleSend = async () => {
   inputText.value = '';
   scrollToBottom();
 
+  const progressRunId = resetThinkingProgressQueue();
   messages.value.push({
     role: 'ai',
     content: '',
     loading: true,
-    thinking: ['已收到消息，正在准备处理...'],
+    thinking: ['开始：发送消息'],
     thinkingCollapsed: false,
     thinkingStartedAt: Date.now()
   });
@@ -676,53 +816,48 @@ const handleSend = async () => {
         clearTimeout(slowTimer);
         const lastMsg = messages.value[messages.value.length - 1];
         if (lastMsg && lastMsg.role === 'ai') {
-          completeThinking(lastMsg);
-          lastMsg.thinkingCollapsed = true;
-          if (lastMsg.loading) lastMsg.loading = false;
-          lastMsg.content += token;
-          scrollToBottom();
+          lastMsg.pendingContent = (lastMsg.pendingContent || '') + token;
         }
       },
       () => {
         emit('refresh');
         const lastMsg = messages.value[messages.value.length - 1];
-        completeThinking(lastMsg);
-        if (lastMsg && lastMsg.role === 'ai' && inputMudle.value === 2) {
-          handleRead(lastMsg.content, messages.value.length - 1);
-        }
+        finishThinkingAfterQueue(lastMsg).then(() => {
+          if (lastMsg && lastMsg.role === 'ai' && inputMudle.value === 2) {
+            handleRead(lastMsg.content, messages.value.length - 1);
+          }
+        });
         fetchSessions();
       },
       (error) => {
         clearTimeout(slowTimer);
         const lastMsg = messages.value[messages.value.length - 1];
         if (lastMsg && lastMsg.loading) {
-          failThinking(lastMsg);
+          finishThinkingWithFailure(lastMsg);
           lastMsg.thinkingCollapsed = false;
           lastMsg.loading = false;
           lastMsg.content = error || '抱歉，网络开小差了，请重试。';
         }
       },
       () => {
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai') {
+          enqueueSseProgress(lastMsg, '完成：发送消息', progressRunId);
+        }
         emit('refresh');
         fetchSessions();
       },
       (progress) => {
         const lastMsg = messages.value[messages.value.length - 1];
         if (lastMsg && lastMsg.role === 'ai') {
-          if (!lastMsg.thinking) lastMsg.thinking = [];
-          if (lastMsg.thinking[lastMsg.thinking.length - 1] !== progress) {
-            lastMsg.thinking.push(progress);
-          }
-          scrollToBottom();
+          enqueueSseProgress(lastMsg, progress, progressRunId);
         }
       },
       (responseTimeMs) => {
         const lastMsg = messages.value[messages.value.length - 1];
         if (lastMsg && lastMsg.role === 'ai') {
           lastMsg.responseTimeMs = responseTimeMs;
-          completeThinking(lastMsg);
-          lastMsg.thinkingCollapsed = true;
-          scrollToBottom();
+          finishThinkingAfterQueue(lastMsg);
         }
       }
     );
@@ -747,7 +882,7 @@ const handleSend = async () => {
 onMounted(async () => {
   thinkingTimer = setInterval(() => {
     nowTime.value = Date.now();
-  }, 1000);
+  }, THINKING_TIMER_INTERVAL);
   if (isUserLoggedIn.value) {
     await fetchSessions();
     const routeSessionId = getRouteSessionId();
@@ -1030,6 +1165,22 @@ watch(currentSessionTitle, (title) => {
   content: "√";
   color: #16a34a;
   font-weight: 800;
+}
+
+.thinking-step.failed::before {
+  content: "!";
+  top: 9px;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  background: transparent;
+  color: #dc2626;
+  font-weight: 800;
+  line-height: 12px;
+}
+
+.thinking-step.failed {
+  color: #b42318;
 }
 
 .thinking-panel.completed .thinking-summary {

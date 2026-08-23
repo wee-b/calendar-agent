@@ -84,6 +84,40 @@ public class PlanDraftService {
         return draft.getDraftId();
     }
 
+    public String buildPreviewReply(Long draftId, String rawPlanJson) {
+        PlanDraftDTO plan = parseAndValidate(extractJson(rawPlanJson));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("**已生成规划草稿**");
+        if (draftId != null) {
+            sb.append("（draftId=").append(draftId).append("）");
+        }
+        sb.append("\n\n");
+
+        sb.append("- **目标**：").append(valueOrDefault(plan.getGoal(), "未命名规划")).append("\n");
+        if (plan.getStartDate() != null && plan.getEndDate() != null) {
+            sb.append("- **周期**：").append(plan.getStartDate()).append(" ~ ").append(plan.getEndDate()).append("\n");
+        }
+        sb.append("- **待办数**：").append(plan.getTodos().size()).append(" 个\n");
+        if (plan.getAnalysis() != null && !plan.getAnalysis().isBlank()) {
+            sb.append("- **规划说明**：").append(plan.getAnalysis()).append("\n");
+        }
+
+        sb.append("\n| 待办 | 日期 | 每日内容 |\n");
+        sb.append("| --- | --- | --- |\n");
+        for (PlanTodoDTO todo : plan.getTodos()) {
+            sb.append("| ")
+                    .append(escapeMarkdownTable(valueOrDefault(todo.getTitle(), "未命名待办")))
+                    .append(" | ")
+                    .append(formatDateRange(todo.getStartDate(), todo.getEndDate()))
+                    .append(" | ")
+                    .append(escapeMarkdownTable(valueOrDefault(todo.getDayContent(), todo.getTitle())))
+                    .append(" |\n");
+        }
+
+        return sb.toString().trim();
+    }
+
     @Transactional
     public PlanSyncResultVO syncDraft(PlanDraft draft) {
         if (!STATUS_PENDING.equals(draft.getStatus())) {
@@ -190,5 +224,26 @@ public class PlanDraftService {
 
     private boolean isValidColor(String color) {
         return color != null && COLOR_PATTERN.matcher(color).matches();
+    }
+
+    private String formatDateRange(LocalDate startDate, LocalDate endDate) {
+        if (startDate == null && endDate == null) return "";
+        if (startDate == null) return endDate.toString();
+        if (endDate == null || startDate.equals(endDate)) return startDate.toString();
+        return startDate + " ~ " + endDate;
+    }
+
+    private String valueOrDefault(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private String escapeMarkdownTable(String value) {
+        if (value == null) return "";
+        return value
+                .replace("\\", "\\\\")
+                .replace("|", "\\|")
+                .replace("\r\n", "<br>")
+                .replace("\n", "<br>")
+                .replace("\r", "<br>");
     }
 }

@@ -123,9 +123,7 @@ public class SupervisorTools {
                 ChatSessionContext.getSessionId(),
                 requirement,
                 planJson);
-        return "Plan draft saved. draftId=" + draftId + "\n"
-                + "Structured plan JSON follows. Show a concise preview to the user and ask whether to sync it to the calendar.\n"
-                + planJson;
+        return planDraftService.buildPreviewReply(draftId, planJson);
     }
 
     public String queryCalendar(String query) {
@@ -182,7 +180,8 @@ public class SupervisorTools {
                 .name("plan_task")
                 .description("""
                         Send a complex scheduling or preparation request to the Planner agent.
-                        The Planner returns structured JSON. After this tool runs, the JSON is saved as a pending plan draft.
+                        The Planner returns structured JSON internally; after this tool runs, the JSON is saved as a pending plan draft.
+                        This tool returns only a Markdown preview for the user, not the raw JSON.
                         Use this for multi-step plans that need user confirmation before calendar sync.
                         """)
                 .parameters(JsonObjectSchema.builder()
