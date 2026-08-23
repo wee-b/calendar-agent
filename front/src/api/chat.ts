@@ -13,6 +13,11 @@ export interface ChatResponseVO {
     aiAudioUrl?: string;
     intent?: string;
     executeResult?: string;
+    needDispatchAgent?: boolean;
+    dispatchType?: string;
+    currentAgent?: string;
+    nextAgent?: string;
+    flowStage?: string;
 }
 
 export interface ChatHistoryItemVO {

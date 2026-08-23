@@ -32,11 +32,10 @@ public class PlanDraftService {
     private static final String STATUS_EXPIRED = "expired";
     private static final Pattern COLOR_PATTERN = Pattern.compile("^#[0-9a-fA-F]{6}$");
     private static final List<String> CONFIRM_WORDS = List.of(
-            "\u53ef\u4ee5", "\u786e\u8ba4", "\u540c\u6b65", "\u6dfb\u52a0",
-            "\u5e2e\u6211\u6dfb\u52a0", "\u6dfb\u52a0\u5230\u65e5\u5386",
-            "\u52a0\u5165\u65e5\u5386", "\u5c31\u6309\u8fd9\u4e2a",
-            "\u6ca1\u95ee\u9898", "\u597d\u7684", "\u597d", "\u884c",
-            "ok", "OK", "yes", "Yes");
+            "可以", "确认", "同步", "添加",
+            "帮我添加", "添加到日历", "加入日历", "就按这个",
+            "没问题", "好的", "好", "行",
+            "需要", "是的", "对", "可以的", "ok", "OK", "yes", "Yes");
 
     @Autowired
     private PlanDraftMapper planDraftMapper;
@@ -96,10 +95,8 @@ public class PlanDraftService {
         result.setDraftId(draft.getDraftId());
         result.setGoal(plan.getGoal());
 
-        for (PlanTodoDTO item : plan.getTodos()) {
-            TodoVO created = todoService.create(toCreateDTO(item));
-            result.getCreatedTodos().add(created);
-        }
+        result.getCreatedTodos().addAll(todoService.batchCreate(
+                plan.getTodos().stream().map(this::toCreateDTO).toList()));
 
         result.setCreatedCount(result.getCreatedTodos().size());
         draft.setStatus(STATUS_SYNCED);
@@ -109,11 +106,11 @@ public class PlanDraftService {
 
     public String buildSyncReply(PlanSyncResultVO result) {
         StringBuilder sb = new StringBuilder();
-        sb.append("\u5df2\u540c\u6b65\u5230\u65e5\u5386\uff0c\u5171\u521b\u5efa ")
+        sb.append("已同步到日历，共创建 ")
                 .append(result.getCreatedCount())
-                .append(" \u4e2a\u5f85\u529e");
+                .append(" 个待办");
         if (result.getGoal() != null && !result.getGoal().isBlank()) {
-            sb.append("\uff1a").append(result.getGoal());
+            sb.append("：").append(result.getGoal());
         }
         sb.append("\n");
 

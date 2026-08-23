@@ -116,26 +116,35 @@ public class SupervisorTools {
         return supervisorToolSpecs;
     }
 
+    public String planTask(String requirement) {
+        String planJson = plannerAgent.execute(buildPlannerRagContext(requirement) + requirement);
+        Long draftId = planDraftService.savePendingDraft(
+                LoginUserContext.getUserId(),
+                ChatSessionContext.getSessionId(),
+                requirement,
+                planJson);
+        return "Plan draft saved. draftId=" + draftId + "\n"
+                + "Structured plan JSON follows. Show a concise preview to the user and ask whether to sync it to the calendar.\n"
+                + planJson;
+    }
+
+    public String queryCalendar(String query) {
+        return queryAgent.execute(query);
+    }
+
+    public String executeTask(String instruction) {
+        return executorAgent.execute(instruction);
+    }
+
     public String executeSupervisorTool(String toolName, String argumentsJson) {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> args = mapper.readValue(argumentsJson, Map.class);
 
             return switch (toolName) {
-                case "plan_task" -> {
-                    String requirement = (String) args.get("requirement");
-                    String planJson = plannerAgent.execute(buildPlannerRagContext(requirement) + requirement);
-                    Long draftId = planDraftService.savePendingDraft(
-                            LoginUserContext.getUserId(),
-                            ChatSessionContext.getSessionId(),
-                            requirement,
-                            planJson);
-                    yield "Plan draft saved. draftId=" + draftId + "\n"
-                            + "Structured plan JSON follows. Show a concise preview to the user and ask whether to sync it to the calendar.\n"
-                            + planJson;
-                }
-                case "query_calendar" -> queryAgent.execute((String) args.get("query"));
-                case "execute_task" -> executorAgent.execute((String) args.get("instruction"));
+                case "plan_task" -> planTask((String) args.get("requirement"));
+                case "query_calendar" -> queryCalendar((String) args.get("query"));
+                case "execute_task" -> executeTask((String) args.get("instruction"));
                 default -> "Unknown supervisor tool: " + toolName;
             };
         } catch (Exception e) {

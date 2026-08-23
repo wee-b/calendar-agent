@@ -59,6 +59,7 @@ public class RagService {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
 
+    private volatile boolean qdrantAvailable = true;
 
 
     private final AtomicReference<IndexSearcher> bm25Searcher = new AtomicReference<>();
@@ -149,7 +150,12 @@ public class RagService {
             }
             return docs;
         } catch (Exception e) {
-            log.error("[RAG] Qdrant 全量查询失败: {}", e.getMessage());
+            if (isQdrantCollectionMissing(e)) {
+                qdrantAvailable = false;
+                log.warn("[RAG] Qdrant collection is missing. Dense retrieval disabled for this process.");
+            } else {
+                log.warn("[RAG] Qdrant full scan failed: {}", e.getMessage());
+            }
             return List.of();
         }
     }
@@ -254,6 +260,10 @@ public class RagService {
     // ========================================================================
 
     List<RagHit> searchDense(String query) {
+        if (!qdrantAvailable) {
+            return List.of();
+        }
+
         List<Float> embedding = embedQuery(query);
         if (embedding == null || embedding.isEmpty()) return List.of();
 
@@ -284,9 +294,19 @@ public class RagService {
             }
             return hits;
         } catch (Exception e) {
-            log.warn("[RAG] Qdrant 语义搜索失败: {}", e.getMessage());
+            if (isQdrantCollectionMissing(e)) {
+                qdrantAvailable = false;
+                log.warn("[RAG] Qdrant collection is missing. Dense retrieval disabled for this process.");
+            } else {
+                log.warn("[RAG] Qdrant dense search failed: {}", e.getMessage());
+            }
             return List.of();
         }
+    }
+
+    private boolean isQdrantCollectionMissing(Exception e) {
+        String message = e.getMessage();
+        return message != null && message.contains("NOT_FOUND") && message.contains("Collection");
     }
 
     private static String getPayloadString(Map<String, Value> payload, String key) {

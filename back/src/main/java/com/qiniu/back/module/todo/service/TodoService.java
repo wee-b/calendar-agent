@@ -12,6 +12,8 @@ public interface TodoService {
 
     TodoVO create(TodoCreateDTO request);
 
+    List<TodoVO> batchCreate(List<TodoCreateDTO> requests);
+
     List<TodoVO> listByUser();
 
     TodoVO update(Long todoId, TodoUpdateDTO request);

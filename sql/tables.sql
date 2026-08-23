@@ -166,6 +166,31 @@ CREATE TABLE `yl_plan_draft`
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='plan draft table';
 
 
+-- yl_agent_flow_state
+DROP TABLE IF EXISTS `yl_agent_flow_state`;
+
+CREATE TABLE `yl_agent_flow_state`
+(
+    `state_id`        BIGINT       NOT NULL AUTO_INCREMENT COMMENT 'Agent flow state id',
+    `user_id`         BIGINT       NOT NULL COMMENT 'User id',
+    `session_id`      VARCHAR(64)  NOT NULL COMMENT 'Chat session id',
+    `current_agent`   VARCHAR(32)  NOT NULL DEFAULT 'SUPERVISOR' COMMENT 'Current owner: SUPERVISOR/PLANNER/EXECUTOR',
+    `next_agent`      VARCHAR(32)  NOT NULL DEFAULT 'SUPERVISOR' COMMENT 'Agent to run after user confirms',
+    `stage`           VARCHAR(32)  NOT NULL DEFAULT 'IDLE' COMMENT 'IDLE/WAIT_CONFIRM/WAIT_FEEDBACK',
+    `pending_task`    TEXT         NULL DEFAULT NULL COMMENT 'Pending user task or refined instruction',
+    `pending_payload` MEDIUMTEXT   NULL DEFAULT NULL COMMENT 'Agent output payload, such as planner result',
+    `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Created time',
+    `update_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Updated time',
+
+    PRIMARY KEY (`state_id`),
+    UNIQUE KEY `uk_user_session` (`user_id`, `session_id`),
+    KEY `idx_user_update_time` (`user_id`, `update_time`),
+    CONSTRAINT `fk_agent_flow_state_user`
+        FOREIGN KEY (`user_id`)
+            REFERENCES `yl_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent flow state table';
+
+
 -- yl_ai_dialogue（对话记录表）
 DROP TABLE IF EXISTS `yl_ai_dialogue`;
 

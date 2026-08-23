@@ -9,4 +9,9 @@ public class ChatResponseVO {
     private String aiAudioUrl;
     private String intent;
     private String executeResult;
+    private Boolean needDispatchAgent;
+    private String dispatchType;
+    private String currentAgent;
+    private String nextAgent;
+    private String flowStage;
 }
