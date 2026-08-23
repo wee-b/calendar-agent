@@ -15,7 +15,7 @@
       <nav class="sidebar-nav">
         <button
           class="nav-btn"
-          :class="{ active: route.path === '/conversation' }"
+          :class="{ active: isNewConversationRoute }"
           @click="router.push('/conversation')"
         >
           <span class="nav-icon compose-icon"></span>
@@ -88,6 +88,7 @@
         <router-view
           :is-todo-expanded="isTodoExpanded"
           @refresh="handleRefresh"
+          @title-change="handleChatTitleChange"
         />
       </main>
     </div>
@@ -98,7 +99,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { tokenRef, clearAuth, userInfoRef } from '../../utils/auth';
@@ -119,6 +120,8 @@ const showHistorySidebar = ref(true);
 const isTodoExpanded = ref(false);
 const userMenuRoot = ref<HTMLElement | null>(null);
 const sidebarChatRef = ref<InstanceType<typeof SidebarChatList> | null>(null);
+const isNewConversationRoute = computed(() => route.path === '/conversation' && !route.query.sessionId);
+const currentChatTitle = ref('新对话');
 
 const userName = computed(() => {
   if (!hasToken.value) return '去登录';
@@ -128,7 +131,8 @@ const userInitial = computed(() => userName.value.slice(0, 1).toUpperCase());
 const navTitle = computed(() => {
   if (route.path === '/calendar-view') return '日历';
   if (route.path === '/today') return '本日事项';
-  return hasToken.value ? '新对话' : '语音助手';
+  if (!hasToken.value) return '语音助手';
+  return route.query.sessionId ? currentChatTitle.value : '新对话';
 });
 
 const handleLoginSuccess = () => {
@@ -137,6 +141,10 @@ const handleLoginSuccess = () => {
 
 const handleRefresh = () => {
   sidebarChatRef.value?.fetchSessions();
+};
+
+const handleChatTitleChange = (title: string) => {
+  currentChatTitle.value = title || '新对话';
 };
 
 const handleProfileEntry = () => {
@@ -178,6 +186,15 @@ const handleOutsideClick = (event: MouseEvent) => {
     showUserMenu.value = false;
   }
 };
+
+watch(
+  () => [route.path, route.query.sessionId],
+  () => {
+    if (route.path !== '/conversation' || !route.query.sessionId) {
+      currentChatTitle.value = '新对话';
+    }
+  }
+);
 
 onMounted(() => {
   document.addEventListener('click', handleOutsideClick);

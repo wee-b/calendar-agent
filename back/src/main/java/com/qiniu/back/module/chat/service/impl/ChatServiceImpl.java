@@ -271,7 +271,7 @@ public class ChatServiceImpl implements ChatService {
         List<AiDialogue> all = aiDialogueMapper.selectList(
                 new LambdaQueryWrapper<AiDialogue>()
                         .eq(AiDialogue::getUserId, userId)
-                        .orderByAsc(AiDialogue::getCreateTime));
+                        .orderByDesc(AiDialogue::getCreateTime));
 
         Map<String, List<AiDialogue>> grouped = all.stream()
                 .collect(java.util.stream.Collectors.groupingBy(
@@ -281,11 +281,15 @@ public class ChatServiceImpl implements ChatService {
         for (Map.Entry<String, List<AiDialogue>> entry : grouped.entrySet()) {
             String sid = entry.getKey();
             List<AiDialogue> msgs = entry.getValue();
-            String title = msgs.stream()
-                    .filter(d -> "user".equals(d.getRole()) && d.getUserText() != null)
-                    .findFirst()
-                    .map(d -> d.getUserText().length() > 30 ? d.getUserText().substring(0, 30) + "..." : d.getUserText())
-                    .orElse("新对话");
+            String title = "新对话";
+            for (int i = msgs.size() - 1; i >= 0; i--) {
+                AiDialogue dialogue = msgs.get(i);
+                if ("user".equals(dialogue.getRole()) && dialogue.getUserText() != null) {
+                    String userText = dialogue.getUserText();
+                    title = userText.length() > 30 ? userText.substring(0, 30) + "..." : userText;
+                    break;
+                }
+            }
             result.add(new ChatSessionVO(sid, title, msgs.get(0).getCreateTime(), msgs.size()));
         }
         return result;

@@ -49,7 +49,8 @@ export const streamChatAPI = async (
     data: ChatRequestDTO,
     onToken: (token: string) => void,
     onDone: () => void,
-    onError: (error: string) => void
+    onError: (error: string) => void,
+    onOpen?: () => void
 ): Promise<void> => {
     const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
     const token = getToken();
@@ -75,6 +76,8 @@ export const streamChatAPI = async (
             onError(text || `请求失败 (${response.status})`);
             return;
         }
+
+        onOpen?.();
 
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();

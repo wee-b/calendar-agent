@@ -149,7 +149,10 @@ import {
 } from '../../../api/chat';
 import { tokenRef } from '../../../utils/auth';
 
-const emit = defineEmits<{ (e: 'refresh'): void }>();
+const emit = defineEmits<{
+  (e: 'refresh'): void;
+  (e: 'title-change', title: string): void;
+}>();
 const route = useRoute();
 const router = useRouter();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
@@ -174,6 +177,8 @@ const inputMudle = ref(1); // 1-鎵嬪姩锛?-璇煶
 let recognition: any = null;
 let confirmRecognition: any = null;
 let sendGuard = false;
+let pendingRouteSessionId: string | null = null;
+let historyLoadToken = 0;
 let voiceTimer: any = null;
 const VOICE_TIMEOUT = 10 * 60 * 1000; // 10鍒嗛挓
 const dbBars = ref([4, 4, 4, 4, 4, 4, 4, 4, 4, 4]);
@@ -184,7 +189,9 @@ let animFrameId: number | null = null;
 
 const currentSessionTitle = computed(() => {
   const session = sessions.value.find(s => s.sessionId === currentSessionId.value);
-  return session?.title || '新对话';
+  const firstUserMessage = messages.value.find(msg => isUserRole(msg.role) && msg.content.trim());
+  const fallbackTitle = firstUserMessage?.content.trim();
+  return session?.title || (fallbackTitle ? (fallbackTitle.length > 30 ? `${fallbackTitle.slice(0, 30)}...` : fallbackTitle) : '新对话');
 });
 
 const isUserRole = (role: string) => role.toLowerCase() === 'user';
@@ -199,11 +206,15 @@ const scrollToBottom = async () => {
 const toggleDropdown = () => { if (isUserLoggedIn.value) isDropdownOpen.value = !isDropdownOpen.value; };
 
 // ================= 浼氳瘽绠＄悊 =================
+const sortSessionsByRecent = (list: ChatSessionVO[]) => {
+  return [...list].sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime());
+};
+
 const fetchSessions = async () => {
   if (!isUserLoggedIn.value) return;
   try {
     const res = await getSessionsAPI();
-    sessions.value = res || [];
+    sessions.value = sortSessionsByRecent(res || []);
   } catch (error) {}
 };
 
@@ -213,10 +224,12 @@ const getRouteSessionId = () => {
 };
 
 const loadSessionById = async (sessionId: string) => {
+  const loadToken = ++historyLoadToken;
   currentSessionId.value = sessionId;
   messages.value = [];
   try {
     const history = await getHistoryAPI(sessionId);
+    if (loadToken !== historyLoadToken || sessionId !== currentSessionId.value) return;
     messages.value = history.map(h => ({ role: h.role, content: h.content }));
     scrollToBottom();
   } catch (error) {}
@@ -237,14 +250,27 @@ const selectSession = async (session: ChatSessionVO) => {
 const createNewSession = async () => {
   if (!isUserLoggedIn.value) { ElMessage.warning('请先登录'); return; }
   isDropdownOpen.value = false;
+  currentSessionId.value = null;
   messages.value = [];
+  historyLoadToken++;
   await router.replace({ path: '/conversation' });
+};
+
+const startSessionForSend = async (title: string) => {
   try {
     const res = await newSessionAPI();
     currentSessionId.value = res.sessionId || Object.values(res)[0];
+    if (!currentSessionId.value) return false;
+    pendingRouteSessionId = currentSessionId.value;
+    const displayTitle = title.length > 30 ? `${title.slice(0, 30)}...` : title;
+    sessions.value = [
+      { sessionId: currentSessionId.value, title: displayTitle || '新对话', createTime: new Date().toISOString(), messageCount: 0 },
+      ...sessions.value.filter(s => s.sessionId !== currentSessionId.value)
+    ];
     await router.replace({ path: '/conversation', query: { sessionId: currentSessionId.value } });
-    await fetchSessions();
+    return true;
   } catch (error) {}
+  return false;
 };
 
 // ================= 鍒犻櫎鎿嶄綔 =================
@@ -525,9 +551,18 @@ const handleSend = async () => {
   text = text.replace(/发送[。！？，“”、；：\s]*$/g, '').trim();
   if (!text || isSending.value || !isUserLoggedIn.value) return;
 
+  isSending.value = true;
   if (!currentSessionId.value) {
-    await createNewSession();
-    if (!currentSessionId.value) return;
+    const started = await startSessionForSend(text);
+    if (!started) {
+      isSending.value = false;
+      return;
+    }
+  }
+  const activeSessionId = currentSessionId.value;
+  if (!activeSessionId) {
+    isSending.value = false;
+    return;
   }
 
   stopVoice();
@@ -536,7 +571,6 @@ const handleSend = async () => {
   scrollToBottom();
 
   messages.value.push({ role: 'ai', content: '', loading: true });
-  isSending.value = true;
   scrollToBottom();
 
   let slowTimer: any = null;
@@ -546,7 +580,7 @@ const handleSend = async () => {
     }, CHAT_TIMEOUT);
 
     await streamChatAPI(
-      { sessionId: currentSessionId.value, message: text },
+      { sessionId: activeSessionId, message: text },
       (token) => {
         clearTimeout(slowTimer);
         const lastMsg = messages.value[messages.value.length - 1];
@@ -571,6 +605,10 @@ const handleSend = async () => {
           lastMsg.loading = false;
           lastMsg.content = error || '抱歉，网络开小差了，请重试。';
         }
+      },
+      () => {
+        emit('refresh');
+        fetchSessions();
       }
     );
   } finally {
@@ -630,13 +668,23 @@ watch(
     if (!isUserLoggedIn.value) return;
     const routeSessionId = getRouteSessionId();
     if (routeSessionId) {
+      if (routeSessionId === pendingRouteSessionId) {
+        pendingRouteSessionId = null;
+        currentSessionId.value = routeSessionId;
+        return;
+      }
       await loadSessionById(routeSessionId);
     } else {
+      historyLoadToken++;
       currentSessionId.value = null;
       messages.value = [];
     }
   }
 );
+
+watch(currentSessionTitle, (title) => {
+  emit('title-change', title);
+}, { immediate: true });
 </script>
 
 <style scoped>

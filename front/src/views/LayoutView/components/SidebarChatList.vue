@@ -51,11 +51,15 @@ const currentSessionId = ref<string | null>(null);
 const showDeleteConfirm = ref(false);
 const pendingDeleteId = ref<string | null>(null);
 
+const sortSessionsByRecent = (list: ChatSessionVO[]) => {
+  return [...list].sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime());
+};
+
 const fetchSessions = async () => {
   if (!isUserLoggedIn.value) return;
   try {
     const res = await getSessionsAPI();
-    sessions.value = res || [];
+    sessions.value = sortSessionsByRecent(res || []);
   } catch {}
 };
 
