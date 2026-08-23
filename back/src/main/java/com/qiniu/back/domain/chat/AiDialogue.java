@@ -1,6 +1,7 @@
 package com.qiniu.back.domain.chat;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -18,6 +19,8 @@ public class AiDialogue {
     private String userText;
     private String aiResult;
     private String aiAudioUrl;
+    @TableField("response_time_ms")
+    private Long responseTimeMs;
     private String intent;
     private String executeResult;
     private Integer deletedFlag;

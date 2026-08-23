@@ -53,8 +53,28 @@
           <span class="avatar">{{ isUserRole(msg.role) ? '我' : 'AI' }}</span>
 
           <div class="bubble-content">
-            <p v-if="!msg.loading">{{ msg.content }}</p>
-            <div v-else class="typing-indicator">
+            <div v-if="msg.thinking?.length" class="thinking-panel" :class="{ completed: msg.thinkingDone }">
+              <button class="thinking-summary" @click="toggleThinking(index)">
+                <span>{{ thinkingSummary(msg) }}</span>
+                <span class="thinking-arrow" :class="{ open: !msg.thinkingCollapsed }">⌄</span>
+              </button>
+              <div v-if="!msg.thinkingCollapsed" class="thinking-steps">
+                <div
+                    v-for="(step, stepIndex) in msg.thinking"
+                    :key="`${index}-${stepIndex}`"
+                    class="thinking-step"
+                    :class="{ done: msg.thinkingDone }"
+                >
+                  {{ step }}
+                </div>
+              </div>
+            </div>
+            <div v-else-if="!isUserRole(msg.role) && msg.responseTimeMs != null" class="response-time">
+              耗时 {{ formatResponseTime(msg.responseTimeMs) }}
+            </div>
+
+            <p v-if="msg.content">{{ msg.content }}</p>
+            <div v-else-if="msg.loading" class="typing-indicator">
               <span></span><span></span><span></span>
             </div>
 
@@ -141,7 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from 'vue';
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
@@ -157,7 +177,17 @@ const route = useRoute();
 const router = useRouter();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
 
-interface ChatMessage { role: string; content: string; loading?: boolean; }
+interface ChatMessage {
+  role: string;
+  content: string;
+  loading?: boolean;
+  thinking?: string[];
+  thinkingCollapsed?: boolean;
+  thinkingDone?: boolean;
+  thinkingStartedAt?: number;
+  thinkingFinishedAt?: number;
+  responseTimeMs?: number | null;
+}
 
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
@@ -180,6 +210,8 @@ let sendGuard = false;
 let pendingRouteSessionId: string | null = null;
 let historyLoadToken = 0;
 let voiceTimer: any = null;
+let thinkingTimer: any = null;
+const nowTime = ref(Date.now());
 const VOICE_TIMEOUT = 10 * 60 * 1000; // 10鍒嗛挓
 const dbBars = ref([4, 4, 4, 4, 4, 4, 4, 4, 4, 4]);
 let audioContext: AudioContext | null = null;
@@ -195,6 +227,52 @@ const currentSessionTitle = computed(() => {
 });
 
 const isUserRole = (role: string) => role.toLowerCase() === 'user';
+
+const formatDuration = (durationMs: number) => {
+  return `${(Math.max(0, durationMs) / 1000).toFixed(1)} 秒`;
+};
+
+const formatResponseTime = (durationMs: number) => {
+  return `${Math.max(0.1, durationMs / 1000).toFixed(1)} 秒`;
+};
+
+const thinkingSummary = (msg: ChatMessage) => {
+  if (msg.thinkingDone && msg.responseTimeMs != null) {
+    return `耗时 ${formatResponseTime(msg.responseTimeMs)}`;
+  }
+  const start = msg.thinkingStartedAt || nowTime.value;
+  const end = msg.thinkingFinishedAt || nowTime.value;
+  return msg.thinkingDone ? `耗时 ${formatDuration(end - start)}` : `思考中 ${formatDuration(nowTime.value - start)}`;
+};
+
+const toggleThinking = (index: number) => {
+  const msg = messages.value[index];
+  if (msg?.thinking?.length) {
+    msg.thinkingCollapsed = !msg.thinkingCollapsed;
+  }
+};
+
+const completeThinkingStep = (step: string) => {
+  return step
+      .replace(/^已收到消息，正在准备处理\.\.\.$/, '已收到消息成功 √')
+      .replace(/^已收到消息，正在理解你的需求\.\.\.$/, '已理解你的需求成功 √')
+      .replace(/^正在(.+?)(?:\.\.\.)?$/, '已$1成功 √');
+};
+
+const completeThinking = (msg?: ChatMessage) => {
+  if (!msg || !msg.thinking?.length) return;
+  if (msg.thinkingDone) return;
+  msg.thinking = msg.thinking.map(completeThinkingStep);
+  msg.thinkingDone = true;
+  msg.thinkingFinishedAt = Date.now();
+};
+
+const failThinking = (msg?: ChatMessage) => {
+  if (!msg || !msg.thinking?.length || msg.thinkingDone) return;
+  msg.thinking = msg.thinking.map(step => step.replace(/^正在(.+?)(?:\.\.\.)?$/, '$1失败'));
+  msg.thinkingDone = true;
+  msg.thinkingFinishedAt = Date.now();
+};
 
 const scrollToBottom = async () => {
   await nextTick();
@@ -230,7 +308,7 @@ const loadSessionById = async (sessionId: string) => {
   try {
     const history = await getHistoryAPI(sessionId);
     if (loadToken !== historyLoadToken || sessionId !== currentSessionId.value) return;
-    messages.value = history.map(h => ({ role: h.role, content: h.content }));
+    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -242,7 +320,7 @@ const selectSession = async (session: ChatSessionVO) => {
   router.replace({ path: '/conversation', query: { sessionId: session.sessionId } });
   try {
     const history = await getHistoryAPI(session.sessionId);
-    messages.value = history.map(h => ({ role: h.role, content: h.content }));
+    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -345,7 +423,7 @@ const handleDeleteLastRound = async () => {
     await deleteLastRoundAPI(currentSessionId.value);
     ElMessage.success('已撤回上一轮对话');
     const history = await getHistoryAPI(currentSessionId.value);
-    messages.value = history.map(h => ({ role: h.role, content: h.content }));
+    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -570,7 +648,14 @@ const handleSend = async () => {
   inputText.value = '';
   scrollToBottom();
 
-  messages.value.push({ role: 'ai', content: '', loading: true });
+  messages.value.push({
+    role: 'ai',
+    content: '',
+    loading: true,
+    thinking: ['已收到消息，正在准备处理...'],
+    thinkingCollapsed: false,
+    thinkingStartedAt: Date.now()
+  });
   scrollToBottom();
 
   let slowTimer: any = null;
@@ -585,6 +670,8 @@ const handleSend = async () => {
         clearTimeout(slowTimer);
         const lastMsg = messages.value[messages.value.length - 1];
         if (lastMsg && lastMsg.role === 'ai') {
+          completeThinking(lastMsg);
+          lastMsg.thinkingCollapsed = true;
           if (lastMsg.loading) lastMsg.loading = false;
           lastMsg.content += token;
           scrollToBottom();
@@ -593,6 +680,7 @@ const handleSend = async () => {
       () => {
         emit('refresh');
         const lastMsg = messages.value[messages.value.length - 1];
+        completeThinking(lastMsg);
         if (lastMsg && lastMsg.role === 'ai' && inputMudle.value === 2) {
           handleRead(lastMsg.content, messages.value.length - 1);
         }
@@ -602,6 +690,8 @@ const handleSend = async () => {
         clearTimeout(slowTimer);
         const lastMsg = messages.value[messages.value.length - 1];
         if (lastMsg && lastMsg.loading) {
+          failThinking(lastMsg);
+          lastMsg.thinkingCollapsed = false;
           lastMsg.loading = false;
           lastMsg.content = error || '抱歉，网络开小差了，请重试。';
         }
@@ -609,6 +699,25 @@ const handleSend = async () => {
       () => {
         emit('refresh');
         fetchSessions();
+      },
+      (progress) => {
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai') {
+          if (!lastMsg.thinking) lastMsg.thinking = [];
+          if (lastMsg.thinking[lastMsg.thinking.length - 1] !== progress) {
+            lastMsg.thinking.push(progress);
+          }
+          scrollToBottom();
+        }
+      },
+      (responseTimeMs) => {
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai') {
+          lastMsg.responseTimeMs = responseTimeMs;
+          completeThinking(lastMsg);
+          lastMsg.thinkingCollapsed = true;
+          scrollToBottom();
+        }
       }
     );
   } finally {
@@ -630,6 +739,9 @@ const handleSend = async () => {
 
 // ================= 鐢熷懡鍛ㄦ湡 =================
 onMounted(async () => {
+  thinkingTimer = setInterval(() => {
+    nowTime.value = Date.now();
+  }, 1000);
   if (isUserLoggedIn.value) {
     await fetchSessions();
     const routeSessionId = getRouteSessionId();
@@ -640,6 +752,10 @@ onMounted(async () => {
       messages.value = [];
     }
   }
+});
+
+onUnmounted(() => {
+  if (thinkingTimer) clearInterval(thinkingTimer);
 });
 
 watch(isUserLoggedIn, async (newVal) => {
@@ -750,6 +866,90 @@ watch(currentSessionTitle, (title) => {
 .user-msg .bubble-content { background-color: #eaddc4; border-bottom-right-radius: 2px; }
 .ai-msg { align-self: flex-start; align-items: flex-start; }
 .ai-msg .bubble-content { background-color: #fcf9ee; border: 1px solid #d3c4a1; border-bottom-left-radius: 2px; }
+
+.thinking-panel {
+  margin-bottom: 14px;
+}
+
+.thinking-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.thinking-arrow {
+  display: inline-block;
+  color: #98a2b3;
+  font-size: 14px;
+  transform: rotate(-90deg);
+  transition: transform 0.16s ease;
+}
+
+.thinking-arrow.open {
+  transform: rotate(0deg);
+}
+
+.thinking-steps {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #e4e7ec;
+}
+
+.thinking-step {
+  position: relative;
+  padding-left: 20px;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.thinking-step::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  width: 12px;
+  height: 12px;
+  color: #2563eb;
+  font-size: 12px;
+  line-height: 12px;
+  text-align: center;
+}
+
+.thinking-step:not(.done)::before {
+  width: 6px;
+  height: 6px;
+  top: 10px;
+  left: 3px;
+  border-radius: 50%;
+  background: #2563eb;
+}
+
+.thinking-step.done::before {
+  content: "√";
+  color: #16a34a;
+  font-weight: 800;
+}
+
+.thinking-panel.completed .thinking-summary {
+  color: #667085;
+}
+
+.response-time {
+  margin-bottom: 10px;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1.4;
+}
 
 /* 姘旀场宸ュ叿鏍?*/
 .msg-actions { display: flex; gap: 16px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed #eaddc4; }

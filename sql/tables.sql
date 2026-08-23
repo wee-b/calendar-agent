@@ -205,6 +205,7 @@ CREATE TABLE `yl_ai_dialogue`
     `user_text`     TEXT         NULL DEFAULT NULL COMMENT '用户输入文本（语音转文字）',
     `ai_result`     TEXT         NULL DEFAULT NULL COMMENT 'AI返回文本',
     `ai_audio_url`  VARCHAR(500) NULL DEFAULT NULL COMMENT 'AI回复TTS音频URL',
+    `response_time_ms` BIGINT    NULL DEFAULT NULL COMMENT 'AI完整响应耗时，单位毫秒',
 
     `intent`         VARCHAR(50)  NULL DEFAULT NULL COMMENT '识别意图：add_todo/delete_todo/query_todo/update_todo/chat',
     `execute_result` VARCHAR(255) NULL DEFAULT NULL COMMENT '执行结果摘要',

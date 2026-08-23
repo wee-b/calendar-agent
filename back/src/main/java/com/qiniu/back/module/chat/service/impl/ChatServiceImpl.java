@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 @Slf4j
 @Service
@@ -60,6 +61,7 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public ChatResponseVO chat(String sessionId, String message) {
+        long responseStartTime = System.currentTimeMillis();
         Long userId = LoginUserContext.getUserId();
         String sid = normalizeSessionId(sessionId);
 
@@ -74,30 +76,35 @@ public class ChatServiceImpl implements ChatService {
         }
         if (flowResult.isPresent()) {
             ChatDispatchResult result = flowResult.get();
-            saveDialogue(userId, sid, "assistant", null, result.aiResult());
-            return response(sid, result);
+            Long responseTimeMs = elapsedSince(responseStartTime);
+            saveDialogue(userId, sid, "assistant", null, result.aiResult(), responseTimeMs);
+            return response(sid, result, responseTimeMs);
         }
 
         if (planDraftService.isConfirmMessage(message)) {
             Optional<PlanDraft> pendingDraft = planDraftService.findLatestPending(userId, sid);
             if (pendingDraft.isPresent()) {
                 String aiResult = planDraftService.buildSyncReply(planDraftService.syncDraft(pendingDraft.get()));
-                saveDialogue(userId, sid, "assistant", null, aiResult);
+                Long responseTimeMs = elapsedSince(responseStartTime);
+                saveDialogue(userId, sid, "assistant", null, aiResult, responseTimeMs);
                 return response(sid, aiResult, true, "EXECUTE",
                         AgentFlowStateService.AGENT_EXECUTOR,
                         AgentFlowStateService.AGENT_SUPERVISOR,
-                        AgentFlowStateService.STAGE_IDLE);
+                        AgentFlowStateService.STAGE_IDLE,
+                        responseTimeMs);
             }
         }
 
         DirectCommandResult directResult = directCommandService.tryHandle(message);
         if (directResult.shouldReturnDirectly()) {
             String aiResult = directResult.reply();
-            saveDialogue(userId, sid, "assistant", null, aiResult);
+            Long responseTimeMs = elapsedSince(responseStartTime);
+            saveDialogue(userId, sid, "assistant", null, aiResult, responseTimeMs);
             return response(sid, aiResult, false, "DIRECT",
                     AgentFlowStateService.AGENT_SUPERVISOR,
                     AgentFlowStateService.AGENT_SUPERVISOR,
-                    AgentFlowStateService.STAGE_IDLE);
+                    AgentFlowStateService.STAGE_IDLE,
+                    responseTimeMs);
         }
 
         List<ChatMessage> history = buildReadonlyHistory(loadHistory(userId, sid, userDialogueId));
@@ -115,12 +122,14 @@ public class ChatServiceImpl implements ChatService {
             ChatSessionContext.remove();
         }
 
-        saveDialogue(userId, sid, "assistant", null, dispatchResult.aiResult());
-        return response(sid, dispatchResult);
+        Long responseTimeMs = elapsedSince(responseStartTime);
+        saveDialogue(userId, sid, "assistant", null, dispatchResult.aiResult(), responseTimeMs);
+        return response(sid, dispatchResult, responseTimeMs);
     }
 
     @Override
     public SseEmitter streamChat(String sessionId, String message) {
+        long responseStartTime = System.currentTimeMillis();
         Long userId = LoginUserContext.getUserId();
         String sid = normalizeSessionId(sessionId);
 
@@ -132,13 +141,17 @@ public class ChatServiceImpl implements ChatService {
                 LoginUserContext.setUserId(userId);
                 ChatSessionContext.setSessionId(sid);
                 try {
+                    sendProgress(emitter, "正在读取上一步待确认的任务...");
                     ChatDispatchResult result = handleExistingFlowState(userId, sid, message)
                             .orElse(new ChatDispatchResult("状态已过期，我们回到正常对话。", false, "NONE",
                                     AgentFlowStateService.AGENT_SUPERVISOR,
                                     AgentFlowStateService.AGENT_SUPERVISOR,
                                     AgentFlowStateService.STAGE_IDLE));
-                    saveDialogue(userId, sid, "assistant", null, result.aiResult());
+                    sendProgress(emitter, "正在整理回复...");
+                    Long responseTimeMs = elapsedSince(responseStartTime);
+                    saveDialogue(userId, sid, "assistant", null, result.aiResult(), responseTimeMs);
                     emitter.send(SseEmitter.event().data(result.aiResult()));
+                    sendResponseTime(emitter, responseTimeMs);
                     emitter.complete();
                 } catch (Exception e) {
                     log.error("Agent flow state handling failed", e);
@@ -158,9 +171,13 @@ public class ChatServiceImpl implements ChatService {
                 CompletableFuture.runAsync(() -> {
                     LoginUserContext.setUserId(userId);
                     try {
+                        sendProgress(emitter, "正在同步规划到日历...");
                         String aiResult = planDraftService.buildSyncReply(planDraftService.syncDraft(pendingDraft.get()));
-                        saveDialogue(userId, sid, "assistant", null, aiResult);
+                        sendProgress(emitter, "正在整理同步结果...");
+                        Long responseTimeMs = elapsedSince(responseStartTime);
+                        saveDialogue(userId, sid, "assistant", null, aiResult, responseTimeMs);
                         emitter.send(SseEmitter.event().data(aiResult));
+                        sendResponseTime(emitter, responseTimeMs);
                         emitter.complete();
                     } catch (Exception e) {
                         log.error("Plan draft sync failed", e);
@@ -179,9 +196,13 @@ public class ChatServiceImpl implements ChatService {
             CompletableFuture.runAsync(() -> {
                 LoginUserContext.setUserId(userId);
                 try {
+                    sendProgress(emitter, "已识别为快捷指令，正在处理...");
                     String aiResult = directResult.reply();
-                    saveDialogue(userId, sid, "assistant", null, aiResult);
+                    sendProgress(emitter, "正在整理回复...");
+                    Long responseTimeMs = elapsedSince(responseStartTime);
+                    saveDialogue(userId, sid, "assistant", null, aiResult, responseTimeMs);
                     emitter.send(SseEmitter.event().data(aiResult));
+                    sendResponseTime(emitter, responseTimeMs);
                     emitter.complete();
                 } catch (Exception e) {
                     log.error("Direct command failed", e);
@@ -200,9 +221,14 @@ public class ChatServiceImpl implements ChatService {
             LoginUserContext.setUserId(userId);
             ChatSessionContext.setSessionId(sid);
             try {
-                ChatDispatchResult dispatchResult = dispatchBySupervisor(userId, sid, message, history);
-                saveDialogue(userId, sid, "assistant", null, dispatchResult.aiResult());
+                sendProgress(emitter, "已收到消息，正在理解你的需求...");
+                ChatDispatchResult dispatchResult = dispatchBySupervisor(userId, sid, message, history,
+                        progress -> sendProgress(emitter, progress));
+                sendProgress(emitter, "正在整理最终回复...");
+                Long responseTimeMs = elapsedSince(responseStartTime);
+                saveDialogue(userId, sid, "assistant", null, dispatchResult.aiResult(), responseTimeMs);
                 emitter.send(SseEmitter.event().data(dispatchResult.aiResult()));
+                sendResponseTime(emitter, responseTimeMs);
                 emitter.complete();
             } catch (Exception e) {
                 log.error("Streaming agent orchestration failed", e);
@@ -216,6 +242,22 @@ public class ChatServiceImpl implements ChatService {
         emitter.onTimeout(() -> log.warn("SSE connection timeout"));
         emitter.onError(e -> log.error("SSE connection error", e));
         return emitter;
+    }
+
+    private void sendProgress(SseEmitter emitter, String message) {
+        try {
+            emitter.send(SseEmitter.event().name("progress").data(message));
+        } catch (Exception e) {
+            log.warn("SSE progress send failed: {}", message, e);
+        }
+    }
+
+    private void sendResponseTime(SseEmitter emitter, Long responseTimeMs) {
+        try {
+            emitter.send(SseEmitter.event().name("responseTime").data(responseTimeMs));
+        } catch (Exception e) {
+            log.warn("SSE response time send failed: {}", responseTimeMs, e);
+        }
     }
 
     @Override
@@ -237,7 +279,8 @@ public class ChatServiceImpl implements ChatService {
                         d.getDialogueId(),
                         d.getRole(),
                         d.getRole().equals("user") ? d.getUserText() : d.getAiResult(),
-                        d.getCreateTime()))
+                        d.getCreateTime(),
+                        d.getResponseTimeMs()))
                 .toList();
     }
 
@@ -328,15 +371,25 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private ChatResponseVO response(String sessionId, ChatDispatchResult result) {
+        return response(sessionId, result, null);
+    }
+
+    private ChatResponseVO response(String sessionId, ChatDispatchResult result, Long responseTimeMs) {
         return response(sessionId, result.aiResult(), result.needDispatchAgent(), result.dispatchType(),
-                result.currentAgent(), result.nextAgent(), result.flowStage());
+                result.currentAgent(), result.nextAgent(), result.flowStage(), responseTimeMs);
     }
 
     private ChatResponseVO response(String sessionId, String aiResult, Boolean needDispatchAgent, String dispatchType,
                                     String currentAgent, String nextAgent, String flowStage) {
+        return response(sessionId, aiResult, needDispatchAgent, dispatchType, currentAgent, nextAgent, flowStage, null);
+    }
+
+    private ChatResponseVO response(String sessionId, String aiResult, Boolean needDispatchAgent, String dispatchType,
+                                    String currentAgent, String nextAgent, String flowStage, Long responseTimeMs) {
         ChatResponseVO vo = new ChatResponseVO();
         vo.setSessionId(sessionId);
         vo.setAiResult(aiResult);
+        vo.setResponseTimeMs(responseTimeMs);
         vo.setNeedDispatchAgent(needDispatchAgent);
         vo.setDispatchType(dispatchType);
         vo.setCurrentAgent(currentAgent);
@@ -441,11 +494,18 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private ChatDispatchResult dispatchBySupervisor(Long userId, String sessionId, String message, List<ChatMessage> history) {
+        return dispatchBySupervisor(userId, sessionId, message, history, null);
+    }
+
+    private ChatDispatchResult dispatchBySupervisor(Long userId, String sessionId, String message,
+                                                    List<ChatMessage> history, Consumer<String> progress) {
+        if (progress != null) progress.accept("正在判断任务类型...");
         SupervisorDecision decision = agentOrchestrator.supervise(message, history);
         String dispatchType = decision.getDispatchType() == null ? "NONE" : decision.getDispatchType();
         String task = decision.getTask() == null || decision.getTask().isBlank() ? message : decision.getTask();
 
         if (!decision.isNeedDispatchAgent() || "NONE".equals(dispatchType)) {
+            if (progress != null) progress.accept("正在生成直接回复...");
             return new ChatDispatchResult(decision.getReply(), false, "NONE",
                     AgentFlowStateService.AGENT_SUPERVISOR,
                     AgentFlowStateService.AGENT_SUPERVISOR,
@@ -453,11 +513,15 @@ public class ChatServiceImpl implements ChatService {
         }
 
         return switch (dispatchType) {
-            case "QUERY" -> new ChatDispatchResult(supervisorTools.queryCalendar(task), true, "QUERY",
-                    AgentFlowStateService.AGENT_SUPERVISOR,
-                    AgentFlowStateService.AGENT_SUPERVISOR,
-                    AgentFlowStateService.STAGE_IDLE);
+            case "QUERY" -> {
+                if (progress != null) progress.accept("正在查询日程和待办数据...");
+                yield new ChatDispatchResult(supervisorTools.queryCalendar(task), true, "QUERY",
+                        AgentFlowStateService.AGENT_SUPERVISOR,
+                        AgentFlowStateService.AGENT_SUPERVISOR,
+                        AgentFlowStateService.STAGE_IDLE);
+            }
             case "EXECUTE" -> {
+                if (progress != null) progress.accept("正在确认需要执行的操作...");
                 agentFlowStateService.waitExecutorConfirm(userId, sessionId, task);
                 String reply = decision.getReply() == null || decision.getReply().isBlank()
                         ? "我理解为要执行：" + task + "\n确认要执行吗？"
@@ -468,6 +532,7 @@ public class ChatServiceImpl implements ChatService {
                         AgentFlowStateService.STAGE_WAIT_CONFIRM);
             }
             case "PLAN_CONFIRM" -> {
+                if (progress != null) progress.accept("正在整理规划任务并等待确认...");
                 agentFlowStateService.waitPlannerConfirm(userId, sessionId, task);
                 String reply = decision.getReply() == null || decision.getReply().isBlank()
                         ? "这是一个规划类任务，需要我来帮你规划一下吗？"
@@ -477,10 +542,13 @@ public class ChatServiceImpl implements ChatService {
                         AgentFlowStateService.AGENT_PLANNER,
                         AgentFlowStateService.STAGE_WAIT_CONFIRM);
             }
-            default -> new ChatDispatchResult(decision.getReply(), false, "NONE",
-                    AgentFlowStateService.AGENT_SUPERVISOR,
-                    AgentFlowStateService.AGENT_SUPERVISOR,
-                    AgentFlowStateService.STAGE_IDLE);
+            default -> {
+                if (progress != null) progress.accept("正在生成回复...");
+                yield new ChatDispatchResult(decision.getReply(), false, "NONE",
+                        AgentFlowStateService.AGENT_SUPERVISOR,
+                        AgentFlowStateService.AGENT_SUPERVISOR,
+                        AgentFlowStateService.STAGE_IDLE);
+            }
         };
     }
 
@@ -522,14 +590,24 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private Long saveDialogue(Long userId, String sessionId, String role, String userText, String aiResult) {
+        return saveDialogue(userId, sessionId, role, userText, aiResult, null);
+    }
+
+    private Long saveDialogue(Long userId, String sessionId, String role, String userText,
+                              String aiResult, Long responseTimeMs) {
         AiDialogue d = new AiDialogue();
         d.setUserId(userId);
         d.setSessionId(sessionId);
         d.setRole(role);
         d.setUserText(userText);
         d.setAiResult(aiResult);
+        d.setResponseTimeMs(responseTimeMs);
         aiDialogueMapper.insert(d);
         return d.getDialogueId();
+    }
+
+    private Long elapsedSince(long startTimeMs) {
+        return Math.max(1, System.currentTimeMillis() - startTimeMs);
     }
 
     private record ChatDispatchResult(String aiResult, boolean needDispatchAgent, String dispatchType,

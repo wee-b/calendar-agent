@@ -46,6 +46,9 @@
           <span class="avatar">{{ isUserRole(msg.role) ? '我' : 'AI' }}</span>
 
           <div class="bubble-content">
+            <div v-if="!isUserRole(msg.role) && msg.responseTimeMs != null" class="response-time">
+              耗时 {{ formatResponseTime(msg.responseTimeMs) }}
+            </div>
             <p v-if="!msg.loading">{{ msg.content }}</p>
             <div v-else class="typing-indicator">
               <span></span><span></span><span></span>
@@ -145,7 +148,7 @@ const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'refresh'): void }>();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
 
-interface ChatMessage { role: string; content: string; loading?: boolean; }
+interface ChatMessage { role: string; content: string; loading?: boolean; responseTimeMs?: number | null; }
 
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
@@ -180,6 +183,10 @@ const currentSessionTitle = computed(() => {
 
 const isUserRole = (role: string) => role.toLowerCase() === 'user';
 
+const formatResponseTime = (responseTimeMs: number) => {
+  return `${Math.max(0.1, responseTimeMs / 1000).toFixed(1)} 秒`;
+};
+
 const scrollToBottom = async () => {
   await nextTick();
   if (chatHistoryRef.value) {
@@ -204,7 +211,7 @@ const selectSession = async (session: ChatSessionVO) => {
   messages.value = [];
   try {
     const history = await getHistoryAPI(session.sessionId);
-    messages.value = history.map(h => ({ role: h.role, content: h.content }));
+    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -293,7 +300,7 @@ const handleDeleteLastRound = async () => {
     await deleteLastRoundAPI(currentSessionId.value);
     ElMessage.success('已撤回上一轮对话');
     const history = await getHistoryAPI(currentSessionId.value);
-    messages.value = history.map(h => ({ role: h.role, content: h.content }));
+    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -548,6 +555,14 @@ const handleSend = async () => {
           lastMsg.loading = false;
           lastMsg.content = error || '抱歉，网络开小差了，请重试。';
         }
+      },
+      undefined,
+      undefined,
+      (responseTimeMs) => {
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai') {
+          lastMsg.responseTimeMs = responseTimeMs;
+        }
       }
     );
   } finally {
@@ -638,6 +653,7 @@ watch(isUserLoggedIn, async (newVal) => {
 .avatar { font-size: 12px; color: #b5a992; font-weight: bold; }
 .bubble-content { border-radius: 12px; padding: 10px 14px; box-shadow: 0 2px 6px rgba(92, 75, 55, 0.05); }
 .bubble-content p { margin: 0; font-size: 14px; line-height: 1.5; color: #5c4b37; word-break: break-word; white-space: pre-wrap; }
+.response-time { margin-bottom: 8px; color: #667085; font-size: 13px; line-height: 1.4; }
 
 .user-msg { align-self: flex-end; align-items: flex-end; }
 .user-msg .bubble-content { background-color: #eaddc4; border-bottom-right-radius: 2px; }
