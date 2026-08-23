@@ -106,6 +106,9 @@ public class ChatServiceImpl implements ChatService {
                     AgentFlowStateService.STAGE_IDLE,
                     responseTimeMs);
         }
+        if (directResult.shouldFallbackToSupervisor()) {
+            log.info("[DirectCommand] fallback to supervisor: {}", directResult.reply());
+        }
 
         List<ChatMessage> history = buildReadonlyHistory(loadHistory(userId, sid, userDialogueId));
         ChatDispatchResult dispatchResult;
@@ -212,6 +215,9 @@ public class ChatServiceImpl implements ChatService {
                 }
             });
             return emitter;
+        }
+        if (directResult.shouldFallbackToSupervisor()) {
+            log.info("[DirectCommand] fallback to supervisor: {}", directResult.reply());
         }
 
         SseEmitter emitter = new SseEmitter(300_000L);

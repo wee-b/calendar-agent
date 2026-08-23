@@ -57,7 +57,7 @@ public class DirectCommandService {
 
         if (isDayQuery(text) && firstDate != null) {
             log.info("[DirectCommand] query day: {}", text);
-            return executeSafely(() -> queryDay(firstDate));
+            return executeSafely(() -> DirectCommandResult.handled(queryDay(firstDate)));
         }
 
         if (isCreateCommand(text)) {
@@ -65,7 +65,7 @@ public class DirectCommandService {
             String keyword = extractKeyword(text);
             if (keyword.isBlank()) return DirectCommandResult.fallback();
             log.info("[DirectCommand] create todo: {}", text);
-            return executeSafely(() -> createSingleDayTodo(firstDate, keyword));
+            return executeSafely(() -> DirectCommandResult.handled(createSingleDayTodo(firstDate, keyword)));
         }
 
         if (isDeleteWholeTodoCommand(text)) {
@@ -94,9 +94,9 @@ public class DirectCommandService {
         return DirectCommandResult.fallback();
     }
 
-    private DirectCommandResult executeSafely(Supplier<String> action) {
+    private DirectCommandResult executeSafely(Supplier<DirectCommandResult> action) {
         try {
-            return DirectCommandResult.handled(action.get());
+            return action.get();
         } catch (Exception e) {
             log.warn("[DirectCommand] execution failed, stop fast path: {}", e.getMessage(), e);
             return DirectCommandResult.failed("我已经理解你的操作意图，但直接执行时失败了：" + e.getMessage());
@@ -129,52 +129,55 @@ public class DirectCommandService {
         return "已添加 " + date.format(DATE_FORMATTER) + " 的「" + title + "」。";
     }
 
-    private String removeTodoDayByTitle(LocalDate date, String keyword) {
+    private DirectCommandResult removeTodoDayByTitle(LocalDate date, String keyword) {
         List<TodoMatch> matches = findTodosByDate(date, keyword);
         if (matches.isEmpty()) {
-            return "未找到 " + date.format(DATE_FORMATTER) + " 包含「" + keyword + "」的待办。";
+            return DirectCommandResult.supervisorFallback(
+                    "No todo matched " + date.format(DATE_FORMATTER) + " keyword=" + keyword);
         }
         if (matches.size() > 1) {
-            return buildAmbiguousReply(date, keyword, matches);
+            return DirectCommandResult.handled(buildAmbiguousReply(date, keyword, matches));
         }
 
         TodoMatch match = matches.get(0);
         todoService.removeTodoDay(match.todo().getTodoId(), date);
-        return "已删除 " + date.format(DATE_FORMATTER) + " 的「" + match.todo().getTitle() + "」。";
+        return DirectCommandResult.handled("已删除 " + date.format(DATE_FORMATTER) + " 的「" + match.todo().getTitle() + "」。");
     }
 
-    private String toggleTodoDateByTitle(LocalDate date, String keyword) {
+    private DirectCommandResult toggleTodoDateByTitle(LocalDate date, String keyword) {
         List<TodoMatch> matches = findTodosByDate(date, keyword);
         if (matches.isEmpty()) {
-            return "未找到 " + date.format(DATE_FORMATTER) + " 包含「" + keyword + "」的待办。";
+            return DirectCommandResult.supervisorFallback(
+                    "No todo matched " + date.format(DATE_FORMATTER) + " keyword=" + keyword);
         }
         if (matches.size() > 1) {
-            return buildAmbiguousReply(date, keyword, matches);
+            return DirectCommandResult.handled(buildAmbiguousReply(date, keyword, matches));
         }
 
         TodoMatch match = matches.get(0);
         int status = todoService.toggleDateStatus(match.todo().getTodoId(), date);
         String action = status == 1 ? "已完成" : "已取消完成";
-        return action + " " + date.format(DATE_FORMATTER) + " 的「" + match.todo().getTitle() + "」。";
+        return DirectCommandResult.handled(action + " " + date.format(DATE_FORMATTER) + " 的「" + match.todo().getTitle() + "」。");
     }
 
-    private String moveTodoDayByTitle(LocalDate fromDate, LocalDate toDate, String keyword) {
+    private DirectCommandResult moveTodoDayByTitle(LocalDate fromDate, LocalDate toDate, String keyword) {
         List<TodoMatch> matches = findTodosByDate(fromDate, keyword);
         if (matches.isEmpty()) {
-            return "未找到 " + fromDate.format(DATE_FORMATTER) + " 包含「" + keyword + "」的待办。";
+            return DirectCommandResult.supervisorFallback(
+                    "No todo matched " + fromDate.format(DATE_FORMATTER) + " keyword=" + keyword);
         }
         if (matches.size() > 1) {
-            return buildAmbiguousReply(fromDate, keyword, matches);
+            return DirectCommandResult.handled(buildAmbiguousReply(fromDate, keyword, matches));
         }
 
         TodoMatch match = matches.get(0);
         todoService.removeTodoDay(match.todo().getTodoId(), fromDate);
         todoService.addTodoDay(match.todo().getTodoId(), toDate, match.todoDate().getDayContent());
-        return "已将「" + match.todo().getTitle() + "」从 "
-                + fromDate.format(DATE_FORMATTER) + " 移到 " + toDate.format(DATE_FORMATTER) + "。";
+        return DirectCommandResult.handled("已将「" + match.todo().getTitle() + "」从 "
+                + fromDate.format(DATE_FORMATTER) + " 移到 " + toDate.format(DATE_FORMATTER) + "。");
     }
 
-    private String deleteTodoByTitle(String keyword) {
+    private DirectCommandResult deleteTodoByTitle(String keyword) {
         Long userId = LoginUserContext.getUserId();
         List<Todo> matches = todoMapper.selectList(new LambdaQueryWrapper<Todo>()
                 .eq(Todo::getUserId, userId)
@@ -182,18 +185,18 @@ public class DirectCommandService {
                 .like(Todo::getTitle, keyword));
 
         if (matches.isEmpty()) {
-            return "未找到包含「" + keyword + "」的待办目标。";
+            return DirectCommandResult.supervisorFallback("No todo goal matched keyword=" + keyword);
         }
         if (matches.size() > 1) {
             String items = matches.stream()
                     .map(todo -> "- [" + todo.getTodoId() + "] " + todo.getTitle())
                     .collect(Collectors.joining("\n"));
-            return "找到多个匹配目标，请说得更具体一点：\n" + items;
+            return DirectCommandResult.handled("找到多个匹配目标，请说得更具体一点：\n" + items);
         }
 
         Todo todo = matches.get(0);
         todoService.delete(todo.getTodoId());
-        return "已删除待办目标「" + todo.getTitle() + "」。";
+        return DirectCommandResult.handled("已删除待办目标「" + todo.getTitle() + "」。");
     }
 
     private List<TodoMatch> findTodosByDate(LocalDate date, String keyword) {
@@ -409,14 +412,23 @@ public class DirectCommandService {
             return new DirectCommandResult(Status.FAILED, reply);
         }
 
+        public static DirectCommandResult supervisorFallback(String reason) {
+            return new DirectCommandResult(Status.SUPERVISOR_FALLBACK, reason);
+        }
+
         public boolean shouldReturnDirectly() {
             return status == Status.HANDLED || status == Status.FAILED;
+        }
+
+        public boolean shouldFallbackToSupervisor() {
+            return status == Status.SUPERVISOR_FALLBACK;
         }
     }
 
     public enum Status {
         HANDLED,
         FALLBACK,
+        SUPERVISOR_FALLBACK,
         FAILED
     }
 
