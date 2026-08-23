@@ -78,8 +78,11 @@ public class DirectCommandService {
         if (isRemoveDayCommand(text)) {
             if (firstDate == null) return DirectCommandResult.fallback();
             String keyword = extractKeyword(text);
-            if (keyword.isBlank()) return DirectCommandResult.fallback();
             log.info("[DirectCommand] remove todo day: {}", text);
+            if (isAllDayTarget(keyword)) {
+                return executeSafely(() -> removeAllTodoDays(firstDate));
+            }
+            if (keyword.isBlank()) return DirectCommandResult.fallback();
             return executeSafely(() -> removeTodoDayByTitle(firstDate, keyword));
         }
 
@@ -142,6 +145,24 @@ public class DirectCommandService {
         TodoMatch match = matches.get(0);
         todoService.removeTodoDay(match.todo().getTodoId(), date);
         return DirectCommandResult.handled("已删除 " + date.format(DATE_FORMATTER) + " 的「" + match.todo().getTitle() + "」。");
+    }
+
+    private DirectCommandResult removeAllTodoDays(LocalDate date) {
+        List<TodoMatch> matches = findTodosByDate(date, "");
+        if (matches.isEmpty()) {
+            return DirectCommandResult.handled(date.format(DATE_FORMATTER) + " 暂无待办，无需删除。");
+        }
+
+        for (TodoMatch match : matches) {
+            todoService.removeTodoDay(match.todo().getTodoId(), date);
+        }
+
+        String items = matches.stream()
+                .sorted(Comparator.comparing(match -> match.todo().getCreateTime()))
+                .map(match -> "「" + match.todo().getTitle() + "」")
+                .collect(Collectors.joining("、"));
+        return DirectCommandResult.handled("已删除 " + date.format(DATE_FORMATTER)
+                + " 的 " + matches.size() + " 个待办：" + items + "。");
     }
 
     private DirectCommandResult toggleTodoDateByTitle(LocalDate date, String keyword) {
@@ -375,6 +396,13 @@ public class DirectCommandService {
     private boolean isRemoveDayCommand(String text) {
         return text.contains("删除") || text.contains("删掉")
                 || text.contains("取消") || text.contains("跳过");
+    }
+
+    private boolean isAllDayTarget(String keyword) {
+        return keyword == null || keyword.isBlank()
+                || keyword.equals("所有")
+                || keyword.equals("全部")
+                || keyword.equals("全都");
     }
 
     private boolean isToggleDoneCommand(String text) {

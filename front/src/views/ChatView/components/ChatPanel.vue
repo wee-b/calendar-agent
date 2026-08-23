@@ -1,166 +1,70 @@
-﻿<template>
+<template>
   <div class="chat-page">
     <div class="chat-content" ref="sidebarContentRef">
-
-      <div class="chat-header">
-        <div class="session-selector" @click="toggleDropdown">
-          <h2>
-            {{ isUserLoggedIn ? (currentSessionTitle || '新对话') : '语音助手' }}
-            <span v-if="isUserLoggedIn" class="arrow" :class="{ open: isDropdownOpen }">⌄</span>
-          </h2>
-        </div>
-
-        <button class="new-chat-btn" @click="createNewSession" title="开启新对话">
-          新对话
-        </button>
-      </div>
+      <ChatHeader
+        :title="currentSessionTitle"
+        :is-user-logged-in="isUserLoggedIn"
+        :is-dropdown-open="isDropdownOpen"
+        @toggle-dropdown="toggleDropdown"
+        @new-session="createNewSession"
+      />
 
       <div v-if="isDropdownOpen" class="dropdown-overlay" @click="isDropdownOpen = false"></div>
-      <div v-if="isDropdownOpen" class="session-dropdown">
-        <div
-            v-for="s in sessions"
-            :key="s.sessionId"
-            class="session-item"
-            :class="{ active: s.sessionId === currentSessionId }"
-            @click="selectSession(s)"
-        >
-          <span class="session-name" :title="s.title">{{ s.title || '新对话' }}</span>
-          <button class="delete-btn" @click.stop="promptDelete(s.sessionId)" title="删除对话">×</button>
-        </div>
-        <div v-if="sessions.length === 0" class="empty-sessions">暂无历史对话</div>
-      </div>
+      <SessionDropdown
+        v-if="isDropdownOpen"
+        :sessions="sessions"
+        :current-session-id="currentSessionId"
+        @select="selectSession"
+        @delete="promptDelete"
+      />
 
-      <div class="chat-history" :class="{ 'has-messages': messages.length > 0 }" ref="chatHistoryRef">
+      <ChatMessageList
+        ref="chatHistoryRef"
+        :messages="messages"
+        :reading-msg-index="readingMsgIndex"
+        :is-paused="isPaused"
+        :is-user-role="isUserRole"
+        :thinking-summary="thinkingSummary"
+        :is-thinking-step-done="isThinkingStepDone"
+        :is-thinking-step-failed="isThinkingStepFailed"
+        :format-response-time="formatResponseTime"
+        @select-prompt="selectPrompt"
+        @toggle-thinking="toggleThinking"
+        @copy="handleCopy"
+        @read="handleRead"
+        @delete-last-round="handleDeleteLastRound"
+      />
 
-        <div v-if="messages.length === 0" class="empty-chat">
-          <h2>有什么我能帮你的吗？</h2>
-          <div class="prompt-grid">
-            <button>帮我规划明天的日程</button>
-            <button>本周有哪些待办需要优先处理？</button>
-            <button>安排一个复习计划</button>
-            <button>帮我创建一个会议提醒</button>
-            <button>总结今天的日程完成情况</button>
-            <button>取消后天的日程</button>
-          </div>
-        </div>
+      <ChatInputBox
+        v-model="inputText"
+        :input-mode="inputMudle"
+        :is-recording="isRecording"
+        :is-expanded="isExpanded"
+        :is-sending="isSending"
+        :is-user-logged-in="isUserLoggedIn"
+        :db-bars="dbBars"
+        @send="handleSend"
+        @toggle-voice="toggleVoice"
+        @toggle-expanded="isExpanded = !isExpanded"
+      />
 
-        <div
-            v-for="(msg, index) in messages"
-            :key="index"
-            class="msg-bubble"
-            :class="isUserRole(msg.role) ? 'user-msg' : 'ai-msg'"
-        >
-          <span class="avatar">{{ isUserRole(msg.role) ? '我' : 'AI' }}</span>
+      <ConfirmModal
+        v-if="confirmSendVisible"
+        title="确认发送吗？"
+        confirm-text="确认发送"
+        :preview="inputText"
+        hint="也可以说“确认”或“取消”来控制"
+        @confirm="confirmVoiceSend"
+        @cancel="cancelVoiceSend"
+      />
 
-          <div class="bubble-content">
-            <div v-if="msg.thinking?.length" class="thinking-panel" :class="{ completed: msg.thinkingDone }">
-              <button class="thinking-summary" @click="toggleThinking(index)">
-                <span>{{ thinkingSummary(msg) }}</span>
-                <span class="thinking-arrow" :class="{ open: !msg.thinkingCollapsed }">⌄</span>
-              </button>
-              <div v-if="!msg.thinkingCollapsed" class="thinking-steps">
-                <div
-                    v-for="(step, stepIndex) in msg.thinking"
-                    :key="`${index}-${stepIndex}`"
-                    class="thinking-step"
-                    :class="{ done: isThinkingStepDone(step), failed: isThinkingStepFailed(step) }"
-                >
-                  {{ step }}
-                </div>
-              </div>
-            </div>
-            <div v-else-if="!isUserRole(msg.role) && msg.responseTimeMs != null" class="response-time">
-              耗时 {{ formatResponseTime(msg.responseTimeMs) }}
-            </div>
-
-            <p v-if="msg.content && isUserRole(msg.role)">{{ msg.content }}</p>
-            <div
-                v-else-if="msg.content"
-                class="markdown-body"
-                v-html="renderMarkdown(msg.content)"
-            ></div>
-            <div v-else-if="msg.loading" class="typing-indicator">
-              <span></span><span></span><span></span>
-            </div>
-
-            <div class="msg-actions" v-if="!msg.loading && !isUserRole(msg.role)">
-              <span class="action-icon" @click="handleCopy(msg.content)">复制</span>
-              <span
-                  class="action-icon"
-                  :class="{ active: readingMsgIndex === index && !isPaused, paused: readingMsgIndex === index && isPaused }"
-                  @click="handleRead(msg.content, index)"
-              >{{ readingMsgIndex === index ? (isPaused ? '继续' : '暂停') : '朗读' }}</span>
-              <span class="action-icon danger" @click="handleDeleteLastRound">撤回</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="chat-input-area" :class="{ 'is-expanded': isExpanded }">
-        <div class="textarea-wrapper">
-          <textarea
-              v-model="inputText"
-              class="chat-input"
-              :placeholder="inputMudle === 2 ? (isRecording ? '正在聆听...' : '正在聆听，说完后说发送提交') : '发消息...'"
-              @keydown.enter.exact.prevent="handleSend"
-              :disabled="isSending || !isUserLoggedIn"
-              :rows="isExpanded ? 10 : 3"
-          ></textarea>
-          <div class="input-actions">
-            <div class="voice-controls" :class="{ 'is-voice-mode': inputMudle === 2 }">
-              <button
-                  class="voice-record-btn"
-                  :class="{ recording: isRecording }"
-                  @click="toggleVoice"
-                  :disabled="isSending || !isUserLoggedIn"
-              >
-                {{ inputMudle === 2 ? '听' : '语' }}
-              </button>
-              <div class="decibel-meter">
-                <div
-                    class="db-segment"
-                    v-for="i in 10"
-                    :key="i"
-                    :style="{ height: dbBars[i-1] + 'px' }"
-                ></div>
-              </div>
-            </div>
-            <button
-                class="send-btn"
-                @click="handleSend"
-                :disabled="isSending || !inputText.trim() || !isUserLoggedIn"
-            >
-              发送
-            </button>
-          </div>
-          <span class="expand-icon" @click="isExpanded = !isExpanded" :title="isExpanded ? '收起' : '展开'">
-            {{ isExpanded ? '收起' : '展开' }}
-          </span>
-        </div>
-      </div>
-
-      <div v-if="confirmSendVisible" class="confirm-modal-overlay">
-        <div class="confirm-modal">
-          <p>确认发送吗？</p>
-          <p class="confirm-preview">{{ inputText }}</p>
-          <div class="confirm-actions">
-            <button class="confirm-btn danger" @click="cleanupConfirmRecognition(); confirmSendVisible = false; sendGuard = false; handleSend()">确认发送</button>
-            <button class="confirm-btn cancel" @click="cleanupConfirmRecognition(); confirmSendVisible = false; sendGuard = false">取消</button>
-          </div>
-          <p class="confirm-hint">也可以说“确认”或“取消”来控制</p>
-        </div>
-      </div>
-
-      <div v-if="showDeleteConfirm" class="confirm-modal-overlay">
-        <div class="confirm-modal">
-          <p>确定要删除该对话吗？</p>
-          <div class="confirm-actions">
-            <button class="confirm-btn danger" @click="executeDelete">删除</button>
-            <button class="confirm-btn cancel" @click="showDeleteConfirm = false">取消</button>
-          </div>
-        </div>
-      </div>
-
+      <ConfirmModal
+        v-if="showDeleteConfirm"
+        title="确定要删除该对话吗？"
+        confirm-text="删除"
+        @confirm="executeDelete"
+        @cancel="showDeleteConfirm = false"
+      />
     </div>
   </div>
 </template>
@@ -173,7 +77,12 @@ import {
   newSessionAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
 } from '../../../api/chat';
 import { tokenRef } from '../../../utils/auth';
-import { renderMarkdown } from '../../../utils/markdown';
+import ChatHeader from './ChatHeader.vue';
+import SessionDropdown from './SessionDropdown.vue';
+import ChatMessageList from './ChatMessageList.vue';
+import ChatInputBox from './ChatInputBox.vue';
+import ConfirmModal from './ConfirmModal.vue';
+import type { ChatMessage } from './types';
 
 const emit = defineEmits<{
   (e: 'refresh'): void;
@@ -182,20 +91,6 @@ const emit = defineEmits<{
 const route = useRoute();
 const router = useRouter();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
-
-interface ChatMessage {
-  role: string;
-  content: string;
-  pendingContent?: string;
-  loading?: boolean;
-  thinking?: string[];
-  thinkingCollapsed?: boolean;
-  thinkingDone?: boolean;
-  thinkingStartedAt?: number;
-  thinkingFinishedAt?: number;
-  responseTimeMs?: number | null;
-  showServerResponseTime?: boolean;
-}
 
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
@@ -206,7 +101,7 @@ const isSending = ref(false);
 const isDropdownOpen = ref(false);
 const showDeleteConfirm = ref(false);
 const pendingDeleteId = ref<string | null>(null);
-const chatHistoryRef = ref<HTMLElement | null>(null);
+const chatHistoryRef = ref<{ scrollToBottom: () => Promise<void> } | null>(null);
 
 const isRecording = ref(false);
 const isExpanded = ref(false);
@@ -421,12 +316,14 @@ const completeThinking = (msg?: ChatMessage) => {
 
 const scrollToBottom = async () => {
   await nextTick();
-  if (chatHistoryRef.value) {
-    chatHistoryRef.value.scrollTop = chatHistoryRef.value.scrollHeight;
-  }
+  await chatHistoryRef.value?.scrollToBottom();
 };
 
 const toggleDropdown = () => { if (isUserLoggedIn.value) isDropdownOpen.value = !isDropdownOpen.value; };
+
+const selectPrompt = (prompt: string) => {
+  inputText.value = prompt;
+};
 
 // ================= 浼氳瘽绠＄悊 =================
 const sortSessionsByRecent = (list: ChatSessionVO[]) => {
@@ -710,6 +607,19 @@ const cleanupConfirmRecognition = () => {
   }
 };
 
+const confirmVoiceSend = () => {
+  cleanupConfirmRecognition();
+  confirmSendVisible.value = false;
+  sendGuard = false;
+  handleSend();
+};
+
+const cancelVoiceSend = () => {
+  cleanupConfirmRecognition();
+  confirmSendVisible.value = false;
+  sendGuard = false;
+};
+
 const startConfirmRecognition = () => {
   cleanupConfirmRecognition();
   const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -944,7 +854,7 @@ watch(currentSessionTitle, (title) => {
 }, { immediate: true });
 </script>
 
-<style scoped>
+<style>
 /* 鍏ㄩ〉鑱婂ぉ鍖哄煙 */
 .chat-page {
   flex: 1;
@@ -1008,32 +918,32 @@ watch(currentSessionTitle, (title) => {
   line-height: 1.65;
   word-break: break-word;
 }
-.markdown-body :deep(*) {
+.markdown-body * {
   box-sizing: border-box;
 }
-.markdown-body :deep(p),
-.markdown-body :deep(ul),
-.markdown-body :deep(ol),
-.markdown-body :deep(pre),
-.markdown-body :deep(blockquote),
-.markdown-body :deep(table) {
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body pre,
+.markdown-body blockquote,
+.markdown-body table {
   margin: 0 0 8px;
 }
-.markdown-body :deep(:last-child) {
+.markdown-body :last-child {
   margin-bottom: 0;
 }
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
+.markdown-body ul,
+.markdown-body ol {
   padding-left: 20px;
 }
-.markdown-body :deep(li + li) {
+.markdown-body li + li {
   margin-top: 4px;
 }
-.markdown-body :deep(strong) {
+.markdown-body strong {
   font-weight: 700;
   color: #101828;
 }
-.markdown-body :deep(code) {
+.markdown-body code {
   padding: 1px 5px;
   border-radius: 4px;
   background: #f2f4f7;
@@ -1041,27 +951,27 @@ watch(currentSessionTitle, (title) => {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.92em;
 }
-.markdown-body :deep(pre) {
+.markdown-body pre {
   overflow-x: auto;
   padding: 10px 12px;
   border-radius: 8px;
   background: #101828;
   color: #f8fafc;
 }
-.markdown-body :deep(pre code) {
+.markdown-body pre code {
   padding: 0;
   background: transparent;
   color: inherit;
   white-space: pre;
 }
-.markdown-body :deep(a) {
+.markdown-body a {
   color: #2563eb;
   text-decoration: none;
 }
-.markdown-body :deep(a:hover) {
+.markdown-body a:hover {
   text-decoration: underline;
 }
-.markdown-body :deep(table) {
+.markdown-body table {
   display: block;
   width: max-content;
   max-width: 100%;
@@ -1071,8 +981,8 @@ watch(currentSessionTitle, (title) => {
   border-radius: 8px;
   background: #ffffff;
 }
-.markdown-body :deep(th),
-.markdown-body :deep(td) {
+.markdown-body th,
+.markdown-body td {
   min-width: 88px;
   padding: 8px 10px;
   border: 1px solid #d0d5dd;
@@ -1080,12 +990,12 @@ watch(currentSessionTitle, (title) => {
   vertical-align: top;
   white-space: normal;
 }
-.markdown-body :deep(th) {
+.markdown-body th {
   background: #f2f4f7;
   color: #101828;
   font-weight: 700;
 }
-.markdown-body :deep(tr:nth-child(even) td) {
+.markdown-body tr:nth-child(even) td {
   background: #f8fafc;
 }
 
