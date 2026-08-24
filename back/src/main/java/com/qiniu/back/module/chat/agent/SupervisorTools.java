@@ -5,6 +5,7 @@ import com.qiniu.back.module.chat.mcp.McpToolRegistry;
 import com.qiniu.back.module.chat.rag.RagHit;
 import com.qiniu.back.module.chat.rag.RagService;
 import com.qiniu.back.module.chat.service.PlanDraftService;
+import com.qiniu.back.module.memory.service.UserMemoryService;
 import com.qiniu.back.util.ChatSessionContext;
 import com.qiniu.back.util.LoginUserContext;
 import com.qiniu.back.util.PromptLoader;
@@ -54,6 +55,9 @@ public class SupervisorTools {
 
     @Autowired
     private PlanDraftService planDraftService;
+
+    @Autowired
+    private UserMemoryService userMemoryService;
 
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -117,7 +121,7 @@ public class SupervisorTools {
     }
 
     public String planTask(String requirement) {
-        String planJson = plannerAgent.execute(buildPlannerRagContext(requirement) + requirement);
+        String planJson = plannerAgent.execute(buildPlannerContext(requirement) + requirement);
         Long draftId = planDraftService.savePendingDraft(
                 LoginUserContext.getUserId(),
                 ChatSessionContext.getSessionId(),
@@ -150,6 +154,21 @@ public class SupervisorTools {
         }
     }
 
+    private String buildPlannerContext(String requirement) {
+        return buildPlannerMemoryContext(requirement) + buildPlannerRagContext(requirement) + "## User requirement\n";
+    }
+
+    private String buildPlannerMemoryContext(String requirement) {
+        try {
+            Long userId = LoginUserContext.getUserId();
+            if (userId == null) return "";
+            return userMemoryService.buildPlannerMemoryContext(userId, requirement);
+        } catch (Exception e) {
+            log.warn("[Planner] memory context failed: {}", e.getMessage());
+            return "";
+        }
+    }
+
     private String buildPlannerRagContext(String requirement) {
         if (ragService == null) return "";
 
@@ -165,7 +184,7 @@ public class SupervisorTools {
                         .append(hit.getText())
                         .append("\n");
             }
-            sb.append("\n## User requirement\n");
+            sb.append("\n");
             return sb.toString();
         } catch (Exception e) {
             log.warn("[Planner] RAG search failed: {}", e.getMessage());

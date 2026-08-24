@@ -172,6 +172,32 @@ CREATE TABLE `yl_agent_flow_state`
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent flow state table';
 
 
+-- yl_user_memory
+DROP TABLE IF EXISTS `yl_user_memory`;
+
+CREATE TABLE `yl_user_memory`
+(
+    `memory_id`      BIGINT        NOT NULL AUTO_INCREMENT COMMENT '记忆ID',
+    `user_id`        BIGINT        NOT NULL COMMENT '用户ID',
+    `memory_type`    VARCHAR(32)   NOT NULL COMMENT '记忆类型',
+    `content`        VARCHAR(1000) NOT NULL COMMENT '给模型看的自然语言记忆',
+    `normalized_key` VARCHAR(128)  NULL DEFAULT NULL COMMENT '归一化键，用于冲突合并',
+    `source`         VARCHAR(32)   NOT NULL DEFAULT 'chat' COMMENT '来源: chat/plan/todo/daily_note/behavior/system',
+    `source_id`      BIGINT        NULL DEFAULT NULL COMMENT '来源记录ID',
+    `confidence`     DECIMAL(4,3)  NOT NULL DEFAULT 0.800 COMMENT '置信度',
+    `status`         VARCHAR(20)   NOT NULL DEFAULT 'active' COMMENT 'active/archived/deleted',
+    `last_used_time` DATETIME      NULL DEFAULT NULL COMMENT '最近注入使用时间',
+    `expire_time`    DATETIME      NULL DEFAULT NULL COMMENT '过期时间，长期偏好可为空',
+    `create_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+    PRIMARY KEY (`memory_id`),
+    KEY `idx_user_type_status` (`user_id`, `memory_type`, `status`),
+    KEY `idx_user_key_status` (`user_id`, `normalized_key`, `status`),
+    KEY `idx_user_update_time` (`user_id`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户长期记忆表';
+
+
 -- yl_ai_dialogue（对话记录表）
 DROP TABLE IF EXISTS `yl_ai_dialogue`;
 

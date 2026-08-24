@@ -16,6 +16,7 @@ import com.qiniu.back.module.chat.service.ChatService;
 import com.qiniu.back.module.chat.service.DirectCommandService;
 import com.qiniu.back.module.chat.service.DirectCommandService.DirectCommandResult;
 import com.qiniu.back.module.chat.service.PlanDraftService;
+import com.qiniu.back.module.memory.service.UserMemoryService;
 import com.qiniu.back.util.ChatSessionContext;
 import com.qiniu.back.util.LoginUserContext;
 import dev.langchain4j.data.message.ChatMessage;
@@ -64,6 +65,9 @@ public class ChatServiceImpl implements ChatService {
     private SupervisorTools supervisorTools;
 
     @Autowired
+    private UserMemoryService userMemoryService;
+
+    @Autowired
     @Qualifier("chatSseExecutor")
     private Executor chatSseExecutor;
 
@@ -74,6 +78,7 @@ public class ChatServiceImpl implements ChatService {
         String sid = normalizeSessionId(sessionId);
 
         Long userDialogueId = saveDialogue(userId, sid, "user", message, null);
+        userMemoryService.extractAndSaveFromUserMessageAsync(userId, userDialogueId, message);
 
         Optional<ChatDispatchResult> flowResult;
         try {
@@ -165,6 +170,8 @@ public class ChatServiceImpl implements ChatService {
         try {
             Long userDialogueId = report(emitter, "保存用户消息",
                     () -> saveDialogue(userId, sid, "user", message, null));
+            report(emitter, "提取长期记忆",
+                    () -> userMemoryService.extractAndSaveFromUserMessageAsync(userId, userDialogueId, message));
 
             Optional<ChatDispatchResult> flowResult = handleExistingFlowState(userId, sid, message,
                     progress -> sendProgress(emitter, progress));
