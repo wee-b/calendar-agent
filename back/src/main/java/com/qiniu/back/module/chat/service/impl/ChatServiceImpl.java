@@ -22,6 +22,7 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -33,6 +34,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -59,6 +62,10 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private SupervisorTools supervisorTools;
+
+    @Autowired
+    @Qualifier("chatSseExecutor")
+    private Executor chatSseExecutor;
 
     @Override
     public ChatResponseVO chat(String sessionId, String message) {
@@ -138,67 +145,87 @@ public class ChatServiceImpl implements ChatService {
         String sid = normalizeSessionId(sessionId);
         SseEmitter emitter = new SseEmitter(300_000L);
 
-        CompletableFuture.runAsync(() -> {
-            LoginUserContext.setUserId(userId);
-            ChatSessionContext.setSessionId(sid);
-            try {
-                Long userDialogueId = report(emitter, "保存用户消息",
-                        () -> saveDialogue(userId, sid, "user", message, null));
-
-                Optional<ChatDispatchResult> flowResult = handleExistingFlowState(userId, sid, message,
-                        progress -> sendProgress(emitter, progress));
-                if (flowResult.isPresent()) {
-                    sendFinalResult(emitter, userId, sid, flowResult.get().aiResult(), responseStartTime);
-                    return;
-                }
-
-                boolean confirmPlanDraft = report(emitter, "检查规划草稿确认语义",
-                        () -> planDraftService.isConfirmMessage(message));
-                if (confirmPlanDraft) {
-                    Optional<PlanDraft> pendingDraft = report(emitter, "读取待同步规划草稿",
-                            () -> planDraftService.findLatestPending(userId, sid));
-                    if (pendingDraft.isPresent()) {
-                        String aiResult = report(emitter, "同步规划草稿到日历",
-                                () -> planDraftService.buildSyncReply(planDraftService.syncDraft(pendingDraft.get())));
-                        sendFinalResult(emitter, userId, sid, aiResult, responseStartTime);
-                        return;
-                    }
-                }
-
-                DirectCommandResult directResult = report(emitter, "尝试快捷指令匹配",
-                        () -> directCommandService.tryHandle(message));
-                if (directResult.shouldReturnDirectly()) {
-                    sendStepStart(emitter, "执行快捷指令");
-                    String aiResult = directResult.reply();
-                    sendStepSuccess(emitter, "执行快捷指令");
-                    sendFinalResult(emitter, userId, sid, aiResult, responseStartTime);
-                    return;
-                }
-                if (directResult.shouldFallbackToSupervisor()) {
-                    log.info("[DirectCommand] fallback to supervisor: {}", directResult.reply());
-                    sendStepStart(emitter, "交给 Supervisor 兜底");
-                    sendStepSuccess(emitter, "交给 Supervisor 兜底");
-                }
-
-                List<AiDialogue> rawHistory = report(emitter, "读取历史对话",
-                        () -> loadHistory(userId, sid, userDialogueId));
-                List<ChatMessage> history = report(emitter, "构建只读上下文",
-                        () -> buildReadonlyHistory(rawHistory));
-                ChatDispatchResult dispatchResult = dispatchBySupervisor(userId, sid, message, history,
-                        progress -> sendProgress(emitter, progress));
-                sendFinalResult(emitter, userId, sid, dispatchResult.aiResult(), responseStartTime);
-            } catch (Exception e) {
-                log.error("Streaming agent orchestration failed", e);
-                emitter.completeWithError(e);
-            } finally {
-                ChatSessionContext.remove();
-                LoginUserContext.remove();
-            }
-        });
+        try {
+            CompletableFuture.runAsync(() -> handleStreamChatTask(emitter, userId, sid, message, responseStartTime),
+                    chatSseExecutor);
+        } catch (RejectedExecutionException e) {
+            log.warn("Chat SSE executor is saturated, reject sessionId={}", sid, e);
+            sendBusyAndComplete(emitter);
+        }
 
         emitter.onTimeout(() -> log.warn("SSE connection timeout"));
         emitter.onError(e -> log.error("SSE connection error", e));
         return emitter;
+    }
+
+    private void handleStreamChatTask(SseEmitter emitter, Long userId, String sid,
+                                      String message, long responseStartTime) {
+        LoginUserContext.setUserId(userId);
+        ChatSessionContext.setSessionId(sid);
+        try {
+            Long userDialogueId = report(emitter, "保存用户消息",
+                    () -> saveDialogue(userId, sid, "user", message, null));
+
+            Optional<ChatDispatchResult> flowResult = handleExistingFlowState(userId, sid, message,
+                    progress -> sendProgress(emitter, progress));
+            if (flowResult.isPresent()) {
+                sendFinalResult(emitter, userId, sid, flowResult.get().aiResult(), responseStartTime);
+                return;
+            }
+
+            boolean confirmPlanDraft = report(emitter, "检查规划草稿确认语义",
+                    () -> planDraftService.isConfirmMessage(message));
+            if (confirmPlanDraft) {
+                Optional<PlanDraft> pendingDraft = report(emitter, "读取待同步规划草稿",
+                        () -> planDraftService.findLatestPending(userId, sid));
+                if (pendingDraft.isPresent()) {
+                    String aiResult = report(emitter, "同步规划草稿到日历",
+                            () -> planDraftService.buildSyncReply(planDraftService.syncDraft(pendingDraft.get())));
+                    sendFinalResult(emitter, userId, sid, aiResult, responseStartTime);
+                    return;
+                }
+            }
+
+            DirectCommandResult directResult = report(emitter, "尝试快捷指令匹配",
+                    () -> directCommandService.tryHandle(message));
+            if (directResult.shouldReturnDirectly()) {
+                sendStepStart(emitter, "执行快捷指令");
+                String aiResult = directResult.reply();
+                sendStepSuccess(emitter, "执行快捷指令");
+                sendFinalResult(emitter, userId, sid, aiResult, responseStartTime);
+                return;
+            }
+            if (directResult.shouldFallbackToSupervisor()) {
+                log.info("[DirectCommand] fallback to supervisor: {}", directResult.reply());
+                sendStepStart(emitter, "交给 Supervisor 兜底");
+                sendStepSuccess(emitter, "交给 Supervisor 兜底");
+            }
+
+            List<AiDialogue> rawHistory = report(emitter, "读取历史对话",
+                    () -> loadHistory(userId, sid, userDialogueId));
+            List<ChatMessage> history = report(emitter, "构建只读上下文",
+                    () -> buildReadonlyHistory(rawHistory));
+            ChatDispatchResult dispatchResult = dispatchBySupervisor(userId, sid, message, history,
+                    progress -> sendProgress(emitter, progress));
+            sendFinalResult(emitter, userId, sid, dispatchResult.aiResult(), responseStartTime);
+        } catch (Exception e) {
+            log.error("Streaming agent orchestration failed", e);
+            emitter.completeWithError(e);
+        } finally {
+            ChatSessionContext.remove();
+            LoginUserContext.remove();
+        }
+    }
+
+    private void sendBusyAndComplete(SseEmitter emitter) {
+        try {
+            emitter.send(SseEmitter.event().name("progress").data("失败：聊天服务繁忙"));
+            emitter.send(SseEmitter.event().data("当前聊天请求较多，请稍后再试。"));
+        } catch (Exception sendError) {
+            log.warn("SSE busy response send failed", sendError);
+        } finally {
+            emitter.complete();
+        }
     }
 
     private void sendFinalResult(SseEmitter emitter, Long userId, String sessionId,

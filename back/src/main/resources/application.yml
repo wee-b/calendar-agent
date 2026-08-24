@@ -47,3 +47,10 @@ rag:
   lucene-index-dir: ./data/lucene-rag-index
 
   result-cache-ttl: 180
+
+app:
+  chat:
+    sse-executor:
+      core-size: 4
+      max-size: 12
+      queue-capacity: 50
