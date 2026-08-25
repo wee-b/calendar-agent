@@ -15,6 +15,7 @@
 - 确认式执行：创建/修改/删除等写操作会先进入待确认状态，用户确认后执行。
 - 计划草稿：长期/复杂规划先生成草稿，用户确认后批量同步为待办。
 - 长期记忆：从用户明确表达中保存长期偏好、目标，并从最近 30 天待办完成情况归纳行为习惯。
+- 上下文压缩：长会话自动生成历史摘要，Agent 只注入“更早摘要 + 最近原文”，降低上下文 token。
 - 快捷指令：简单创建、查询、删除某天任务、移动任务、完成打卡等可走本地快路径。
 - RAG 知识库：对学习、备考、考试等规划类问题提供检索增强上下文。
 - MCP JSON-RPC 端点：暴露日程工具列表与工具调用能力。
@@ -106,6 +107,7 @@ calendar-agent/
 | `yl_plan_draft` | Planner 生成的待同步规划草稿 |
 | `yl_agent_flow_state` | 当前会话的 Agent 待确认/待反馈状态 |
 | `yl_user_memory` | 用户长期偏好、长期目标和行为习惯记忆 |
+| `yl_chat_context_summary` | 长会话上下文摘要，用于压缩 Agent 历史输入 |
 
 ---
 
@@ -187,6 +189,8 @@ calendar-agent/
   │    └─ 批量同步待办到日历
   ├─ DirectCommandService 快捷指令命中？
   │    └─ 本地直接执行/查询
+  ├─ 构建压缩历史上下文
+  │    └─ 更早历史摘要 + 最近 6 轮原始对话
   └─ Supervisor 判断类型
        ├─ NONE：直接回复
        ├─ QUERY：调用 Query Agent
@@ -196,6 +200,7 @@ calendar-agent/
 
 规划类任务会先输出草稿预览。用户确认后，`PlanDraftService` 将 Planner 的结构化 JSON 转换为多个 `TodoCreateDTO`，批量写入日历。
 Planner 生成计划前会读取 active 用户记忆，并按“本轮明确指令 > pending 状态 > 长期记忆 > 公共 RAG”的优先级作为参考。
+助手回复落库后会异步刷新会话摘要；摘要只保留稳定事实、目标、偏好和重要指代，不把历史请求当作本轮待执行任务。
 
 ---
 
@@ -351,6 +356,7 @@ Vite 会代理 `/user`、`/todo`、`/chat`、`/calendar`、`/almanac`、`/memory
 - [x] 写操作确认流与 AgentFlowState 状态管理
 - [x] Planner 草稿预览与确认后同步到日历
 - [x] MySQL 长期偏好记忆与行为习惯记忆
+- [x] 长会话自动摘要与上下文压缩
 - [x] DirectCommand 快捷指令快路径
 - [x] MCP `tools/list` / `tools/call`
 - [x] Lucene BM25 + Qdrant 向量检索 + RRF + Rerank

@@ -198,6 +198,27 @@ CREATE TABLE `yl_user_memory`
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户长期记忆表';
 
 
+-- yl_chat_context_summary
+DROP TABLE IF EXISTS `yl_chat_context_summary`;
+
+CREATE TABLE `yl_chat_context_summary`
+(
+    `summary_id`       BIGINT       NOT NULL AUTO_INCREMENT COMMENT '摘要ID',
+    `user_id`          BIGINT       NOT NULL COMMENT '用户ID',
+    `session_id`       VARCHAR(64)  NOT NULL COMMENT '会话ID',
+    `last_dialogue_id` BIGINT       NOT NULL DEFAULT 0 COMMENT '已摘要到的最大 dialogue_id',
+    `message_count`    INT          NOT NULL DEFAULT 0 COMMENT '累计压缩消息数',
+    `summary_text`     TEXT         NOT NULL COMMENT '压缩后的历史摘要',
+    `status`           VARCHAR(20)  NOT NULL DEFAULT 'active' COMMENT 'active/archived',
+    `create_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+    PRIMARY KEY (`summary_id`),
+    KEY `idx_user_session_status` (`user_id`, `session_id`, `status`),
+    KEY `idx_user_session_dialogue` (`user_id`, `session_id`, `last_dialogue_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='聊天上下文摘要表';
+
+
 -- yl_ai_dialogue（对话记录表）
 DROP TABLE IF EXISTS `yl_ai_dialogue`;
 
