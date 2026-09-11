@@ -230,8 +230,6 @@ function getSolarTerm(y: number, m: number, d: number): string {
 }
 
 function getSolarTermDay(y: number, n: number): number {
-  const centuryValue = (y - 1900) * 365.2422 + 6.2 + (y - 1900) * 0.00004;
-  const base = Math.floor(centuryValue / 365.2422) * 365 + Math.floor(centuryValue % 365.2422);
   const termDays = SOLAR_TERM_INFO;
   const off = termDays[n] - termDays[0];
   const days = (y - 1900) * 365 + Math.floor((y - 1901) / 4) + off;

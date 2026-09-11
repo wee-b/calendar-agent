@@ -129,11 +129,37 @@
             <version>1.3.0</version>
         </dependency>
 
-        <!-- Milvus 向量数据库 SDK -->
+        <!-- Qdrant 向量数据库 SDK -->
         <dependency>
-            <groupId>io.milvus</groupId>
-            <artifactId>milvus-sdk-java</artifactId>
-            <version>2.4.10</version>
+            <groupId>io.qdrant</groupId>
+            <artifactId>client</artifactId>
+            <version>1.13.0</version>
+        </dependency>
+        <!-- Qdrant client 的 gRPC 依赖为 runtime scope，需显式引入以支持编译 -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-api</artifactId>
+            <version>1.65.1</version>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-stub</artifactId>
+            <version>1.65.1</version>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-protobuf</artifactId>
+            <version>1.65.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>3.25.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>32.1.3-android</version>
         </dependency>
 
         <!-- Lucene (BM25 全文检索) -->
@@ -151,6 +177,13 @@
             <groupId>org.apache.lucene</groupId>
             <artifactId>lucene-analysis-smartcn</artifactId>
             <version>9.11.1</version>
+        </dependency>
+
+        <!-- 农历+建星计算核心包 -->
+        <dependency>
+            <groupId>cn.6tail</groupId>
+            <artifactId>lunar</artifactId>
+            <version>1.7.7</version>
         </dependency>
 
     </dependencies>

@@ -1,7 +1,7 @@
 package com.qiniu.back.module.chat.rag;
 
-import io.milvus.client.MilvusServiceClient;
-import io.milvus.param.ConnectParam;
+import io.qdrant.client.QdrantClient;
+import io.qdrant.client.QdrantGrpcClient;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -21,12 +21,10 @@ public class RagConfig {
     }
 
     @Bean
-    public MilvusServiceClient milvusClient(RagProperties props) {
-        return new MilvusServiceClient(
-                ConnectParam.newBuilder()
-                        .withHost(props.getMilvusHost())
-                        .withPort(props.getMilvusPort())
-                        .build()
-        );
+    public QdrantClient qdrantClient(QdrantProperties props) {
+        QdrantGrpcClient grpcClient = QdrantGrpcClient.newBuilder(
+                props.getHost(), props.getPort(), false
+        ).build();
+        return new QdrantClient(grpcClient);
     }
 }

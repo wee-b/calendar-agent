@@ -12,4 +12,5 @@ public class ChatHistoryItemVO {
     private String role;
     private String content;
     private LocalDateTime createTime;
+    private Long responseTimeMs;
 }

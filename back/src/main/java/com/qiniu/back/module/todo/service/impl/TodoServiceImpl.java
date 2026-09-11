@@ -36,6 +36,24 @@ public class TodoServiceImpl implements TodoService {
     @Transactional
     public TodoVO create(TodoCreateDTO request) {
         Long userId = LoginUserContext.getUserId();
+        return createForUser(userId, request);
+    }
+
+    @Override
+    @Transactional
+    public List<TodoVO> batchCreate(List<TodoCreateDTO> requests) {
+        Long userId = LoginUserContext.getUserId();
+        if (requests == null || requests.isEmpty()) {
+            return List.of();
+        }
+        List<TodoVO> result = new ArrayList<>(requests.size());
+        for (TodoCreateDTO request : requests) {
+            result.add(createForUser(userId, request));
+        }
+        return result;
+    }
+
+    private TodoVO createForUser(Long userId, TodoCreateDTO request) {
         validateDateRange(request.getStartDate(), request.getEndDate());
 
         // 1. 插入待办

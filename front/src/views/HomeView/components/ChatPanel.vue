@@ -46,7 +46,15 @@
           <span class="avatar">{{ isUserRole(msg.role) ? '我' : 'AI' }}</span>
 
           <div class="bubble-content">
-            <p v-if="!msg.loading">{{ msg.content }}</p>
+            <div v-if="!isUserRole(msg.role) && msg.responseTimeMs != null" class="response-time">
+              耗时 {{ formatResponseTime(msg.responseTimeMs) }}
+            </div>
+            <p v-if="!msg.loading && isUserRole(msg.role)">{{ msg.content }}</p>
+            <div
+                v-else-if="!msg.loading"
+                class="markdown-body"
+                v-html="renderMarkdown(msg.content)"
+            ></div>
             <div v-else class="typing-indicator">
               <span></span><span></span><span></span>
             </div>
@@ -137,15 +145,16 @@
 import { ref, computed, nextTick, onMounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
-  newSessionAPI, sendChatAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
+  newSessionAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
 } from '../../../api/chat';
 import { tokenRef } from '../../../utils/auth';
+import { renderMarkdown } from '../../../utils/markdown';
 
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'refresh'): void }>();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
 
-interface ChatMessage { role: string; content: string; loading?: boolean; }
+interface ChatMessage { role: string; content: string; loading?: boolean; responseTimeMs?: number | null; }
 
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
@@ -180,6 +189,10 @@ const currentSessionTitle = computed(() => {
 
 const isUserRole = (role: string) => role.toLowerCase() === 'user';
 
+const formatResponseTime = (responseTimeMs: number) => {
+  return `${Math.max(0.1, responseTimeMs / 1000).toFixed(1)} 秒`;
+};
+
 const scrollToBottom = async () => {
   await nextTick();
   if (chatHistoryRef.value) {
@@ -204,7 +217,7 @@ const selectSession = async (session: ChatSessionVO) => {
   messages.value = [];
   try {
     const history = await getHistoryAPI(session.sessionId);
-    messages.value = history.map(h => ({ role: h.role, content: h.content }));
+    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -293,7 +306,7 @@ const handleDeleteLastRound = async () => {
     await deleteLastRoundAPI(currentSessionId.value);
     ElMessage.success('已撤回上一轮对话');
     const history = await getHistoryAPI(currentSessionId.value);
-    messages.value = history.map(h => ({ role: h.role, content: h.content }));
+    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -522,7 +535,6 @@ const handleSend = async () => {
       ElMessage.warning('响应较慢，请耐心等待...');
     }, CHAT_TIMEOUT);
 
-    let firstToken = true;
     await streamChatAPI(
       { sessionId: currentSessionId.value, message: text },
       (token) => {
@@ -548,6 +560,14 @@ const handleSend = async () => {
         if (lastMsg && lastMsg.loading) {
           lastMsg.loading = false;
           lastMsg.content = error || '抱歉，网络开小差了，请重试。';
+        }
+      },
+      undefined,
+      undefined,
+      (responseTimeMs) => {
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai') {
+          lastMsg.responseTimeMs = responseTimeMs;
         }
       }
     );
@@ -639,6 +659,93 @@ watch(isUserLoggedIn, async (newVal) => {
 .avatar { font-size: 12px; color: #b5a992; font-weight: bold; }
 .bubble-content { border-radius: 12px; padding: 10px 14px; box-shadow: 0 2px 6px rgba(92, 75, 55, 0.05); }
 .bubble-content p { margin: 0; font-size: 14px; line-height: 1.5; color: #5c4b37; word-break: break-word; white-space: pre-wrap; }
+.markdown-body {
+  color: #344054;
+  font-size: 14px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+.markdown-body :deep(*) {
+  box-sizing: border-box;
+}
+.markdown-body :deep(p),
+.markdown-body :deep(ul),
+.markdown-body :deep(ol),
+.markdown-body :deep(pre),
+.markdown-body :deep(blockquote),
+.markdown-body :deep(table) {
+  margin: 0 0 8px;
+}
+.markdown-body :deep(:last-child) {
+  margin-bottom: 0;
+}
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  padding-left: 20px;
+}
+.markdown-body :deep(li + li) {
+  margin-top: 4px;
+}
+.markdown-body :deep(strong) {
+  font-weight: 700;
+  color: #101828;
+}
+.markdown-body :deep(code) {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f2f4f7;
+  color: #344054;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+.markdown-body :deep(pre) {
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #101828;
+  color: #f8fafc;
+}
+.markdown-body :deep(pre code) {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  white-space: pre;
+}
+.markdown-body :deep(a) {
+  color: #2563eb;
+  text-decoration: none;
+}
+.markdown-body :deep(a:hover) {
+  text-decoration: underline;
+}
+.markdown-body :deep(table) {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  min-width: 88px;
+  padding: 8px 10px;
+  border: 1px solid #d0d5dd;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+.markdown-body :deep(th) {
+  background: #f2f4f7;
+  color: #101828;
+  font-weight: 700;
+}
+.markdown-body :deep(tr:nth-child(even) td) {
+  background: #f8fafc;
+}
+.response-time { margin-bottom: 8px; color: #667085; font-size: 13px; line-height: 1.4; }
 
 .user-msg { align-self: flex-end; align-items: flex-end; }
 .user-msg .bubble-content { background-color: #eaddc4; border-bottom-right-radius: 2px; }
@@ -706,4 +813,166 @@ watch(isUserLoggedIn, async (newVal) => {
 .confirm-btn.cancel:hover { background: #eaddc4; }
 .confirm-btn.danger { background: #bc423f; color: white; }
 .confirm-btn.danger:hover { background: #a13431; }
+
+/* Modern agent chat panel refresh */
+.sidebar {
+  width: 340px;
+  min-width: 320px;
+  max-width: 380px;
+  background: #ffffff;
+}
+
+.right-sidebar {
+  border-left: 1px solid #e4e7ec;
+}
+
+.sidebar-content {
+  padding: 22px 18px 0;
+}
+
+.chat-header {
+  border-bottom: 1px solid #e4e7ec;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+}
+
+.session-selector h2 {
+  color: #101828;
+  font-size: 16px;
+  font-weight: 780;
+}
+
+.new-chat-btn {
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 8px;
+  padding: 7px 11px;
+}
+
+.new-chat-btn:hover {
+  background: #dbeafe;
+}
+
+.session-dropdown {
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.14);
+}
+
+.session-item {
+  border-bottom: 1px solid #eef2f7;
+}
+
+.session-item:hover {
+  background: #f8fafc;
+}
+
+.session-item.active {
+  background: #eff6ff;
+}
+
+.session-name {
+  color: #344054;
+}
+
+.chat-history::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+
+.empty-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #2563eb, #0891b2);
+  color: #ffffff;
+}
+
+.empty-chat {
+  color: #667085;
+}
+
+.bubble-content {
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.bubble-content p {
+  color: #344054;
+}
+
+.user-msg .bubble-content {
+  background: #2563eb;
+}
+
+.user-msg .bubble-content p {
+  color: #ffffff;
+}
+
+.ai-msg .bubble-content {
+  background: #f8fafc;
+  border: 1px solid #e4e7ec;
+}
+
+.avatar {
+  color: #667085;
+}
+
+.msg-actions {
+  border-top: 1px solid #e4e7ec;
+}
+
+.action-icon {
+  color: #667085;
+}
+
+.action-icon:hover {
+  color: #2563eb;
+}
+
+.chat-input-area {
+  border-top: 1px solid #e4e7ec;
+  background: #ffffff;
+}
+
+.chat-input {
+  background: #ffffff;
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  color: #101828;
+}
+
+.chat-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.send-btn {
+  background: #2563eb;
+  border-radius: 8px;
+  color: #ffffff;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.voice-record-btn:hover:not(:disabled),
+.expand-icon:hover {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.confirm-modal-overlay {
+  background-color: rgba(15, 23, 42, 0.46);
+}
+
+.confirm-modal {
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+}
+
+.confirm-modal p {
+  color: #101828;
+}
 </style>

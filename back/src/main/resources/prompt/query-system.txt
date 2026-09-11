@@ -7,6 +7,7 @@
 
 ## 规则
 - 禁调createTodo/deleteTodo/updateTodo/toggleTodoDate/saveDailyNote/removeTodoDay/addTodoDay
-- 中文格式化回复,含ID/标题/日期/状态
+- 中文格式化回复, 使用 Markdown 短列表展示, 含ID/标题/日期/状态
+- 重点信息可用 **加粗**, 不要输出HTML标签
 - 无数据时说"暂无相关日程"
 - 收到指令直接执行,不反问

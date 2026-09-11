@@ -11,8 +11,14 @@ export interface ChatResponseVO {
     sessionId: string;
     aiResult: string;
     aiAudioUrl?: string;
+    responseTimeMs?: number;
     intent?: string;
     executeResult?: string;
+    needDispatchAgent?: boolean;
+    dispatchType?: string;
+    currentAgent?: string;
+    nextAgent?: string;
+    flowStage?: string;
 }
 
 export interface ChatHistoryItemVO {
@@ -20,6 +26,7 @@ export interface ChatHistoryItemVO {
     role: string;
     content: string;
     createTime: string;
+    responseTimeMs?: number | null;
 }
 
 export interface ChatSessionVO {
@@ -44,7 +51,10 @@ export const streamChatAPI = async (
     data: ChatRequestDTO,
     onToken: (token: string) => void,
     onDone: () => void,
-    onError: (error: string) => void
+    onError: (error: string) => void,
+    onOpen?: () => void,
+    onProgress?: (message: string) => void,
+    onResponseTime?: (responseTimeMs: number) => void
 ): Promise<void> => {
     const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
     const token = getToken();
@@ -71,6 +81,8 @@ export const streamChatAPI = async (
             return;
         }
 
+        onOpen?.();
+
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -85,11 +97,23 @@ export const streamChatAPI = async (
 
             for (const part of parts) {
                 const lines = part.split('\n');
+                let eventName = 'message';
+                const dataLines: string[] = [];
                 for (const line of lines) {
-                    if (line.startsWith('data:')) {
-                        const content = line.substring(5).trim();
-                        if (content) onToken(content);
-                    }
+                    if (line.startsWith('event:')) eventName = line.substring(6).trim();
+                    if (line.startsWith('data:')) dataLines.push(line.substring(5).trim());
+                }
+
+                const content = dataLines.join('\n');
+                if (!content) continue;
+
+                if (eventName === 'progress') {
+                    onProgress?.(content);
+                } else if (eventName === 'responseTime') {
+                    const responseTimeMs = Number(content);
+                    if (Number.isFinite(responseTimeMs)) onResponseTime?.(responseTimeMs);
+                } else {
+                    onToken(content);
                 }
             }
         }

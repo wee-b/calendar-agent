@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-日程规划语料处理管线：去重 → BGE-M3 Embedding → Milvus 入库
+日程规划语料处理管线：去重 → BGE-M3 Embedding → Qdrant 入库
 
 用法：
-    # 全流程：去重 + embedding + Milvus 入库
-    python dedup_corpus.py -i ./rag_data --embedding-backend ollama --milvus
+    # 全流程：去重 + embedding + Qdrant 入库
+    python dedup_corpus.py -i ./rag_data --embedding-backend ollama --qdrant
 
     # 只去重，不 embedding
     python dedup_corpus.py -i ./rag_data --skip-embedding
 
     # 跳过 MinHash（小数据集加速）
-    python dedup_corpus.py -i ./rag_data --no-minhash --milvus
+    python dedup_corpus.py -i ./rag_data --no-minhash --qdrant
 
     # 带用户历史数据
-    python dedup_corpus.py -i ./rag_data -H ./user_history.json --milvus
+    python dedup_corpus.py -i ./rag_data -H ./user_history.json --qdrant
 
 Embedding 后端说明：
     ollama   → 本地 Ollama，默认 http://localhost:11434，模型 bge-m3
@@ -37,6 +37,33 @@ import numpy as np
 from datasketch import MinHash, MinHashLSH
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+# ---------------------------------------------------------------------------
+# IDE 直接运行时的默认配置（PyCharm / VSCode 点 Run 即可）
+# 从终端运行时请改用命令行参数，此处不影响
+# ---------------------------------------------------------------------------
+IDE_DEFAULTS = {
+    "input":        "./rag_data",          # 语料目录（.md 文件）
+    "history":      None,                  # 用户历史 JSON（可选）
+    "output":       "./output",            # 输出目录
+    "skip_dedup":   False,
+    "no_minhash":   False,
+    "skip_embedding": False,
+    "embedding_backend": "ollama",
+    "embedding_url":     "http://localhost:11434",
+    "embedding_model":   "bge-m3",
+    "embedding_api_key": None,
+    "embedding_batch":   16,
+    "qdrant":          True,              # IDE 运行默认启用 Qdrant 入库
+    "qdrant_host":     "localhost",
+    "qdrant_port":     6334,
+    "qdrant_collection": "rag_corpus",
+    "qdrant_drop":     False,             # True = 每次清空重建
+    "tfidf_threshold":   0.92,
+    "simhash_distance":  3,
+    "minhash_threshold": 0.8,
+    "minhash_perm":      128,
+}
 
 # ---------------------------------------------------------------------------
 # 中文停用词
@@ -381,79 +408,77 @@ class EmbeddingClient:
 
 
 # ---------------------------------------------------------------------------
-# Milvus
+# Qdrant
 # ---------------------------------------------------------------------------
-_EMBEDDING_MAX_LEN = 8192  # Milvus VARCHAR 上限适配
+_EMBEDDING_MAX_LEN = 8192
 
 
 def _truncate_text(text: str, max_len: int = _EMBEDDING_MAX_LEN) -> str:
     return text if len(text) <= max_len else text[:max_len]
 
 
-def connect_milvus(host: str, port: int, db_name: str = "default") -> None:
-    from pymilvus import connections
-    connections.connect(host=host, port=port, db_name=db_name)
-    print(f"[MILVUS] 已连接 {host}:{port}")
+def create_qdrant_client(host: str, port: int,
+                         prefer_grpc: bool = True) -> "QdrantClient":
+    from qdrant_client import QdrantClient
+    client = QdrantClient(host=host, port=port, prefer_grpc=prefer_grpc)
+    print(f"[QDRANT] 已连接 {host}:{port} (grpc={prefer_grpc})")
+    return client
 
 
-def create_or_get_collection(collection_name: str, dim: int = BGE_M3_DIM,
-                             drop_if_exists: bool = False) -> "Collection":
-    from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, utility
+def create_or_get_collection_qdrant(client: "QdrantClient",
+                                    collection_name: str,
+                                    dim: int = BGE_M3_DIM,
+                                    drop_if_exists: bool = False) -> None:
+    from qdrant_client.models import Distance, VectorParams
 
-    if drop_if_exists and utility.has_collection(collection_name):
-        utility.drop_collection(collection_name)
-        print(f"[MILVUS] 已删除旧 Collection: {collection_name}")
+    if drop_if_exists:
+        try:
+            client.delete_collection(collection_name)
+            print(f"[QDRANT] 已删除旧 Collection: {collection_name}")
+        except Exception:
+            pass
 
-    if utility.has_collection(collection_name):
-        col = Collection(collection_name)
-        col.load()
-        print(f"[MILVUS] 使用已有 Collection: {collection_name} ({col.num_entities} 条)")
-        return col
+    collections = [c.name for c in client.get_collections().collections]
+    if collection_name in collections:
+        print(f"[QDRANT] 使用已有 Collection: {collection_name}")
+        return
 
-    fields = [
-        FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, max_length=64),
-        FieldSchema(name="source", dtype=DataType.VARCHAR, max_length=512),
-        FieldSchema(name="section", dtype=DataType.VARCHAR, max_length=1024),
-        FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=_EMBEDDING_MAX_LEN),
-        FieldSchema(name="char_count", dtype=DataType.INT64),
-        FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
-    ]
-    schema = CollectionSchema(fields, description="日程规划 RAG 语料库")
-    col = Collection(collection_name, schema)
-
-    # HNSW 索引（适合高召回场景）
-    col.create_index(
-        field_name="embedding",
-        index_params={
-            "index_type": "HNSW",
-            "metric_type": "COSINE",
-            "params": {"M": 16, "efConstruction": 200},
-        },
+    client.create_collection(
+        collection_name=collection_name,
+        vectors_config=VectorParams(
+            size=dim,
+            distance=Distance.COSINE,
+        ),
+        hnsw_config=None,  # 使用默认 HNSW 配置
     )
-    col.load()
-    print(f"[MILVUS] 新建 Collection: {collection_name} (dim={dim})")
-    return col
+    print(f"[QDRANT] 新建 Collection: {collection_name} (dim={dim}, cosine)")
 
 
-def insert_to_milvus(chunks: List[Dict], collection: "Collection",
+def insert_to_qdrant(client: "QdrantClient", chunks: List[Dict],
+                     collection_name: str,
                      batch_size: int = 50) -> int:
-    from pymilvus import DataType
+    from qdrant_client.models import PointStruct
 
     total = 0
     for batch_start in range(0, len(chunks), batch_size):
         batch = chunks[batch_start: batch_start + batch_size]
-        entities = [
-            [c["id"] for c in batch],
-            [c["source"] for c in batch],
-            [c["section"] for c in batch],
-            [_truncate_text(c["text"]) for c in batch],
-            [c["char_count"] for c in batch],
-            [c["embedding"] for c in batch],
+        points = [
+            PointStruct(
+                id=c["id"],
+                vector=c["embedding"],
+                payload={
+                    "source": c["source"],
+                    "section": c["section"],
+                    "text": _truncate_text(c["text"]),
+                    "char_count": c["char_count"],
+                },
+            )
+            for c in batch
         ]
-        collection.insert(entities)
+        client.upsert(collection_name=collection_name, points=points)
         total += len(batch)
-    collection.flush()
-    print(f"[MILVUS] 写入 {total} 条向量")
+
+    print(f"[QDRANT] 写入 {total} 条向量")
     return total
 
 
@@ -462,60 +487,92 @@ def insert_to_milvus(chunks: List[Dict], collection: "Collection",
 # ---------------------------------------------------------------------------
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="日程规划语料处理管线：去重 → BGE-M3 Embedding → Milvus 入库",
+        description="日程规划语料处理管线：去重 → BGE-M3 Embedding → Qdrant 入库",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例：
-  # 全流程：去重 + ollama BGE-M3 + Milvus
-  python dedup_corpus.py -i ./rag_data --embedding-backend ollama --milvus
+  # 全流程：去重 + ollama BGE-M3 + Qdrant
+  python dedup_corpus.py -i ./rag_data --embedding-backend ollama --qdrant
 
   # 使用 OpenAI 兼容 API
   python dedup_corpus.py -i ./rag_data --embedding-backend openai \\
       --embedding-url https://api.siliconflow.cn \\
       --embedding-model BAAI/bge-m3 \\
-      --embedding-api-key sk-xxx --milvus
+      --embedding-api-key sk-xxx --qdrant
 
   # 只去重导出 JSON
   python dedup_corpus.py -i ./rag_data --skip-embedding
         """,
     )
     # -- 输入/输出 --
-    parser.add_argument("-i", "--input", required=True, help="语料目录路径（.md 文件）")
+    parser.add_argument("-i", "--input", default=None, help="语料目录路径（.md 文件）")
     parser.add_argument("-H", "--history", default=None, help="用户历史 JSON 路径（可选）")
-    parser.add_argument("-o", "--output", default="./output", help="输出目录（默认 ./output）")
+    parser.add_argument("-o", "--output", default=None, help="输出目录（默认 ./output）")
 
     # -- 去重参数 --
-    parser.add_argument("--tfidf-threshold", type=float, default=0.92, help="TF-IDF 阈值（默认 0.92）")
-    parser.add_argument("--simhash-distance", type=int, default=3, help="SimHash 汉明距离（默认 3）")
-    parser.add_argument("--minhash-threshold", type=float, default=0.8, help="MinHash Jaccard 阈值（默认 0.8）")
-    parser.add_argument("--minhash-perm", type=int, default=128, help="MinHash 排列数（默认 128）")
-    parser.add_argument("--no-minhash", action="store_true", help="跳过 MinHash")
-    parser.add_argument("--skip-dedup", action="store_true", help="跳过去重")
+    parser.add_argument("--tfidf-threshold", type=float, default=None, help="TF-IDF 阈值（默认 0.92）")
+    parser.add_argument("--simhash-distance", type=int, default=None, help="SimHash 汉明距离（默认 3）")
+    parser.add_argument("--minhash-threshold", type=float, default=None, help="MinHash Jaccard 阈值（默认 0.8）")
+    parser.add_argument("--minhash-perm", type=int, default=None, help="MinHash 排列数（默认 128）")
+    parser.add_argument("--no-minhash", action="store_true", default=None, help="跳过 MinHash")
+    parser.add_argument("--skip-dedup", action="store_true", default=None, help="跳过去重")
 
     # -- embedding --
-    parser.add_argument("--skip-embedding", action="store_true", help="跳过 embedding + Milvus")
-    parser.add_argument("--embedding-backend", default="ollama",
+    parser.add_argument("--skip-embedding", action="store_true", default=None, help="跳过 embedding + Qdrant")
+    parser.add_argument("--embedding-backend", default=None,
                         choices=["ollama", "openai", "openai-compatible"],
                         help="embedding 后端（默认 ollama）")
-    parser.add_argument("--embedding-url", default="http://localhost:11434",
+    parser.add_argument("--embedding-url", default=None,
                         help="embedding API 地址（默认 http://localhost:11434）")
-    parser.add_argument("--embedding-model", default="bge-m3",
+    parser.add_argument("--embedding-model", default=None,
                         help="embedding 模型名（默认 bge-m3）")
     parser.add_argument("--embedding-api-key", default=None,
                         help="API key（OpenAI 兼容后端需要）")
-    parser.add_argument("--embedding-batch", type=int, default=16,
+    parser.add_argument("--embedding-batch", type=int, default=None,
                         help="embedding 批大小（默认 16）")
 
-    # -- Milvus --
-    parser.add_argument("--milvus", action="store_true", help="启用 Milvus 入库")
-    parser.add_argument("--milvus-host", default="localhost", help="Milvus 地址（默认 localhost）")
-    parser.add_argument("--milvus-port", type=int, default=19530, help="Milvus 端口（默认 19530）")
-    parser.add_argument("--milvus-collection", default="rag_corpus",
-                        help="Milvus Collection 名（默认 rag_corpus）")
-    parser.add_argument("--milvus-drop", action="store_true",
+    # -- Qdrant --
+    parser.add_argument("--qdrant", action="store_true", default=None, help="启用 Qdrant 入库")
+    parser.add_argument("--qdrant-host", default=None, help="Qdrant 地址（默认 localhost）")
+    parser.add_argument("--qdrant-port", type=int, default=None, help="Qdrant gRPC 端口（默认 6334）")
+    parser.add_argument("--qdrant-collection", default=None,
+                        help="Qdrant Collection 名（默认 rag_corpus）")
+    parser.add_argument("--qdrant-drop", action="store_true", default=None,
                         help="入库前删除已有 Collection 并重建")
 
-    args = parser.parse_args()
+    raw_args = parser.parse_args()
+
+    # ---- IDE 模式：无命令行参数时自动使用 IDE_DEFAULTS ----
+    ide_mode = len(sys.argv) <= 1
+    if ide_mode:
+        print("[IDE] 未检测到命令行参数，使用 IDE_DEFAULTS 配置\n")
+        d = IDE_DEFAULTS
+        # 构造一个等效的 args 对象
+        class IdeArgs:
+            pass
+        args = IdeArgs()
+        for key, val in d.items():
+            setattr(args, key, val)
+    else:
+        args = raw_args
+        # 对 None 的字段回填默认值
+        _fallback = {
+            "input": "./rag_data", "output": "./output", "history": None,
+            "skip_dedup": False, "no_minhash": False, "skip_embedding": False,
+            "embedding_backend": "ollama", "embedding_url": "http://localhost:11434",
+            "embedding_model": "bge-m3", "embedding_api_key": None, "embedding_batch": 16,
+            "qdrant": False, "qdrant_host": "localhost", "qdrant_port": 6334,
+            "qdrant_collection": "rag_corpus", "qdrant_drop": False,
+            "tfidf_threshold": 0.92, "simhash_distance": 3,
+            "minhash_threshold": 0.8, "minhash_perm": 128,
+        }
+        for key, fallback_val in _fallback.items():
+            if getattr(args, key, None) is None:
+                setattr(args, key, fallback_val)
+
+    if not args.input:
+        print("[ERROR] 未指定输入目录（-i 或 IDE_DEFAULTS['input']）")
+        sys.exit(1)
 
     input_dir = Path(args.input)
     output_dir = Path(args.output)
@@ -595,9 +652,9 @@ def main() -> None:
     total_removed = tfidf_removed + simhash_removed + minhash_removed
     print(f"  去重后: {len(all_chunks)} chunks\n")
 
-    # ---- 分配 ID ----
+    # ---- 分配 ID（Qdrant 要求 int 或 UUID）----
     for idx, c in enumerate(all_chunks):
-        c["id"] = f"chunk_{idx:04d}"
+        c["id"] = idx
 
     # =====================================================================
     # 阶段 4: BGE-M3 Embedding
@@ -641,33 +698,35 @@ def main() -> None:
         print("[STAGE 4] Embedding — 已跳过\n")
 
     # =====================================================================
-    # 阶段 5: Milvus 入库
+    # 阶段 5: Qdrant 入库
     # =====================================================================
-    if args.milvus:
+    if args.qdrant:
         if args.skip_embedding:
-            print("[WARN] 跳过 embedding 时无法写入 Milvus（缺少向量），"
+            print("[WARN] 跳过 embedding 时无法写入 Qdrant（缺少向量），"
                   "请移除 --skip-embedding")
         else:
-            print(f"[STAGE 5] Milvus 入库 → {args.milvus_host}:{args.milvus_port}"
-                  f" / {args.milvus_collection}")
-            t_milv = time.perf_counter()
+            print(f"[STAGE 5] Qdrant 入库 → {args.qdrant_host}:{args.qdrant_port}"
+                  f" / {args.qdrant_collection}")
+            t_qd = time.perf_counter()
             try:
-                connect_milvus(args.milvus_host, args.milvus_port)
-                col = create_or_get_collection(
-                    args.milvus_collection, dim=dim,
-                    drop_if_exists=args.milvus_drop,
+                qdrant_client = create_qdrant_client(
+                    args.qdrant_host, args.qdrant_port)
+                create_or_get_collection_qdrant(
+                    qdrant_client, args.qdrant_collection, dim=dim,
+                    drop_if_exists=args.qdrant_drop,
                 )
-                inserted = insert_to_milvus(all_chunks, col)
-                milv_time = time.perf_counter() - t_milv
-                print(f"  Milvus 入库完成, {inserted} 条, 耗时: {milv_time:.2f}s\n")
+                inserted = insert_to_qdrant(
+                    qdrant_client, all_chunks, args.qdrant_collection)
+                qd_time = time.perf_counter() - t_qd
+                print(f"  Qdrant 入库完成, {inserted} 条, 耗时: {qd_time:.2f}s\n")
             except ImportError:
-                print("[ERROR] 未安装 pymilvus，请执行: pip install pymilvus")
+                print("[ERROR] 未安装 qdrant-client，请执行: pip install qdrant-client")
                 sys.exit(1)
             except Exception as e:
-                print(f"[ERROR] Milvus 入库失败: {e}")
+                print(f"[ERROR] Qdrant 入库失败: {e}")
                 sys.exit(1)
     else:
-        print("[STAGE 5] Milvus 入库 — 未启用\n")
+        print("[STAGE 5] Qdrant 入库 — 未启用\n")
 
     # =====================================================================
     # 输出 JSON（始终导出）
@@ -706,9 +765,9 @@ def main() -> None:
             "dim": dim,
             "skipped": args.skip_embedding,
         },
-        "milvus": {
-            "enabled": args.milvus,
-            "collection": args.milvus_collection,
+        "qdrant": {
+            "enabled": args.qdrant,
+            "collection": args.qdrant_collection,
         },
         "sources": {
             "md_files": [f.name for f in md_files],
@@ -731,7 +790,7 @@ def main() -> None:
   最终数量      : {len(all_chunks)}
   去重率        : {stats['dedup_ratio']}
   Embedding     : {'跳过' if args.skip_embedding else f'{args.embedding_backend}/{args.embedding_model} ({dim}d)'}
-  Milvus        : {'跳过' if not args.milvus else f'{args.milvus_host}:{args.milvus_port}/{args.milvus_collection}'}
+  Qdrant        : {'跳过' if not args.qdrant else f'{args.qdrant_host}:{args.qdrant_port}/{args.qdrant_collection}'}
 {'=' * 50}
 """)
 

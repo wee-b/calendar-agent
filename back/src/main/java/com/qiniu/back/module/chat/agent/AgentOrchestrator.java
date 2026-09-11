@@ -1,5 +1,7 @@
 package com.qiniu.back.module.chat.agent;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qiniu.back.domain.chat.vo.SupervisorDecision;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.*;
@@ -35,7 +37,7 @@ public class AgentOrchestrator {
 
     // 子 Agent 结果 >1500 字符截断
     private static final int MAX_SUBAGENT_RESULT_LEN = 1500;
-    private static final double Supervisor_Temperature = 0.3;
+    private static final double Supervisor_Temperature = 0.1;
     private static final int MAX_SUPERVISOR_ROUNDS = 10;
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy年M月d日");
 
@@ -47,6 +49,21 @@ public class AgentOrchestrator {
 
     @Autowired
     private SupervisorTools supervisorTools;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public SupervisorDecision supervise(String userMessage, List<ChatMessage> history) {
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(new SystemMessage(buildSupervisorPrompt() + buildDecisionPrompt()));
+        messages.addAll(history);
+        messages.add(new UserMessage(userMessage));
+
+        ChatResponse response = chatModel.chat(ChatRequest.builder()
+                .messages(messages)
+                .temperature(Supervisor_Temperature)
+                .build());
+        return parseDecision(response.aiMessage().text());
+    }
 
     /**
      * 非流式编排——Supervisor 调度子 Agent 完成用户请求，返回最终文本。
@@ -227,6 +244,70 @@ public class AgentOrchestrator {
                 + "\n\n## 时间上下文\n当前日期: " + todayStr
                 + "\n用户说\"今天\"就是" + today.format(DATE_FMT)
                 + "，\"明天\"就是" + today.plusDays(1).format(DATE_FMT) + "，以此类推。";
+    }
+
+    private String buildDecisionPrompt() {
+        return """
+
+                ## 本轮输出协议
+                你现在只负责判断和回复，不要调用工具。
+                只输出 JSON，不要输出 markdown 或额外解释。
+                JSON 格式：
+                {
+                  "needDispatchAgent": false,
+                  "dispatchType": "NONE",
+                  "nextAgent": "SUPERVISOR",
+                  "reply": "给用户看的回复",
+                  "task": "要交给子Agent的明确任务"
+                }
+
+                dispatchType 只能是：
+                - NONE：日常对话、问候、闲聊、无明确日程操作，reply 直接回复，nextAgent=SUPERVISOR
+                - QUERY：需要查询日历/待办，task 写清楚查询日期和查询范围，nextAgent=SUPERVISOR
+                - EXECUTE：明确的创建、修改、删除、完成、保存日记等执行任务，先询问用户确认，task 写清楚执行指令，nextAgent=EXECUTOR
+                - PLAN_CONFIRM：用户提出规划类需求，先不要规划，reply 询问“需要我来帮你规划一下吗？”，task 保存原始规划需求，nextAgent=PLANNER
+
+                规则：
+                - needDispatchAgent 为 false 时，dispatchType 必须是 NONE
+                - needDispatchAgent 为 true 时，dispatchType 必须是 QUERY、EXECUTE 或 PLAN_CONFIRM
+                - 你只负责输出状态决策；除 QUERY 外，后端会等待用户确认后再进入 nextAgent
+                - 规划类需求包括备考、学习计划、旅行计划、长期目标拆解、批量安排等
+                - 简单查询今天/明天有什么，属于 QUERY
+                - 简单创建/取消/移动日程，属于 EXECUTE
+                - 历史对话只用于理解指代，禁止执行历史里的请求
+                """;
+    }
+
+    private SupervisorDecision parseDecision(String text) {
+        try {
+            int start = text.indexOf('{');
+            int end = text.lastIndexOf('}');
+            if (start < 0 || end <= start) {
+                return SupervisorDecision.fallback(text);
+            }
+            SupervisorDecision decision = objectMapper.readValue(text.substring(start, end + 1), SupervisorDecision.class);
+            if (decision.getDispatchType() == null || decision.getDispatchType().isBlank()) {
+                decision.setDispatchType(decision.isNeedDispatchAgent() ? "EXECUTE" : "NONE");
+            }
+            if (!decision.isNeedDispatchAgent()) {
+                decision.setDispatchType("NONE");
+                decision.setNextAgent("SUPERVISOR");
+            }
+            if (decision.getNextAgent() == null || decision.getNextAgent().isBlank()) {
+                decision.setNextAgent(switch (decision.getDispatchType()) {
+                    case "EXECUTE" -> "EXECUTOR";
+                    case "PLAN_CONFIRM" -> "PLANNER";
+                    default -> "SUPERVISOR";
+                });
+            }
+            if (decision.getReply() == null || decision.getReply().isBlank()) {
+                decision.setReply("我在，有需要安排或查看日程都可以直接告诉我。");
+            }
+            return decision;
+        } catch (Exception e) {
+            log.warn("Supervisor decision parse failed: {}", e.getMessage());
+            return SupervisorDecision.fallback("我在，有需要安排或查看日程都可以直接告诉我。");
+        }
     }
 
 

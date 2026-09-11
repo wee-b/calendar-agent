@@ -2,10 +2,6 @@
 create database if not exists yl_database;
 
 SET NAMES utf8mb4;
-SET FOREIGN_KEY_CHECKS = 0;
-
-
-
 -- yl_user
 DROP TABLE IF EXISTS `yl_user`;
 CREATE TABLE `yl_user`
@@ -58,10 +54,7 @@ CREATE TABLE `yl_todo`
     `update_time` DATETIME   NOT NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`todo_id`),
-    KEY `idx_user_status` (`user_id`, `status`),
-    CONSTRAINT `fk_todo_user`
-        FOREIGN KEY (`user_id`)
-            REFERENCES `yl_user` (`user_id`)
+    KEY `idx_user_status` (`user_id`, `status`)
 
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='待办表（目标）';
 
@@ -99,10 +92,7 @@ CREATE TABLE `yl_todo_date`
 
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_todo_date` (`todo_id`, `todo_date`),
-    KEY `idx_date` (`todo_date`),
-    CONSTRAINT `fk_tododate_todo`
-        FOREIGN KEY (`todo_id`)
-            REFERENCES `yl_todo` (`todo_id`)
+    KEY `idx_date` (`todo_date`)
 
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='待办日期关联表';
 
@@ -133,13 +123,100 @@ CREATE TABLE `yl_daily_note`
         ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 
     PRIMARY KEY (`note_id`),
-    UNIQUE KEY `uk_user_date` (`user_id`, `note_date`),
-    CONSTRAINT `fk_dailynote_user`
-        FOREIGN KEY (`user_id`)
-            REFERENCES `yl_user` (`user_id`)
+    UNIQUE KEY `uk_user_date` (`user_id`, `note_date`)
 
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='每日日记表';
 
+
+
+-- yl_plan_draft
+DROP TABLE IF EXISTS `yl_plan_draft`;
+
+CREATE TABLE `yl_plan_draft`
+(
+    `draft_id`       BIGINT        NOT NULL AUTO_INCREMENT COMMENT 'plan draft id',
+    `user_id`        BIGINT        NOT NULL COMMENT 'user id',
+    `session_id`     VARCHAR(64)   NOT NULL COMMENT 'chat session id',
+    `goal`           VARCHAR(255)  NULL DEFAULT NULL COMMENT 'plan goal',
+    `plan_json`      TEXT          NOT NULL COMMENT 'planner raw json',
+    `status`         VARCHAR(20)   NOT NULL DEFAULT 'pending' COMMENT 'pending/synced/cancelled/expired',
+    `source_message` VARCHAR(1000) NULL DEFAULT NULL COMMENT 'source requirement',
+    `create_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'created time',
+    `update_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'updated time',
+
+    PRIMARY KEY (`draft_id`),
+    KEY `idx_user_session_status` (`user_id`, `session_id`, `status`),
+    KEY `idx_user_create_time` (`user_id`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='plan draft table';
+
+
+-- yl_agent_flow_state
+DROP TABLE IF EXISTS `yl_agent_flow_state`;
+
+CREATE TABLE `yl_agent_flow_state`
+(
+    `state_id`        BIGINT       NOT NULL AUTO_INCREMENT COMMENT 'Agent flow state id',
+    `user_id`         BIGINT       NOT NULL COMMENT 'User id',
+    `session_id`      VARCHAR(64)  NOT NULL COMMENT 'Chat session id',
+    `current_agent`   VARCHAR(32)  NOT NULL DEFAULT 'SUPERVISOR' COMMENT 'Current owner: SUPERVISOR/PLANNER/EXECUTOR',
+    `next_agent`      VARCHAR(32)  NOT NULL DEFAULT 'SUPERVISOR' COMMENT 'Agent to run after user confirms',
+    `stage`           VARCHAR(32)  NOT NULL DEFAULT 'IDLE' COMMENT 'IDLE/WAIT_CONFIRM/WAIT_FEEDBACK',
+    `pending_task`    TEXT         NULL DEFAULT NULL COMMENT 'Pending user task or refined instruction',
+    `pending_payload` MEDIUMTEXT   NULL DEFAULT NULL COMMENT 'Agent output payload, such as planner result',
+    `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Created time',
+    `update_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Updated time',
+
+    PRIMARY KEY (`state_id`),
+    UNIQUE KEY `uk_user_session` (`user_id`, `session_id`),
+    KEY `idx_user_update_time` (`user_id`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent flow state table';
+
+
+-- yl_user_memory
+DROP TABLE IF EXISTS `yl_user_memory`;
+
+CREATE TABLE `yl_user_memory`
+(
+    `memory_id`      BIGINT        NOT NULL AUTO_INCREMENT COMMENT '记忆ID',
+    `user_id`        BIGINT        NOT NULL COMMENT '用户ID',
+    `memory_type`    VARCHAR(32)   NOT NULL COMMENT '记忆类型',
+    `content`        VARCHAR(1000) NOT NULL COMMENT '给模型看的自然语言记忆',
+    `normalized_key` VARCHAR(128)  NULL DEFAULT NULL COMMENT '归一化键，用于冲突合并',
+    `source`         VARCHAR(32)   NOT NULL DEFAULT 'chat' COMMENT '来源: chat/plan/todo/daily_note/behavior/system',
+    `source_id`      BIGINT        NULL DEFAULT NULL COMMENT '来源记录ID',
+    `confidence`     DECIMAL(4,3)  NOT NULL DEFAULT 0.800 COMMENT '置信度',
+    `status`         VARCHAR(20)   NOT NULL DEFAULT 'active' COMMENT 'active/archived/deleted',
+    `last_used_time` DATETIME      NULL DEFAULT NULL COMMENT '最近注入使用时间',
+    `expire_time`    DATETIME      NULL DEFAULT NULL COMMENT '过期时间，长期偏好可为空',
+    `create_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time`    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+    PRIMARY KEY (`memory_id`),
+    KEY `idx_user_type_status` (`user_id`, `memory_type`, `status`),
+    KEY `idx_user_key_status` (`user_id`, `normalized_key`, `status`),
+    KEY `idx_user_update_time` (`user_id`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户长期记忆表';
+
+
+-- yl_chat_context_summary
+DROP TABLE IF EXISTS `yl_chat_context_summary`;
+
+CREATE TABLE `yl_chat_context_summary`
+(
+    `summary_id`       BIGINT       NOT NULL AUTO_INCREMENT COMMENT '摘要ID',
+    `user_id`          BIGINT       NOT NULL COMMENT '用户ID',
+    `session_id`       VARCHAR(64)  NOT NULL COMMENT '会话ID',
+    `last_dialogue_id` BIGINT       NOT NULL DEFAULT 0 COMMENT '已摘要到的最大 dialogue_id',
+    `message_count`    INT          NOT NULL DEFAULT 0 COMMENT '累计压缩消息数',
+    `summary_text`     TEXT         NOT NULL COMMENT '压缩后的历史摘要',
+    `status`           VARCHAR(20)  NOT NULL DEFAULT 'active' COMMENT 'active/archived',
+    `create_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+    PRIMARY KEY (`summary_id`),
+    KEY `idx_user_session_status` (`user_id`, `session_id`, `status`),
+    KEY `idx_user_session_dialogue` (`user_id`, `session_id`, `last_dialogue_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='聊天上下文摘要表';
 
 
 -- yl_ai_dialogue（对话记录表）
@@ -156,6 +233,7 @@ CREATE TABLE `yl_ai_dialogue`
     `user_text`     TEXT         NULL DEFAULT NULL COMMENT '用户输入文本（语音转文字）',
     `ai_result`     TEXT         NULL DEFAULT NULL COMMENT 'AI返回文本',
     `ai_audio_url`  VARCHAR(500) NULL DEFAULT NULL COMMENT 'AI回复TTS音频URL',
+    `response_time_ms` BIGINT    NULL DEFAULT NULL COMMENT 'AI完整响应耗时，单位毫秒',
 
     `intent`         VARCHAR(50)  NULL DEFAULT NULL COMMENT '识别意图：add_todo/delete_todo/query_todo/update_todo/chat',
     `execute_result` VARCHAR(255) NULL DEFAULT NULL COMMENT '执行结果摘要',
@@ -166,14 +244,8 @@ CREATE TABLE `yl_ai_dialogue`
 
     PRIMARY KEY (`dialogue_id`),
     KEY `idx_user_session` (`user_id`, `session_id`),
-    KEY `idx_user_create_time` (`user_id`, `create_time`),
-
-    CONSTRAINT `fk_dialogue_user`
-        FOREIGN KEY (`user_id`)
-            REFERENCES `yl_user` (`user_id`)
+    KEY `idx_user_create_time` (`user_id`, `create_time`)
 )ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'AI对话记录表';
-
-SET FOREIGN_KEY_CHECKS = 1;
 
 
 

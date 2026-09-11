@@ -6,13 +6,11 @@ import com.qiniu.back.util.DigestUtil;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
-import io.milvus.client.MilvusServiceClient;
-import io.milvus.param.MetricType;
-import io.milvus.param.R;
-import io.milvus.param.dml.QueryParam;
-import io.milvus.param.dml.SearchParam;
-import io.milvus.response.QueryResultsWrapper;
-import io.milvus.response.SearchResultsWrapper;
+import io.qdrant.client.QdrantClient;
+import io.qdrant.client.WithPayloadSelectorFactory;
+import io.qdrant.client.grpc.Points;
+import io.qdrant.client.grpc.Points.ScoredPoint;
+import io.qdrant.client.grpc.JsonWithInt.Value;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.lucene.analysis.cn.smart.SmartChineseAnalyzer;
@@ -30,15 +28,8 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.MMapDirectory;
-import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -51,7 +42,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * RAG 混合检索引擎：BM25(Lucene) + BGE-M3(Milvus) → RRF 融合 → LLM Rerank
+ * RAG 混合检索引擎：BM25(Lucene) + BGE-M3(Qdrant) → RRF 融合 → LLM Rerank
  */
 @Slf4j
 @Service
@@ -60,30 +51,33 @@ public class RagService {
     private static final int RRF_K = 60;
 
     private final RagProperties props;
-    private final RestTemplate rest;
-    private final MilvusServiceClient milvus;
-    private final ChatModel chatModel;// 现有 4 个参数：props, rest, milvus, chatModel
+    private final QdrantProperties qdrantProps;
+    private final EmbeddingClient embeddingClient;
+    private final QdrantClient qdrant;
+    private final ChatModel chatModel;
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
 
+    private volatile boolean qdrantAvailable = true;
 
 
     private final AtomicReference<IndexSearcher> bm25Searcher = new AtomicReference<>();
     private SmartChineseAnalyzer analyzer;
 
-    public RagService(RagProperties props, RestTemplate rest,
-                      MilvusServiceClient milvus, ChatModel chatModel,StringRedisTemplate redis,ObjectMapper objectMapper) {
+    public RagService(RagProperties props, QdrantProperties qdrantProps, EmbeddingClient embeddingClient,
+                      QdrantClient qdrant, ChatModel chatModel, StringRedisTemplate redis, ObjectMapper objectMapper) {
         this.props = props;
-        this.rest = rest;
-        this.milvus = milvus;
+        this.qdrantProps = qdrantProps;
+        this.embeddingClient = embeddingClient;
+        this.qdrant = qdrant;
         this.chatModel = chatModel;
         this.redis = redis;
         this.objectMapper = objectMapper;
     }
 
     // ========================================================================
-    // 初始化：从 Milvus 拉取全量文档构建 Lucene BM25 索引
+    // 初始化：从 Qdrant 拉取全量文档构建 Lucene BM25 索引
     // ========================================================================
 
     @PostConstruct
@@ -97,9 +91,9 @@ public class RagService {
     }
 
     synchronized void buildBm25Index() throws IOException {
-        List<Map<String, Object>> docs = loadAllFromMilvus();
+        List<Map<String, Object>> docs = loadAllFromQdrant();
         if (docs.isEmpty()) {
-            log.warn("[RAG] Milvus 中无文档，BM25 索引为空");
+            log.warn("[RAG] Qdrant 中无文档，BM25 索引为空");
             return;
         }
 
@@ -126,26 +120,55 @@ public class RagService {
         log.info("[RAG] BM25 索引构建完成: {} 篇文档", reader.numDocs());
     }
 
-    private List<Map<String, Object>> loadAllFromMilvus() {
-        QueryParam param = QueryParam.newBuilder()
-                .withCollectionName(props.getMilvusCollection())
-                .withExpr("id != \"\"")
-                .withOutFields(List.of("id", "source", "section", "text", "char_count"))
-                .withLimit(10000L)
-                .build();
+    private List<Map<String, Object>> loadAllFromQdrant() {
+        try {
+            List<Map<String, Object>> docs = new ArrayList<>();
+            Points.ScrollPoints.Builder scrollBuilder = Points.ScrollPoints.newBuilder()
+                    .setCollectionName(qdrantProps.getCollection())
+                    .setFilter(Points.Filter.getDefaultInstance())
+                    .setLimit(1000)
+                    .setWithPayload(WithPayloadSelectorFactory.enable(true));
 
-        R<io.milvus.grpc.QueryResults> result = milvus.query(param);
-        if (result.getStatus() != 0) {
-            log.error("[RAG] Milvus 全量查询失败: {}", result.getMessage());
+            Points.ScrollResponse scroll = qdrant.scrollAsync(scrollBuilder.build()).get();
+
+            while (true) {
+                for (Points.RetrievedPoint point : scroll.getResultList()) {
+                    Map<String, Object> doc = new java.util.HashMap<>();
+                    doc.put("id", point.getId().getUuid());
+                    Map<String, Value> payload = point.getPayloadMap();
+                    for (Map.Entry<String, Value> entry : payload.entrySet()) {
+                        doc.put(entry.getKey(), extractValue(entry.getValue()));
+                    }
+                    docs.add(doc);
+                }
+
+                if (!scroll.hasNextPageOffset()) {
+                    break;
+                }
+                scrollBuilder.setOffset(scroll.getNextPageOffset());
+                scroll = qdrant.scrollAsync(scrollBuilder.build()).get();
+            }
+            return docs;
+        } catch (Exception e) {
+            if (isQdrantCollectionMissing(e)) {
+                qdrantAvailable = false;
+                log.warn("[RAG] Qdrant collection is missing. Dense retrieval disabled for this process.");
+            } else {
+                log.warn("[RAG] Qdrant full scan failed: {}", e.getMessage());
+            }
             return List.of();
         }
+    }
 
-        QueryResultsWrapper wrapper = new QueryResultsWrapper(result.getData());
-        List<Map<String, Object>> docs = new ArrayList<>();
-        for (QueryResultsWrapper.RowRecord row : wrapper.getRowRecords()) {
-            docs.add(row.getFieldValues());
-        }
-        return docs;
+    /** 从 Qdrant Value 中提取 Java 原生类型 */
+    private static Object extractValue(Value v) {
+        return switch (v.getKindCase()) {
+            case STRING_VALUE -> v.getStringValue();
+            case INTEGER_VALUE -> v.getIntegerValue();
+            case DOUBLE_VALUE -> v.getDoubleValue();
+            case BOOL_VALUE -> v.getBoolValue();
+            default -> v.getStringValue();
+        };
     }
 
     // ========================================================================
@@ -233,53 +256,77 @@ public class RagService {
     }
 
     // ========================================================================
-    // Dense 检索 (Ollama BGE-M3 → Milvus)
+    // Dense 检索 (Ollama BGE-M3 → Qdrant)
     // ========================================================================
 
     List<RagHit> searchDense(String query) {
-        List<Float> embedding = embedQuery(query);
-        if (embedding == null || embedding.isEmpty()) return List.of();
-
-        SearchParam param = SearchParam.newBuilder()
-                .withCollectionName(props.getMilvusCollection())
-                .withVectorFieldName("embedding")
-                .withFloatVectors(List.of(embedding))
-                .withTopK(props.getDenseTopK())
-                .withMetricType(MetricType.COSINE)
-                .withOutFields(List.of("id", "source", "section", "text", "char_count"))
-                .build();
-
-        R<io.milvus.grpc.SearchResults> result = milvus.search(param);
-        if (result.getStatus() != 0) {
-            log.warn("[RAG] Milvus 语义搜索失败: {}", result.getMessage());
+        if (!qdrantAvailable) {
             return List.of();
         }
 
-        SearchResultsWrapper wrapper = new SearchResultsWrapper(result.getData().getResults());
-        List<SearchResultsWrapper.IDScore> idScores = wrapper.getIDScore(0);
-        List<RagHit> hits = new ArrayList<>();
-        for (SearchResultsWrapper.IDScore is : idScores) {
-            hits.add(new RagHit(
-                    is.getStrID(),
-                    String.valueOf(is.get("source")),
-                    String.valueOf(is.get("section")),
-                    String.valueOf(is.get("text")),
-                    ((Number) is.get("char_count")).intValue(),
-                    is.getScore()
-            ));
+        List<Float> embedding = embedQuery(query);
+        if (embedding == null || embedding.isEmpty()) return List.of();
+
+        try {
+            List<ScoredPoint> results = qdrant.searchAsync(
+                    Points.SearchPoints.newBuilder()
+                            .setCollectionName(qdrantProps.getCollection())
+                            .addAllVector(embedding)
+                            .setLimit(props.getDenseTopK())
+                            .setWithPayload(WithPayloadSelectorFactory.enable(true))
+                            .setParams(Points.SearchParams.newBuilder()
+                                    .setHnswEf(128)
+                                    .build())
+                            .build()
+            ).get();
+
+            List<RagHit> hits = new ArrayList<>();
+            for (ScoredPoint sp : results) {
+                Map<String, Value> payload = sp.getPayloadMap();
+                hits.add(new RagHit(
+                        sp.getId().getUuid(),
+                        getPayloadString(payload, "source"),
+                        getPayloadString(payload, "section"),
+                        getPayloadString(payload, "text"),
+                        getPayloadInt(payload, "char_count"),
+                        sp.getScore()
+                ));
+            }
+            return hits;
+        } catch (Exception e) {
+            if (isQdrantCollectionMissing(e)) {
+                qdrantAvailable = false;
+                log.warn("[RAG] Qdrant collection is missing. Dense retrieval disabled for this process.");
+            } else {
+                log.warn("[RAG] Qdrant dense search failed: {}", e.getMessage());
+            }
+            return List.of();
         }
-        return hits;
+    }
+
+    private boolean isQdrantCollectionMissing(Exception e) {
+        String message = e.getMessage();
+        return message != null && message.contains("NOT_FOUND") && message.contains("Collection");
+    }
+
+    private static String getPayloadString(Map<String, Value> payload, String key) {
+        Value v = payload.get(key);
+        return v != null ? v.getStringValue() : "";
+    }
+
+    private static int getPayloadInt(Map<String, Value> payload, String key) {
+        Value v = payload.get(key);
+        return v != null ? (int) v.getIntegerValue() : 0;
     }
 
     // ========================================================================
-    // BGE-M3 Embedding (Ollama)
+    // Embedding provider (Ollama / OpenAI-compatible)
     // ========================================================================
 
-    @SuppressWarnings("unchecked")
     List<Float> embedQuery(String text) {
 
         // 1. 检查 Redis 缓存
-        String cacheKey = RedisConstant.Rag_Emb_Key + DigestUtil.md5(text);
+        String cacheKey = RedisConstant.Rag_Emb_Key + DigestUtil.md5(embeddingClient.cacheNamespace() + ":" + text);
         try {
             String cached = redis.opsForValue().get(cacheKey);
             if (cached != null) {
@@ -290,43 +337,18 @@ public class RagService {
             log.warn("[RAG] 读取 embedding 缓存失败: {}", e.getMessage());
         }
 
-        // 2. 缓存未命中，请求 Ollama
-        String url = props.getOllamaUrl() + "/api/embeddings";
-        Map<String, String> body = Map.of("model", props.getEmbeddingModel(), "prompt", text);
-
-        try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            HttpEntity<Map<String, String>> req = new HttpEntity<>(body, headers);
-
-            ResponseEntity<Map<String, Object>> resp = rest.exchange(
-                    url, org.springframework.http.HttpMethod.POST, req,
-                    new ParameterizedTypeReference<>() {}
-            );
-
-            Map<String, Object> respBody = resp.getBody();
-            if (respBody == null || !respBody.containsKey("embedding")) return List.of();
-
-            Object emb = respBody.get("embedding");
-            if (emb instanceof List<?> list) {
-                List<Float> floats = new ArrayList<>();
-                for (Object item : list) {
-                    floats.add(((Number) item).floatValue());
-                }
-                // 3. 写入 Redis 缓存
-                try {
-                    redis.opsForValue().set(cacheKey, objectMapper.writeValueAsString(floats),
-                            Duration.ofSeconds(props.getEmbeddingCacheTtl()));
-                } catch (Exception e) {
-                    log.warn("[RAG] 写入 embedding 缓存失败: {}", e.getMessage());
-                }
-                return floats;
-            }
-            return List.of();
-        } catch (RestClientException e) {
-            log.warn("[RAG] Ollama embedding 请求失败: {}", e.getMessage());
+        List<Float> floats = embeddingClient.embed(text);
+        if (floats.isEmpty()) {
             return List.of();
         }
+
+        try {
+            redis.opsForValue().set(cacheKey, objectMapper.writeValueAsString(floats),
+                    Duration.ofSeconds(props.getEmbeddingCacheTtl()));
+        } catch (Exception e) {
+            log.warn("[RAG] 写入 embedding 缓存失败: {}", e.getMessage());
+        }
+        return floats;
     }
 
     // ========================================================================

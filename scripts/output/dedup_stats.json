@@ -12,7 +12,7 @@
     "dim": 1024,
     "skipped": false
   },
-  "milvus": {
+  "qdrant": {
     "enabled": true,
     "collection": "rag_corpus"
   },
