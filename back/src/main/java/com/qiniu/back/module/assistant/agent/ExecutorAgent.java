@@ -10,6 +10,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
 
@@ -19,8 +20,9 @@ import java.util.Set;
 public class ExecutorAgent {
 
     private static final Set<String> EXECUTOR_TOOLS = Set.of(
-            "createTodo", "deleteTodo", "updateTodo", "toggleTodoDate", "saveDailyNote",
-            "removeTodoDay", "addTodoDay", "queryTodoList", "queryDayDetail", "queryMonthCount");
+            "createTodo", "deleteTodo", "updateTodo", "toggleTodoDate",
+            "saveDailyNote", "removeTodoDay", "addTodoDay",
+            "queryTodoList", "queryDayDetail", "queryMonthCount");
 
     private final ChatModel chatModel;
     private final McpToolRegistry toolRegistry;
@@ -46,7 +48,13 @@ public class ExecutorAgent {
     }
 
     public String execute(String instruction) {
-        return runner.execute(instruction);
+        LocalDate today = LocalDate.now();
+        String context = "当前日期：" + today
+                + "；今天：" + today
+                + "；明天：" + today.plusDays(1)
+                + "；后天：" + today.plusDays(2)
+                + "。\n用户指令：" + instruction;
+        return runner.execute(context);
     }
 
     public String applyPlan(PlanDraft draft) {

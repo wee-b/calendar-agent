@@ -5,13 +5,14 @@ import org.junit.jupiter.api.Test;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 class McpToolRegistryTest {
 
     @Test
-    void registersSingleDayCrudTools() {
+    void registersOriginalGeneralPurposeTodoTools() {
         McpToolRegistry registry = new McpToolRegistry(mock(ChatToolService.class));
         registry.init();
 
@@ -20,6 +21,9 @@ class McpToolRegistryTest {
                 .collect(Collectors.toSet());
 
         assertTrue(names.containsAll(Set.of(
-                "createSingleDayTodo", "queryDayDetail", "removeTodoDay", "updateTodoDay")));
+                "createTodo", "updateTodo", "deleteTodo",
+                "queryDayDetail", "removeTodoDay", "addTodoDay", "toggleTodoDate")));
+        assertFalse(names.contains("createSingleDayTodo"));
+        assertFalse(names.contains("updateTodoDay"));
     }
 }

@@ -9,9 +9,19 @@ class ChatTransitionTableTest {
     private final ChatTransitionTable table = new ChatTransitionTable();
 
     @Test
-    void readyMessageRoutes() {
-        assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.NEW_MESSAGE,
-                ChatNode.ROUTE_MESSAGE);
+    void readyStructuredSignalsMapToActions() {
+        assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.READY_CHAT,
+                ChatNode.RESPOND_DIRECTLY);
+        assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.READY_QUERY,
+                ChatNode.QUERY_CALENDAR);
+        assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.READY_SINGLE_DAY_ACTION,
+                ChatNode.EXECUTE_SINGLE_DAY_ACTION);
+        assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.READY_SINGLE_DAY_CONFIRM,
+                ChatNode.PREPARE_SINGLE_DAY_CONFIRMATION);
+        assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.READY_EXECUTE,
+                ChatNode.PREPARE_EXECUTION_CONFIRMATION);
+        assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.READY_PLAN,
+                ChatNode.PREPARE_PLAN_CONFIRMATION);
     }
 
     @Test

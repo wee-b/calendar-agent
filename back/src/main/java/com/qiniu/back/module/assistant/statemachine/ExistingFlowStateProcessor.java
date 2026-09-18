@@ -1,7 +1,6 @@
 package com.qiniu.back.module.assistant.statemachine;
 
 import com.qiniu.back.module.assistant.domain.model.PlanDraft;
-import com.qiniu.back.module.assistant.agent.ChatAgent;
 import com.qiniu.back.module.assistant.agent.ExecutorAgent;
 import com.qiniu.back.module.assistant.agent.PlannerAgent;
 import com.qiniu.back.module.assistant.domain.result.ChatDispatchResult;
@@ -20,26 +19,20 @@ public class ExistingFlowStateProcessor {
 
     private final AgentFlowStateService flowStateService;
     private final PlanDraftService planDraftService;
-    private final UserSignalResolver signalResolver;
     private final ChatTransitionTable transitionTable;
-    private final ChatAgent chatAgent;
     private final PlannerAgent plannerAgent;
     private final ExecutorAgent executorAgent;
     private final ProgressReporter reporter;
 
     public Optional<ChatDispatchResult> tryHandle(Long userId, String sessionId, String message,
+                                                  AgentFlowState state, UserSignal signal,
                                                   Consumer<String> progress) {
-        Optional<AgentFlowState> optionalState = reporter.report(progress, "读取待确认任务状态",
-                () -> flowStateService.get(userId, sessionId));
-        if (optionalState.isEmpty()) return Optional.empty();
-
-        AgentFlowState state = optionalState.get();
+        if (state == null) return Optional.empty();
         if (flowStateService.isProcessing(state)) {
             return Optional.of(result("上一项操作正在处理中，请不要重复提交。",
                     false, "PROCESSING", state.getCurrentAgent(), state.getNextAgent(), state.getStage()));
         }
         ConversationStage stage = flowStateService.resolveStage(state);
-        UserSignal signal = signalResolver.resolve(stage, state, message);
         ChatTransitionTable.TransitionRule rule = transitionTable.resolve(stage, signal);
         Request request = new Request(userId, sessionId, message, progress);
         if (rule.targetNode() == ChatNode.EXPLAIN_PENDING_STATE) {
@@ -70,19 +63,18 @@ public class ExistingFlowStateProcessor {
             case REVISE_PLAN -> revisePlan(state, request);
             case CANCEL_PENDING_ACTION -> cancel(state, request);
             case EXPLAIN_PENDING_STATE -> explainPending(state, signal);
-            case ROUTE_MESSAGE -> throw new IllegalStateException("pending 状态不能重新路由新请求");
+            case RESPOND_DIRECTLY, QUERY_CALENDAR, EXECUTE_SINGLE_DAY_ACTION,
+                 PREPARE_SINGLE_DAY_CONFIRMATION, PREPARE_EXECUTION_CONFIRMATION,
+                 PREPARE_PLAN_CONFIRMATION ->
+                    throw new IllegalStateException("pending 状态不能执行 READY 节点");
         };
     }
 
     private ChatDispatchResult executePending(AgentFlowState state, Request request) {
-        boolean chatAction = AgentFlowStateService.AGENT_CHAT.equals(state.getNextAgent());
-        String result = reporter.report(request.progress(),
-                chatAction ? "调用 Chat Agent 执行单日操作" : "调用 Executor 执行任务",
-                () -> AgentFlowStateService.AGENT_CHAT.equals(state.getNextAgent())
-                        ? chatAgent.executeSingleDay(state.getPendingTask())
-                        : executorAgent.execute(state.getPendingTask()));
+        String result = reporter.report(request.progress(), "调用 Executor 执行任务",
+                () -> executorAgent.execute(state.getPendingTask()));
         clear(request);
-        return result(result, true, "EXECUTE", state.getCurrentAgent(),
+        return result(result, true, "EXECUTE", AgentFlowStateService.AGENT_EXECUTOR,
                 AgentFlowStateService.AGENT_SUPERVISOR, AgentFlowStateService.STAGE_IDLE);
     }
 

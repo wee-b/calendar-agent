@@ -7,7 +7,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
-import java.util.Set;
 
 @Service
 public class AgentFlowStateService {
@@ -23,9 +22,6 @@ public class AgentFlowStateService {
     public static final String STAGE_PROCESSING = "PROCESSING";
 
     private static final int EXPIRE_MINUTES = 30;
-    private static final Set<String> REJECT_MESSAGES = Set.of(
-            "不", "不用", "不需要", "不要", "算了", "取消", "先不用", "不用了",
-            "不可以", "不行", "否", "拒绝");
 
     @Autowired
     private AgentFlowStateMapper stateMapper;
@@ -45,15 +41,6 @@ public class AgentFlowStateService {
         AgentFlowState state = baseState(userId, sessionId);
         state.setCurrentAgent(AGENT_EXECUTOR);
         state.setNextAgent(AGENT_EXECUTOR);
-        state.setStage(STAGE_WAIT_CONFIRM);
-        state.setPendingTask(task);
-        return save(state);
-    }
-
-    public AgentFlowState waitChatConfirm(Long userId, String sessionId, String task) {
-        AgentFlowState state = baseState(userId, sessionId);
-        state.setCurrentAgent(AGENT_CHAT);
-        state.setNextAgent(AGENT_CHAT);
         state.setStage(STAGE_WAIT_CONFIRM);
         state.setPendingTask(task);
         return save(state);
@@ -116,14 +103,6 @@ public class AgentFlowStateService {
                 .set(AgentFlowState::getUpdateTime, LocalDateTime.now()));
     }
 
-    public boolean isRejectMessage(String message) {
-        if (message == null) return false;
-        String text = normalize(message);
-        if (REJECT_MESSAGES.contains(text)) return true;
-        return text.matches("^(不要|不用|不需要|别|取消)(同步|执行|添加|应用|创建)"
-                + "(到(日历|待办))?(了|吧)?$");
-    }
-
     public ConversationStage resolveStage(AgentFlowState state) {
         if (state == null) return ConversationStage.READY_FOR_INPUT;
         if (STAGE_WAIT_FEEDBACK.equals(state.getStage())) {
@@ -178,7 +157,4 @@ public class AgentFlowStateService {
                 .eq(AgentFlowState::getSessionId, sessionId);
     }
 
-    private String normalize(String message) {
-        return message.trim().replaceAll("[　\\s,，.。!！?？~～]", "");
-    }
 }

@@ -20,6 +20,8 @@
 
 - "删除明天的XX"、"跳过后天" → removeTodoDay
 - "删除XX这个目标"、"不再做XX了" → deleteTodo
+- 明确只创建一天的待办 → createTodo，并将 startDate/endDate 设为同一天
+- 只修改某一天的内容 → removeTodoDay 后对同一天调用 addTodoDay，其他日期不受影响
 - "把明天的改到后天" → removeTodoDay(明天) + addTodoDay(后天)
 - "周三也加上" → addTodoDay
 

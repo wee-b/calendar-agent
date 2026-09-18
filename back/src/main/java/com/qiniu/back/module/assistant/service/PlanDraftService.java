@@ -21,7 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -32,13 +31,6 @@ public class PlanDraftService {
     private static final String STATUS_SYNCED = "synced";
     private static final String STATUS_EXPIRED = "expired";
     private static final Pattern COLOR_PATTERN = Pattern.compile("^#[0-9a-fA-F]{6}$");
-    private static final Set<String> CONFIRM_MESSAGES = Set.of(
-            "可以", "确认", "同步", "添加",
-            "帮我添加", "添加到日历", "加入日历", "就按这个",
-            "没问题", "好的", "好", "行",
-            "需要", "是的", "对", "可以的", "ok", "yes",
-            "确认同步", "可以同步", "请同步", "请同步到日历");
-
     @Autowired
     private PlanDraftMapper planDraftMapper;
 
@@ -47,15 +39,6 @@ public class PlanDraftService {
 
     @Autowired
     private ObjectMapper objectMapper;
-
-    public boolean isConfirmMessage(String message) {
-        if (message == null) return false;
-        String text = message.trim()
-                .replaceAll("[　\\s,，.。!！?？~～]", "")
-                .toLowerCase();
-        if (text.isEmpty() || text.length() > 20) return false;
-        return CONFIRM_MESSAGES.contains(text);
-    }
 
     public Optional<PlanDraft> findLatestPending(Long userId, String sessionId) {
         PlanDraft draft = planDraftMapper.selectOne(new LambdaQueryWrapper<PlanDraft>()

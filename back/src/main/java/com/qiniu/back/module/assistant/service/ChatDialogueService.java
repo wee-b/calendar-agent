@@ -35,6 +35,25 @@ public class ChatDialogueService {
         return dialogueId;
     }
 
+    public String findLatestAssistantReply(Long userId, String sessionId, Long beforeDialogueId) {
+        LambdaQueryWrapper<AiDialogue> wrapper = new LambdaQueryWrapper<AiDialogue>()
+                .eq(AiDialogue::getUserId, userId)
+                .eq(AiDialogue::getSessionId, sessionId)
+                .eq(AiDialogue::getRole, "assistant")
+                .isNotNull(AiDialogue::getAiResult)
+                .ne(AiDialogue::getAiResult, "");
+        if (beforeDialogueId != null) {
+            wrapper.lt(AiDialogue::getDialogueId, beforeDialogueId);
+        }
+        AiDialogue last = aiDialogueMapper.selectOne(wrapper
+                .orderByDesc(AiDialogue::getDialogueId)
+                .last("LIMIT 1"));
+        if (last == null || last.getAiResult() == null || last.getAiResult().isBlank()) {
+            return null;
+        }
+        return last.getAiResult();
+    }
+
     public List<ChatHistoryItemVO> getHistory(Long userId, String sessionId) {
         List<AiDialogue> list = aiDialogueMapper.selectList(
                 new LambdaQueryWrapper<AiDialogue>()

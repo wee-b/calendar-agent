@@ -34,7 +34,6 @@ public class McpToolRegistry {
     @PostConstruct
     public void init() {
         registerCreateTodo();
-        registerCreateSingleDayTodo();
         registerQueryMonthCount();
         registerQueryDayDetail();
         registerQueryTodoList();
@@ -44,7 +43,6 @@ public class McpToolRegistry {
         registerSaveDailyNote();
         registerRemoveTodoDay();
         registerAddTodoDay();
-        registerUpdateTodoDay();
     }
 
     /**
@@ -160,28 +158,6 @@ public class McpToolRegistry {
                     dto.setWeekDays(toWeekDayList(args.get("weekDays")));
                     return toolService.createTodo(dto);
                 })
-                .build());
-    }
-
-    private void registerCreateSingleDayTodo() {
-        tools.put("createSingleDayTodo", McpToolDefinition.builder()
-                .name("createSingleDayTodo")
-                .description("创建只发生在指定日期的一项待办。仅用于单日新增，不能创建日期范围或周期任务。")
-                .inputSchema(Map.of(
-                        "type", "object",
-                        "properties", Map.of(
-                                "title", Map.of("type", "string", "description", "待办标题"),
-                                "date", Map.of("type", "string", "description", "日期 yyyy-MM-dd"),
-                                "dayContent", Map.of("type", "string", "description", "当天具体任务内容，可选"),
-                                "color", Map.of("type", "string", "description", "十六进制颜色，可选")
-                        ),
-                        "required", List.of("title", "date")
-                ))
-                .executor(args -> toolService.createSingleDayTodo(
-                        (String) args.get("title"),
-                        (String) args.get("date"),
-                        args.get("dayContent") instanceof String s ? s : null,
-                        args.get("color") instanceof String s ? s : null))
                 .build());
     }
 
@@ -341,26 +317,6 @@ public class McpToolRegistry {
                         toLong(args.get("todoId")),
                         (String) args.get("date"),
                         args.get("dayContent") instanceof String s ? s : null))
-                .build());
-    }
-
-    private void registerUpdateTodoDay() {
-        tools.put("updateTodoDay", McpToolDefinition.builder()
-                .name("updateTodoDay")
-                .description("只修改某个待办在指定日期的任务内容，其他日期和待办目标本身不受影响。")
-                .inputSchema(Map.of(
-                        "type", "object",
-                        "properties", Map.of(
-                                "todoId", Map.of("type", "integer", "description", "待办目标ID"),
-                                "date", Map.of("type", "string", "description", "日期 yyyy-MM-dd"),
-                                "dayContent", Map.of("type", "string", "description", "修改后的当天任务内容")
-                        ),
-                        "required", List.of("todoId", "date", "dayContent")
-                ))
-                .executor(args -> toolService.updateTodoDay(
-                        toLong(args.get("todoId")),
-                        (String) args.get("date"),
-                        (String) args.get("dayContent")))
                 .build());
     }
 

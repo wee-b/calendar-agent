@@ -32,18 +32,6 @@ public class ChatToolService {
         return "已创建目标：" + vo.getTitle() + "，颜色" + vo.getColor() + "，共" + vo.getDates().size() + "天。";
     }
 
-    public String createSingleDayTodo(String title, String date, String dayContent, String color) {
-        LocalDate todoDate = LocalDate.parse(date);
-        TodoCreateDTO dto = new TodoCreateDTO();
-        dto.setTitle(title);
-        dto.setColor(color == null || color.isBlank() ? "#5c4b37" : color);
-        dto.setDayContent(dayContent == null || dayContent.isBlank() ? title : dayContent);
-        dto.setStartDate(todoDate);
-        dto.setEndDate(todoDate);
-        dto.setWeekDays(List.of(todoDate.getDayOfWeek().getValue()));
-        return createTodo(dto);
-    }
-
     public String queryMonthCount(int year, int month) {
         log.info("Tool-queryMonthCount: {}-{}", year, month);
         List<MonthCountVO> counts = dailyNoteService.getMonthCount(year, month);
@@ -146,12 +134,6 @@ public class ChatToolService {
         } catch (Exception e) {
             return "添加失败: " + e.getMessage();
         }
-    }
-
-    public String updateTodoDay(Long todoId, String date, String dayContent) {
-        log.info("Tool-updateTodoDay: todoId={}, date={}", todoId, date);
-        todoService.updateTodoDay(todoId, LocalDate.parse(date), dayContent);
-        return "已更新待办 ID=" + todoId + " 在 " + date + " 的任务内容。请调用 queryDayDetail 验证。";
     }
 
     public String saveDailyNote(String date, String content) {

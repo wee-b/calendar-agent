@@ -35,7 +35,7 @@ calendar-agent/
 │       │   ├── module/assistant/  # AI 对话、状态机、Agent、RAG、MCP
 │       │   └── module/almanac/    # 现代黄历
 │       └── resources/
-│           ├── prompt/            # Supervisor / Planner / Query / Executor 提示词
+│           ├── prompt/            # Route / Chat / Planner / Query / Executor 提示词
 │           ├── application.yml
 │           └── application-dev.yml
 ├── front/                   # Vue 前端
@@ -69,7 +69,7 @@ calendar-agent/
 - `ChatFacadeImpl`：HTTP 对话外层流程，负责消息落库、SSE 和会话历史。
 - `ChatServiceImpl`：Assistant 核心入口，按已有状态和新请求路由的顺序处理消息。
 - `ChatTransitionTable`：集中声明状态、用户事件、动作节点和下一状态。
-- `ChatAgent` / `PlannerAgent` / `ExecutorAgent`：分别负责对话查询与单日操作、规划生成和确认后的通用执行。
+- `RouteAgent` / `ChatAgent` / `PlannerAgent` / `ExecutorAgent`：分别负责结构化每条消息、只读查询、规划生成和全部写操作。
 - `AgentRunner`：各 Agent 复用的模型及工具调用循环。
 - `PlanDraftService`：保存规划草稿，并在确认后批量创建待办。
 - `RagService`：BM25 + Qdrant 混合检索、RRF 融合、Rerank、缓存。
@@ -163,21 +163,13 @@ calendar-agent/
 ```text
 用户输入
   ├─ 异步抽取长期偏好/目标记忆
-  ├─ 已有 AgentFlowState？
-  │    ├─ 用户取消：清理状态
-  │    ├─ 用户确认：进入 Planner 或 Executor
-  │    └─ 用户补充：更新 pending_task，必要时重新规划
-  ├─ 命中待同步 PlanDraft 确认语义？
-  │    └─ 批量同步待办到日历
-  ├─ 构建压缩历史上下文
-  │    └─ 更早历史摘要 + 最近 6 轮原始对话
-  └─ Supervisor 判断类型
-       ├─ NONE：直接回复
-       ├─ QUERY：调用 Query Agent
-       ├─ CHAT_ACTION：明确的单日操作由 ChatAgent 立即执行
-       ├─ CHAT_ACTION_CONFIRM：意图不确定时等待确认，再由 ChatAgent 执行
-       ├─ EXECUTE：写入执行确认状态，等待用户确认
-       └─ PLAN_CONFIRM：写入规划确认状态，等待用户确认后调用 Planner
+  ├─ 读取 AgentFlowState、上一轮助手回复与压缩历史上下文
+  ├─ RouteAgent 结合上一轮助手回复和本轮用户消息输出结构化事件
+  └─ 状态机按当前 stage + userSignal 执行
+       ├─ READY_*：回复、查询、执行、等待确认或进入规划
+       ├─ CONFIRM / REJECT：继续或取消待处理流程
+       ├─ MODIFY：补充 pending_task，必要时重新规划
+       └─ NEW_REQUEST / UNKNOWN：保留当前待处理状态并说明
 ```
 
 规划类任务会先输出草稿预览。用户确认后，`PlanDraftService` 将 Planner 的结构化 JSON 转换为多个 `TodoCreateDTO`，批量写入日历。
@@ -334,12 +326,12 @@ Vite 会代理 `/user`、`/todo`、`/chat`、`/calendar`、`/almanac`、`/memory
 - [x] 多会话聊天、历史记录、撤回上一轮
 - [x] SSE 流式响应与进度事件
 - [x] Web Speech API 语音识别、TTS 朗读、音量条
-- [x] Supervisor + Planner + Query + Executor 多 Agent 架构
+- [x] RouteAgent 结构化事件 + 状态机确定性执行 + Planner / Executor 架构
 - [x] 写操作确认流与 AgentFlowState 状态管理
 - [x] Planner 草稿预览与确认后同步到日历
 - [x] MySQL 长期偏好记忆与行为习惯记忆
 - [x] 长会话自动摘要与上下文压缩
-- [x] ChatAgent 单日增删改查工具
+- [x] Executor 单日及通用写操作工具
 - [x] MCP `tools/list` / `tools/call`
 - [x] Lucene BM25 + Qdrant 向量检索 + RRF + Rerank
 - [x] RAG 语料去重、Embedding、Qdrant 入库脚本

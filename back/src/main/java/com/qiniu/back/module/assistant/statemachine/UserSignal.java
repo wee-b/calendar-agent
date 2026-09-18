@@ -2,10 +2,12 @@ package com.qiniu.back.module.assistant.statemachine;
 
 public enum UserSignal {
 
-    /**
-     * READY 状态下收到的普通新消息。
-     */
-    NEW_MESSAGE,
+    READY_CHAT,
+    READY_QUERY,
+    READY_SINGLE_DAY_ACTION,
+    READY_SINGLE_DAY_CONFIRM,
+    READY_EXECUTE,
+    READY_PLAN,
 
     /**
      * 对当前待处理任务表示确认。

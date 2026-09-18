@@ -3,6 +3,8 @@ package com.qiniu.back.module.assistant.service.impl;
 import com.qiniu.back.module.assistant.statemachine.AgentFlowState;
 import com.qiniu.back.module.assistant.domain.vo.SupervisorDecision;
 import com.qiniu.back.module.assistant.agent.ChatAgent;
+import com.qiniu.back.module.assistant.agent.ExecutorAgent;
+import com.qiniu.back.module.assistant.agent.RouteAgent;
 import com.qiniu.back.module.assistant.domain.result.ChatDispatchResult;
 import com.qiniu.back.module.assistant.statemachine.AgentFlowStateService;
 import com.qiniu.back.module.assistant.statemachine.ChatNode;
@@ -10,9 +12,9 @@ import com.qiniu.back.module.assistant.statemachine.ChatTransitionTable;
 import com.qiniu.back.module.assistant.statemachine.ConversationStage;
 import com.qiniu.back.module.assistant.service.ChatService;
 import com.qiniu.back.module.assistant.service.ChatContextSummaryService;
+import com.qiniu.back.module.assistant.service.ChatDialogueService;
 import com.qiniu.back.module.assistant.statemachine.ExistingFlowStateProcessor;
 import com.qiniu.back.module.assistant.statemachine.UserSignal;
-import com.qiniu.back.module.assistant.statemachine.UserSignalResolver;
 import com.qiniu.back.module.assistant.service.ProgressReporter;
 import com.qiniu.back.util.ChatSessionContext;
 import dev.langchain4j.data.message.ChatMessage;
@@ -31,10 +33,12 @@ public class ChatServiceImpl implements ChatService {
 
     private final ExistingFlowStateProcessor flowStateProcessor;
     private final ChatContextSummaryService contextSummaryService;
+    private final ChatDialogueService chatDialogueService;
     private final ChatAgent chatAgent;
+    private final ExecutorAgent executorAgent;
+    private final RouteAgent routeAgent;
     private final AgentFlowStateService flowStateService;
     private final ChatTransitionTable transitionTable;
-    private final UserSignalResolver signalResolver;
     private final ProgressReporter reporter;
 
     @Override
@@ -48,12 +52,21 @@ public class ChatServiceImpl implements ChatService {
         try {
             ChatSessionContext.setSessionId(sessionId);
 
-            Optional<ChatDispatchResult> pending = flowStateProcessor.tryHandle(
-                    userId, sessionId, message, progress);
-            if (pending.isPresent()) return pending.get();
+            AgentFlowState state = reporter.report(progress, "读取当前会话流程状态",
+                    () -> flowStateService.get(userId, sessionId).orElse(null));
+            String previousAssistantReply = reporter.report(progress, "读取上一轮助手回复",
+                    () -> chatDialogueService.findLatestAssistantReply(userId, sessionId, userDialogueId));
+            List<ChatMessage> history = reporter.report(progress, "构建压缩历史上下文",
+                    () -> contextSummaryService.buildCompressedReadonlyHistory(
+                            userId, sessionId, userDialogueId));
+            SupervisorDecision decision = reporter.report(progress, "调用 Route Agent 结合上一轮回复生成结构化路由事件",
+                    () -> routeAgent.route(message, previousAssistantReply, history, state));
 
-            ensureReadyRoute(message);
-            return routeNewRequest(userId, sessionId, message, userDialogueId, progress);
+            Optional<ChatDispatchResult> pending = reporter.report(progress, "状态机消费结构化路由事件",
+                    () -> flowStateProcessor.tryHandle(
+                            userId, sessionId, message, state, decision.getUserSignal(), progress));
+            if (pending.isPresent()) return pending.get();
+            return executeReadyTransition(userId, sessionId, message, decision, progress);
         } catch (Exception exception) {
             log.error("Assistant chat processing failed", exception);
             return failureResult(userId, sessionId);
@@ -62,46 +75,35 @@ public class ChatServiceImpl implements ChatService {
         }
     }
 
-    private void ensureReadyRoute(String message) {
-        UserSignal signal = signalResolver.resolve(ConversationStage.READY_FOR_INPUT, null, message);
+    private ChatDispatchResult executeReadyTransition(Long userId, String sessionId, String message,
+                                                      SupervisorDecision decision,
+                                                      Consumer<String> progress) {
+        UserSignal signal = decision.getUserSignal() == null ? UserSignal.READY_CHAT : decision.getUserSignal();
         ChatNode target = transitionTable.resolve(
                 ConversationStage.READY_FOR_INPUT, signal).targetNode();
-        if (target != ChatNode.ROUTE_MESSAGE) {
-            throw new IllegalStateException("READY 状态必须路由新消息，实际节点: " + target);
-        }
-    }
-
-    private ChatDispatchResult routeNewRequest(Long userId, String sessionId, String message,
-                                               Long userDialogueId, Consumer<String> progress) {
-        List<ChatMessage> history = reporter.report(progress, "构建压缩历史上下文",
-                () -> contextSummaryService.buildCompressedReadonlyHistory(userId, sessionId, userDialogueId));
-        SupervisorDecision decision = reporter.report(progress, "调用 Chat Agent 判断任务类型",
-                () -> chatAgent.route(message, history));
-        String type = decision.getDispatchType() == null ? "NONE" : decision.getDispatchType();
         String task = isBlank(decision.getTask()) ? message : decision.getTask();
 
-        if (!decision.isNeedDispatchAgent() || "NONE".equals(type)) {
-            return result(decision.getReply(), false, "NONE", AgentFlowStateService.AGENT_SUPERVISOR,
-                    AgentFlowStateService.AGENT_SUPERVISOR, AgentFlowStateService.STAGE_IDLE);
-        }
-        return switch (type) {
-            case "QUERY" -> result(reporter.report(progress, "调用 Chat Agent 查询日程",
+        return switch (target) {
+            case RESPOND_DIRECTLY -> result(decision.getReply(), false, "NONE",
+                    AgentFlowStateService.AGENT_SUPERVISOR, AgentFlowStateService.AGENT_SUPERVISOR,
+                    AgentFlowStateService.STAGE_IDLE);
+            case QUERY_CALENDAR -> result(reporter.report(progress, "状态机调用 Chat Agent 查询日程",
                             () -> chatAgent.query(task)), true, "QUERY",
                     AgentFlowStateService.AGENT_SUPERVISOR, AgentFlowStateService.AGENT_SUPERVISOR,
                     AgentFlowStateService.STAGE_IDLE);
-            case "CHAT_ACTION" -> result(
-                    reporter.report(progress, "调用 Chat Agent 执行明确的单日操作",
-                            () -> chatAgent.executeSingleDay(task)),
-                    true, "CHAT_ACTION", AgentFlowStateService.AGENT_CHAT,
+            case EXECUTE_SINGLE_DAY_ACTION -> result(
+                    reporter.report(progress, "状态机调用 Executor 执行明确的单日操作",
+                            () -> executorAgent.execute(task)),
+                    true, "CHAT_ACTION", AgentFlowStateService.AGENT_EXECUTOR,
                     AgentFlowStateService.AGENT_SUPERVISOR, AgentFlowStateService.STAGE_IDLE);
-            case "CHAT_ACTION_CONFIRM" -> {
+            case PREPARE_SINGLE_DAY_CONFIRMATION -> {
                 reporter.report(progress, "写入单日操作确认状态",
-                        () -> flowStateService.waitChatConfirm(userId, sessionId, task));
+                        () -> flowStateService.waitExecutorConfirm(userId, sessionId, task));
                 String reply = "这个请求的操作意图还不够确定。需要我执行以下单日操作吗？\n" + task;
-                yield result(reply, false, "CHAT_ACTION_CONFIRM", AgentFlowStateService.AGENT_CHAT,
-                        AgentFlowStateService.AGENT_CHAT, AgentFlowStateService.STAGE_WAIT_CONFIRM);
+                yield result(reply, false, "CHAT_ACTION_CONFIRM", AgentFlowStateService.AGENT_EXECUTOR,
+                        AgentFlowStateService.AGENT_EXECUTOR, AgentFlowStateService.STAGE_WAIT_CONFIRM);
             }
-            case "EXECUTE" -> {
+            case PREPARE_EXECUTION_CONFIRMATION -> {
                 reporter.report(progress, "写入执行确认状态",
                         () -> flowStateService.waitExecutorConfirm(userId, sessionId, task));
                 String reply = isBlank(decision.getReply()) ? "我理解为要执行：" + task + "\n确认要执行吗？"
@@ -109,7 +111,7 @@ public class ChatServiceImpl implements ChatService {
                 yield result(reply, false, "EXECUTE_CONFIRM", AgentFlowStateService.AGENT_EXECUTOR,
                         AgentFlowStateService.AGENT_EXECUTOR, AgentFlowStateService.STAGE_WAIT_CONFIRM);
             }
-            case "PLAN_CONFIRM" -> {
+            case PREPARE_PLAN_CONFIRMATION -> {
                 reporter.report(progress, "写入规划确认状态",
                         () -> flowStateService.waitPlannerConfirm(userId, sessionId, task));
                 String reply = isBlank(decision.getReply()) ? "这是一个规划类任务，需要我来帮你规划一下吗？"
@@ -117,8 +119,7 @@ public class ChatServiceImpl implements ChatService {
                 yield result(reply, false, "PLAN_CONFIRM", AgentFlowStateService.AGENT_PLANNER,
                         AgentFlowStateService.AGENT_PLANNER, AgentFlowStateService.STAGE_WAIT_CONFIRM);
             }
-            default -> result(decision.getReply(), false, "NONE", AgentFlowStateService.AGENT_SUPERVISOR,
-                    AgentFlowStateService.AGENT_SUPERVISOR, AgentFlowStateService.STAGE_IDLE);
+            default -> throw new IllegalStateException("READY 状态不能执行节点: " + target);
         };
     }
 

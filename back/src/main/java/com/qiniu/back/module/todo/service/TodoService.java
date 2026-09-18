@@ -29,7 +29,4 @@ public interface TodoService {
 
     /** 给已有待办增加一天（用于补打卡、调日程），返回新增的 TodoDate */
     TodoDate addTodoDay(Long todoId, LocalDate date, String dayContent);
-
-    /** 修改指定日期的任务内容，不影响同一待办的其他日期 */
-    TodoDate updateTodoDay(Long todoId, LocalDate date, String dayContent);
 }

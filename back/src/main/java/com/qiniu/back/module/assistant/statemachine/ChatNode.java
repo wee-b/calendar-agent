@@ -2,10 +2,27 @@ package com.qiniu.back.module.assistant.statemachine;
 
 public enum ChatNode {
 
+    /** 直接返回 RouteAgent 生成的普通回复。 */
+    RESPOND_DIRECTLY,
+
     /**
-     * 对新消息进行意图分类。
+     * 直接调用 ChatAgent 查询工具。
      */
-    ROUTE_MESSAGE,
+    QUERY_CALENDAR,
+
+    /**
+     * 直接调用 ChatAgent 单日写入工具。
+     */
+    EXECUTE_SINGLE_DAY_ACTION,
+
+    /** 写入单日操作确认状态。 */
+    PREPARE_SINGLE_DAY_CONFIRMATION,
+
+    /** 写入通用执行确认状态。 */
+    PREPARE_EXECUTION_CONFIRMATION,
+
+    /** 写入规划确认状态。 */
+    PREPARE_PLAN_CONFIRMATION,
 
     /**
      * 执行已经确认的普通写操作。

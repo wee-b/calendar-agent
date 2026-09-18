@@ -24,10 +24,30 @@ public class ChatTransitionTable {
 
     private final Map<TransitionKey, TransitionRule> rules = Map.ofEntries(
 
-            // READY：所有消息都是全新请求
+            // READY：事件已经由 RouteAgent 结构化，状态机只负责映射动作
             Map.entry(
-                    key(ConversationStage.READY_FOR_INPUT, UserSignal.NEW_MESSAGE),
-                    rule(ChatNode.ROUTE_MESSAGE)
+                    key(ConversationStage.READY_FOR_INPUT, UserSignal.READY_CHAT),
+                    rule(ChatNode.RESPOND_DIRECTLY)
+            ),
+            Map.entry(
+                    key(ConversationStage.READY_FOR_INPUT, UserSignal.READY_QUERY),
+                    rule(ChatNode.QUERY_CALENDAR)
+            ),
+            Map.entry(
+                    key(ConversationStage.READY_FOR_INPUT, UserSignal.READY_SINGLE_DAY_ACTION),
+                    rule(ChatNode.EXECUTE_SINGLE_DAY_ACTION)
+            ),
+            Map.entry(
+                    key(ConversationStage.READY_FOR_INPUT, UserSignal.READY_SINGLE_DAY_CONFIRM),
+                    rule(ChatNode.PREPARE_SINGLE_DAY_CONFIRMATION)
+            ),
+            Map.entry(
+                    key(ConversationStage.READY_FOR_INPUT, UserSignal.READY_EXECUTE),
+                    rule(ChatNode.PREPARE_EXECUTION_CONFIRMATION)
+            ),
+            Map.entry(
+                    key(ConversationStage.READY_FOR_INPUT, UserSignal.READY_PLAN),
+                    rule(ChatNode.PREPARE_PLAN_CONFIRMATION)
             ),
 
             // 等待执行确认
