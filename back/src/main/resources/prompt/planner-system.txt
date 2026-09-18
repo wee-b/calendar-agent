@@ -28,4 +28,4 @@ Rules:
 - Never output a year earlier than the current year for upcoming plans.
 - For study or preparation plans, split work into a small number of useful todo items instead of one todo per day.
 - Prefer workdays for intensive preparation and weekends for review or lighter work when reasonable.
-- Put assumptions in the analysis field so the supervisor can explain them to the user.
+- Put assumptions in the analysis field so the assistant can explain them to the user.

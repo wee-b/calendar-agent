@@ -75,7 +75,7 @@ public class ExistingFlowStateProcessor {
                 () -> executorAgent.execute(state.getPendingTask()));
         clear(request);
         return result(result, true, "EXECUTE", AgentFlowStateService.AGENT_EXECUTOR,
-                AgentFlowStateService.AGENT_SUPERVISOR, AgentFlowStateService.STAGE_IDLE);
+                AgentFlowStateService.AGENT_NONE, AgentFlowStateService.STAGE_IDLE);
     }
 
     private ChatDispatchResult generatePlan(AgentFlowState state, Request request, boolean revision) {
@@ -98,7 +98,7 @@ public class ExistingFlowStateProcessor {
                 .orElse("没有找到待同步的规划草稿，先回到对话状态。");
         clear(request);
         return result(reply, true, "EXECUTE", AgentFlowStateService.AGENT_EXECUTOR,
-                AgentFlowStateService.AGENT_SUPERVISOR, AgentFlowStateService.STAGE_IDLE);
+                AgentFlowStateService.AGENT_NONE, AgentFlowStateService.STAGE_IDLE);
     }
 
     private ChatDispatchResult modifyPending(AgentFlowState state, Request request) {
@@ -122,7 +122,7 @@ public class ExistingFlowStateProcessor {
                 ? "好的，已放弃当前规划，不会同步到日历。"
                 : "好的，已取消这一步。你可以继续告诉我新的日程需求。";
         return result(reply, false, "CANCEL", state.getCurrentAgent(),
-                AgentFlowStateService.AGENT_SUPERVISOR, AgentFlowStateService.STAGE_IDLE);
+                AgentFlowStateService.AGENT_NONE, AgentFlowStateService.STAGE_IDLE);
     }
 
     private ChatDispatchResult explainPending(AgentFlowState state, UserSignal signal) {

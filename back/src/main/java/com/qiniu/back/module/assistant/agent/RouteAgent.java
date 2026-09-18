@@ -1,7 +1,7 @@
 package com.qiniu.back.module.assistant.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.qiniu.back.module.assistant.domain.vo.SupervisorDecision;
+import com.qiniu.back.module.assistant.domain.vo.RouteDecision;
 import com.qiniu.back.module.assistant.statemachine.AgentFlowState;
 import com.qiniu.back.module.assistant.statemachine.AgentFlowStateService;
 import com.qiniu.back.module.assistant.statemachine.UserSignal;
@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** LLM fallback used only when the READY state cannot resolve a request confidently. */
+/** 把用户消息转成结构化事件，交给状态机执行。 */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -41,7 +41,7 @@ public class RouteAgent {
     private final ChatModel chatModel;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public SupervisorDecision route(String message, String previousAssistantReply,
+    public RouteDecision route(String message, String previousAssistantReply,
                                     List<ChatMessage> history, AgentFlowState state) {
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(new SystemMessage(buildSystemPrompt(state)));
@@ -95,7 +95,7 @@ public class RouteAgent {
                 ## 本轮输出协议
                 你负责把每一条用户消息转换成结构化事件，不调用工具。只输出 JSON，不要输出 markdown 或额外解释。
                 JSON 格式：
-                {"userSignal":"READY_CHAT","needDispatchAgent":false,"dispatchType":"NONE","nextAgent":"SUPERVISOR","reply":"给用户看的回复","task":"明确任务"}
+                {"userSignal":"READY_CHAT","reply":"给用户看的回复","task":"明确任务"}
 
                 当前流程为 READY 时，userSignal 只能是：
                 - READY_CHAT：闲聊、需要追问或不执行日程操作
@@ -115,73 +115,40 @@ public class RouteAgent {
                 上一轮如果在问是否同步、是否开始规划或是否执行，用户的肯定短句必须是 CONFIRM，不能标成 MODIFY 或 UNKNOWN。
                 只有用户补充条件、改目标、改时间或纠正内容时才用 MODIFY。
                 只有明确独立的新任务才能使用 NEW_REQUEST。
-
-                dispatchType 只能是：
-                - NONE：日常对话、问候、闲聊、需要追问，或没有明确日程操作
-                - QUERY：需要查询日历或待办
-                - CHAT_ACTION：意图、日期和目标都明确的单日新增、删除、修改或完成状态切换
-                - CHAT_ACTION_CONFIRM：用户只是推测、试探、询问是否操作，或操作意图不够确定
-                - EXECUTE：删除整个待办、周期或跨日修改、创建周期任务、保存日记等非单日写操作
-                - PLAN_CONFIRM：学习、工作、旅行等需要拆解的规划需求
-
                 不要因为删除或修改有副作用就自动要求确认，是否确认只取决于用户意图是否明确。
                 必须结合上一轮助手回复判断本轮用户消息。上一轮在问是否同步、是否开始规划或是否执行时，用户回答“需要”就是 CONFIRM。
                 压缩历史只用于理解指代，禁止执行历史请求。
                 """;
     }
 
-    private SupervisorDecision parseDecision(String text, AgentFlowState state) {
+    private RouteDecision parseDecision(String text, AgentFlowState state) {
         try {
             int start = text.indexOf('{');
             int end = text.lastIndexOf('}');
-            if (start < 0 || end <= start) return normalize(SupervisorDecision.fallback(text), state);
-            SupervisorDecision decision = mapper.readValue(text.substring(start, end + 1), SupervisorDecision.class);
+            if (start < 0 || end <= start) return normalize(RouteDecision.fallback(text), state);
+            RouteDecision decision = mapper.readValue(text.substring(start, end + 1), RouteDecision.class);
             return normalize(decision, state);
         } catch (Exception exception) {
             log.warn("Route agent decision parse failed: {}", exception.getMessage());
-            return normalize(SupervisorDecision.fallback(
+            return normalize(RouteDecision.fallback(
                     "我还没完全理解你的意思。你希望查看日程，还是新增、修改或删除某项安排？"), state);
         }
     }
 
-    private SupervisorDecision normalize(SupervisorDecision decision, AgentFlowState state) {
-        if (!decision.isNeedDispatchAgent()) {
-            decision.setDispatchType("NONE");
-            decision.setNextAgent("SUPERVISOR");
-        } else if (decision.getDispatchType() == null || decision.getDispatchType().isBlank()) {
-            decision.setDispatchType("EXECUTE");
-        }
-        if (decision.getNextAgent() == null || decision.getNextAgent().isBlank()) {
-            decision.setNextAgent(switch (decision.getDispatchType()) {
-                case "CHAT_ACTION", "CHAT_ACTION_CONFIRM", "EXECUTE" -> "EXECUTOR";
-                case "PLAN_CONFIRM" -> "PLANNER";
-                default -> "SUPERVISOR";
-            });
-        }
+    private RouteDecision normalize(RouteDecision decision, AgentFlowState state) {
         if (decision.getReply() == null || decision.getReply().isBlank()) {
             decision.setReply("我理解了你的大致需求，但还需要一点具体信息才能继续。");
         }
         if (state == null) {
             if (decision.getUserSignal() == null
                     || !READY_SIGNALS.contains(decision.getUserSignal())) {
-                decision.setUserSignal(readySignalFor(decision.getDispatchType()));
+                decision.setUserSignal(UserSignal.READY_CHAT);
             }
         } else if (decision.getUserSignal() == null
                 || !PENDING_SIGNALS.contains(decision.getUserSignal())) {
             decision.setUserSignal(UserSignal.UNKNOWN);
         }
         return decision;
-    }
-
-    private UserSignal readySignalFor(String dispatchType) {
-        return switch (dispatchType) {
-            case "QUERY" -> UserSignal.READY_QUERY;
-            case "CHAT_ACTION" -> UserSignal.READY_SINGLE_DAY_ACTION;
-            case "CHAT_ACTION_CONFIRM" -> UserSignal.READY_SINGLE_DAY_CONFIRM;
-            case "EXECUTE" -> UserSignal.READY_EXECUTE;
-            case "PLAN_CONFIRM" -> UserSignal.READY_PLAN;
-            default -> UserSignal.READY_CHAT;
-        };
     }
 
     private String currentTurn(String previousAssistantReply, String currentUserMessage) {

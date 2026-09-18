@@ -4,7 +4,7 @@ import com.qiniu.back.module.assistant.agent.ChatAgent;
 import com.qiniu.back.module.assistant.agent.ExecutorAgent;
 import com.qiniu.back.module.assistant.agent.RouteAgent;
 import com.qiniu.back.module.assistant.domain.result.ChatDispatchResult;
-import com.qiniu.back.module.assistant.domain.vo.SupervisorDecision;
+import com.qiniu.back.module.assistant.domain.vo.RouteDecision;
 import com.qiniu.back.module.assistant.service.ChatContextSummaryService;
 import com.qiniu.back.module.assistant.service.ChatDialogueService;
 import com.qiniu.back.module.assistant.service.ProgressReporter;
@@ -53,7 +53,7 @@ class ChatServiceImplTest {
     @Test
     void explicitSingleDayActionExecutesImmediatelyThroughExecutor() {
         String message = "明确的单日删除指令";
-        stubReady(message, decision("CHAT_ACTION", message, UserSignal.READY_SINGLE_DAY_ACTION));
+        stubReady(message, decision(message, UserSignal.READY_SINGLE_DAY_ACTION));
         when(executorAgent.execute(message)).thenReturn("操作成功");
         List<String> progress = new ArrayList<>();
 
@@ -72,8 +72,7 @@ class ChatServiceImplTest {
     void uncertainSingleDayActionUsesARealConfirmationQuestion() {
         String message = "不确定的单日操作表达";
         String task = "删除指定日期的目标";
-        SupervisorDecision decision = decision(
-                "CHAT_ACTION_CONFIRM", task, UserSignal.READY_SINGLE_DAY_CONFIRM);
+        RouteDecision decision = decision(task, UserSignal.READY_SINGLE_DAY_CONFIRM);
         decision.setReply("正在处理");
         stubReady(message, decision);
         when(flowStateService.waitExecutorConfirm(1L, "session-1", task)).thenReturn(new AgentFlowState());
@@ -93,7 +92,7 @@ class ChatServiceImplTest {
         String message = "补充当前任务的信息";
         AgentFlowState state = new AgentFlowState();
         state.setStage(AgentFlowStateService.STAGE_WAIT_CONFIRM);
-        SupervisorDecision decision = decision("NONE", message, UserSignal.MODIFY);
+        RouteDecision decision = decision(message, UserSignal.MODIFY);
         ChatDispatchResult handled = new ChatDispatchResult(
                 "已补充", false, "REFINE", AgentFlowStateService.AGENT_PLANNER,
                 AgentFlowStateService.AGENT_PLANNER, AgentFlowStateService.STAGE_WAIT_CONFIRM);
@@ -121,7 +120,7 @@ class ChatServiceImplTest {
         assertTrue(routeIndex >= 0 && stateIndex > routeIndex);
     }
 
-    private void stubReady(String message, SupervisorDecision decision) {
+    private void stubReady(String message, RouteDecision decision) {
         when(flowStateService.get(1L, "session-1")).thenReturn(Optional.empty());
         when(chatDialogueService.findLatestAssistantReply(1L, "session-1", 10L)).thenReturn(null);
         when(contextSummaryService.buildCompressedReadonlyHistory(1L, "session-1", 10L))
@@ -136,11 +135,8 @@ class ChatServiceImplTest {
                 org.mockito.ArgumentMatchers.any())).thenReturn(Optional.empty());
     }
 
-    private SupervisorDecision decision(String type, String task, UserSignal signal) {
-        SupervisorDecision decision = new SupervisorDecision();
-        decision.setNeedDispatchAgent(true);
-        decision.setDispatchType(type);
-        decision.setNextAgent(AgentFlowStateService.AGENT_CHAT);
+    private RouteDecision decision(String task, UserSignal signal) {
+        RouteDecision decision = new RouteDecision();
         decision.setTask(task);
         decision.setUserSignal(signal);
         return decision;

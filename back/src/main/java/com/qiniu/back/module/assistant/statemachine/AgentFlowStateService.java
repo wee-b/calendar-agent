@@ -11,7 +11,7 @@ import java.util.Optional;
 @Service
 public class AgentFlowStateService {
 
-    public static final String AGENT_SUPERVISOR = "SUPERVISOR";
+    public static final String AGENT_NONE = "NONE";
     public static final String AGENT_CHAT = "CHAT";
     public static final String AGENT_PLANNER = "PLANNER";
     public static final String AGENT_EXECUTOR = "EXECUTOR";
