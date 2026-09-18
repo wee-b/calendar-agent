@@ -230,6 +230,30 @@ public class TodoServiceImpl implements TodoService {
     }
 
     @Override
+    @Transactional
+    public TodoDate updateTodoDay(Long todoId, LocalDate date, String dayContent) {
+        Long userId = LoginUserContext.getUserId();
+        Todo todo = todoMapper.selectById(todoId);
+        if (todo == null || !todo.getUserId().equals(userId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "待办不存在");
+        }
+
+        TodoDate todoDate = todoDateMapper.selectOne(new LambdaQueryWrapper<TodoDate>()
+                .eq(TodoDate::getTodoId, todoId)
+                .eq(TodoDate::getTodoDate, date));
+        if (todoDate == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "该日期没有对应的任务");
+        }
+        if (dayContent == null || dayContent.isBlank()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "任务内容不能为空");
+        }
+
+        todoDate.setDayContent(dayContent.trim());
+        todoDateMapper.updateById(todoDate);
+        return todoDate;
+    }
+
+    @Override
     public List<TodoVO> listByDate(String date) {
         return null; // DayTodosVO 在 DailyNoteService 中组装
     }

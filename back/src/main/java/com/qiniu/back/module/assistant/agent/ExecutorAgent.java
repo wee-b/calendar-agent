@@ -1,0 +1,55 @@
+package com.qiniu.back.module.assistant.agent;
+
+import com.qiniu.back.module.assistant.domain.model.PlanDraft;
+import com.qiniu.back.module.assistant.service.PlanDraftService;
+import com.qiniu.back.module.assistant.tool.McpToolRegistry;
+import com.qiniu.back.util.PromptLoader;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.model.chat.ChatModel;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Set;
+
+/** Executes confirmed write operations and applies confirmed plan drafts. */
+@Component
+@RequiredArgsConstructor
+public class ExecutorAgent {
+
+    private static final Set<String> EXECUTOR_TOOLS = Set.of(
+            "createTodo", "deleteTodo", "updateTodo", "toggleTodoDate", "saveDailyNote",
+            "removeTodoDay", "addTodoDay", "queryTodoList", "queryDayDetail", "queryMonthCount");
+
+    private final ChatModel chatModel;
+    private final McpToolRegistry toolRegistry;
+    private final PlanDraftService planDraftService;
+    private AgentRunner runner;
+
+    @PostConstruct
+    void init() {
+        List<ToolSpecification> tools = toolRegistry.toLangChain4jSpecifications().stream()
+                .filter(tool -> EXECUTOR_TOOLS.contains(tool.name()))
+                .toList();
+        runner = AgentRunner.builder()
+                .name("Executor")
+                .chatModel(chatModel)
+                .systemPrompt(PromptLoader.load("executor-system.txt"))
+                .tools(tools)
+                .toolExecutor(toolRegistry::execute)
+                .temperature(0.3)
+                .maxRounds(3)
+                .maxRetries(1)
+                .correctionHint("\n\nIf a tool returned an error JSON, query current todo data and retry only if safe.")
+                .build();
+    }
+
+    public String execute(String instruction) {
+        return runner.execute(instruction);
+    }
+
+    public String applyPlan(PlanDraft draft) {
+        return planDraftService.buildSyncReply(planDraftService.syncDraft(draft));
+    }
+}

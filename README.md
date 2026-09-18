@@ -32,7 +32,7 @@ calendar-agent/
 │       │   ├── module/user/       # 用户模块
 │       │   ├── module/todo/       # 待办与每日任务
 │       │   ├── module/dailyNote/  # 日历统计、日详情、日记
-│       │   ├── module/chat/       # AI 对话、Agent、RAG、MCP
+│       │   ├── module/assistant/  # AI 对话、状态机、Agent、RAG、MCP
 │       │   └── module/almanac/    # 现代黄历
 │       └── resources/
 │           ├── prompt/            # Supervisor / Planner / Query / Executor 提示词
@@ -61,17 +61,17 @@ calendar-agent/
 | `user` | 注册、登录、当前用户信息、登出 |
 | `todo` | 目标待办 CRUD、按日期展开、每日完成状态、增删单日任务 |
 | `dailyNote` | 月待办数量、日详情、每日笔记 upsert |
-| `chat` | 多会话对话、SSE 流式响应、Agent 调度、草稿确认、MCP 工具、RAG 检索 |
+| `assistant` | 多会话对话、SSE 流式响应、状态转换、Agent 调度、草稿确认、MCP 工具、RAG 检索 |
 | `almanac` | 现代黄历计算与查询 |
 
 核心 Agent 类：
 
-- `ChatServiceImpl`：对话入口，负责历史加载、确认状态、快捷指令、落库、SSE 进度事件。
-- `AgentOrchestrator`：Supervisor 调度循环，判断是否调用子 Agent。
-- `SupervisorTools`：向 Supervisor 暴露 `plan_task`、`query_calendar`、`execute_task`。
-- `SubAgent`：Planner、Query、Executor 的通用执行抽象，包含工具调用和自纠错。
+- `ChatFacadeImpl`：HTTP 对话外层流程，负责消息落库、SSE 和会话历史。
+- `ChatServiceImpl`：Assistant 核心入口，按已有状态和新请求路由的顺序处理消息。
+- `ChatTransitionTable`：集中声明状态、用户事件、动作节点和下一状态。
+- `ChatAgent` / `PlannerAgent` / `ExecutorAgent`：分别负责对话查询与单日操作、规划生成和确认后的通用执行。
+- `AgentRunner`：各 Agent 复用的模型及工具调用循环。
 - `PlanDraftService`：保存规划草稿，并在确认后批量创建待办。
-- `DirectCommandService`：处理简单自然语言指令的本地快路径。
 - `RagService`：BM25 + Qdrant 混合检索、RRF 融合、Rerank、缓存。
 - `McpToolRegistry`：注册 AI/MCP 可调用的日程工具。
 
@@ -169,13 +169,13 @@ calendar-agent/
   │    └─ 用户补充：更新 pending_task，必要时重新规划
   ├─ 命中待同步 PlanDraft 确认语义？
   │    └─ 批量同步待办到日历
-  ├─ DirectCommandService 快捷指令命中？
-  │    └─ 本地直接执行/查询
   ├─ 构建压缩历史上下文
   │    └─ 更早历史摘要 + 最近 6 轮原始对话
   └─ Supervisor 判断类型
        ├─ NONE：直接回复
        ├─ QUERY：调用 Query Agent
+       ├─ CHAT_ACTION：明确的单日操作由 ChatAgent 立即执行
+       ├─ CHAT_ACTION_CONFIRM：意图不确定时等待确认，再由 ChatAgent 执行
        ├─ EXECUTE：写入执行确认状态，等待用户确认
        └─ PLAN_CONFIRM：写入规划确认状态，等待用户确认后调用 Planner
 ```
@@ -339,7 +339,7 @@ Vite 会代理 `/user`、`/todo`、`/chat`、`/calendar`、`/almanac`、`/memory
 - [x] Planner 草稿预览与确认后同步到日历
 - [x] MySQL 长期偏好记忆与行为习惯记忆
 - [x] 长会话自动摘要与上下文压缩
-- [x] DirectCommand 快捷指令快路径
+- [x] ChatAgent 单日增删改查工具
 - [x] MCP `tools/list` / `tools/call`
 - [x] Lucene BM25 + Qdrant 向量检索 + RRF + Rerank
 - [x] RAG 语料去重、Embedding、Qdrant 入库脚本
