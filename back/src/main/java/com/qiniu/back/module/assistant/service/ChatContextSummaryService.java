@@ -28,9 +28,10 @@ public class ChatContextSummaryService {
 
     private static final String STATUS_ACTIVE = "active";
     private static final String STATUS_ARCHIVED = "archived";
-    private static final int RECENT_DIALOGUE_LIMIT = 12;
-    private static final int SUMMARY_TRIGGER_DIALOGUE_COUNT = 20;
-    private static final int SUMMARY_BATCH_LIMIT = 40;
+    /** 一轮 = 用户一条 + 随后的助手回复。 */
+    static final int RECENT_ROUND_LIMIT = 20;
+    static final int SUMMARY_BATCH_ROUNDS = 20;
+    static final int SUMMARY_TRIGGER_ROUND_COUNT = 40;
     private static final int MAX_DIALOGUE_TEXT_LEN = 500;
     private static final int MAX_SUMMARY_LEN = 1200;
 
@@ -82,6 +83,10 @@ public class ChatContextSummaryService {
         }
     }
 
+    /**
+     * 未摘要轮数达到 40 时，把最早 20 轮压进摘要表；之后必须再积累 20 轮才压下一次。
+     * 只新增摘要，不删除 yl_ai_dialogue，历史页仍可查看被压缩的对话。
+     */
     @Transactional
     public void refreshSummary(Long userId, String sessionId) {
         if (userId == null || sessionId == null || sessionId.isBlank()) return;
@@ -93,17 +98,16 @@ public class ChatContextSummaryService {
                 .eq(AiDialogue::getUserId, userId)
                 .eq(AiDialogue::getSessionId, sessionId)
                 .gt(AiDialogue::getDialogueId, lastSummarizedId)
-                .orderByAsc(AiDialogue::getDialogueId)
-                .last("LIMIT " + SUMMARY_BATCH_LIMIT));
+                .orderByAsc(AiDialogue::getDialogueId));
 
-        if (unsummarized.size() <= SUMMARY_TRIGGER_DIALOGUE_COUNT) {
+        int unsummarizedRounds = countRounds(unsummarized);
+        if (unsummarizedRounds < SUMMARY_TRIGGER_ROUND_COUNT) {
             return;
         }
 
-        int summarizeUntilExclusive = Math.max(0, unsummarized.size() - RECENT_DIALOGUE_LIMIT);
-        if (summarizeUntilExclusive <= 0) return;
-
-        List<AiDialogue> toSummarize = new ArrayList<>(unsummarized.subList(0, summarizeUntilExclusive));
+        int endIndex = indexAfterRounds(unsummarized, SUMMARY_BATCH_ROUNDS);
+        if (endIndex <= 0) return;
+        List<AiDialogue> toSummarize = new ArrayList<>(unsummarized.subList(0, endIndex));
         Long newLastDialogueId = toSummarize.get(toSummarize.size() - 1).getDialogueId();
 
         String summaryText = summarize(previous == null ? null : previous.getSummaryText(), toSummarize);
@@ -124,8 +128,8 @@ public class ChatContextSummaryService {
         next.setStatus(STATUS_ACTIVE);
         summaryMapper.insert(next);
 
-        log.info("[ContextSummary] refreshed: userId={}, sessionId={}, lastDialogueId={}, summarized={}",
-                userId, sessionId, newLastDialogueId, toSummarize.size());
+        log.info("[ContextSummary] refreshed: userId={}, sessionId={}, lastDialogueId={}, summarizedRounds={}",
+                userId, sessionId, newLastDialogueId, SUMMARY_BATCH_ROUNDS);
     }
 
     private ChatContextSummary latestActiveSummary(Long userId, String sessionId) {
@@ -151,9 +155,42 @@ public class ChatContextSummaryService {
 
         List<AiDialogue> recent = aiDialogueMapper.selectList(wrapper
                 .orderByDesc(AiDialogue::getDialogueId)
-                .last("LIMIT " + RECENT_DIALOGUE_LIMIT));
+                .last("LIMIT " + (RECENT_ROUND_LIMIT * 2 + 4)));
         Collections.reverse(recent);
-        return recent;
+        return keepLastRounds(recent, RECENT_ROUND_LIMIT);
+    }
+
+    private int countRounds(List<AiDialogue> dialogues) {
+        int rounds = 0;
+        for (AiDialogue dialogue : dialogues) {
+            if ("user".equals(dialogue.getRole())) rounds++;
+        }
+        return rounds;
+    }
+
+    private int indexAfterRounds(List<AiDialogue> dialogues, int rounds) {
+        if (rounds <= 0) return 0;
+        int seen = 0;
+        for (int i = 0; i < dialogues.size(); i++) {
+            if ("user".equals(dialogues.get(i).getRole())) {
+                seen++;
+                if (seen == rounds) {
+                    int end = i + 1;
+                    if (end < dialogues.size() && "assistant".equals(dialogues.get(end).getRole())) {
+                        end++;
+                    }
+                    return end;
+                }
+            }
+        }
+        return dialogues.size();
+    }
+
+    private List<AiDialogue> keepLastRounds(List<AiDialogue> dialogues, int rounds) {
+        int total = countRounds(dialogues);
+        if (total <= rounds) return dialogues;
+        int start = indexAfterRounds(dialogues, total - rounds);
+        return new ArrayList<>(dialogues.subList(start, dialogues.size()));
     }
 
     private String summarize(String previousSummary, List<AiDialogue> dialogues) {

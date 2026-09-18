@@ -56,7 +56,7 @@ public class ChatServiceImpl implements ChatService {
                     () -> flowStateService.get(userId, sessionId).orElse(null));
             String previousAssistantReply = reporter.report(progress, "读取上一轮助手回复",
                     () -> chatDialogueService.findLatestAssistantReply(userId, sessionId, userDialogueId));
-            List<ChatMessage> history = reporter.report(progress, "构建压缩历史上下文",
+            List<ChatMessage> history = reporter.report(progress, "读取历史上下文",
                     () -> contextSummaryService.buildCompressedReadonlyHistory(
                             userId, sessionId, userDialogueId));
             RouteDecision decision = reporter.report(progress, "调用 Route Agent 结合上一轮回复生成结构化路由事件",
