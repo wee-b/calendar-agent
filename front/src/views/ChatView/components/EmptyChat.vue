@@ -27,3 +27,37 @@ defineEmits<{
   (e: 'select-prompt', prompt: string): void;
 }>();
 </script>
+
+<style scoped>
+.empty-chat {
+  width: min(800px, 100%);
+  margin: 0 auto;
+  padding: 0 8px;
+}
+
+.empty-chat h2 {
+  margin: 0 0 28px;
+  color: #18181b;
+  font-size: 32px;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.prompt-grid {
+  width: 100%;
+  gap: 10px;
+}
+
+.prompt-grid button {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 12px;
+  background: #f4f4f5;
+  color: #3f3f46;
+  font-size: 14px;
+}
+
+.prompt-grid button:hover {
+  background: #ececef;
+}
+</style>

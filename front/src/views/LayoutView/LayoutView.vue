@@ -2,15 +2,15 @@
   <div class="app-layout">
     <aside class="app-sidebar" :class="{ 'is-hidden': !showHistorySidebar }">
       <div class="sidebar-search">
-        <span class="search-icon"></span>
-        <input type="text" placeholder="搜索..." />
+        <AppIcon name="search" class="search-icon" />
+        <input
+          ref="searchInputRef"
+          v-model="sidebarKeyword"
+          type="text"
+          placeholder="搜索对话"
+        />
         <kbd>Ctrl K</kbd>
       </div>
-
-      <button class="profile-mini" @click="handleProfileEntry">
-        <span class="mini-avatar">{{ userInitial }}</span>
-        <span>{{ userName }}</span>
-      </button>
 
       <nav class="sidebar-nav">
         <button
@@ -18,7 +18,7 @@
           :class="{ active: isNewConversationRoute }"
           @click="router.push('/conversation')"
         >
-          <span class="nav-icon compose-icon"></span>
+          <AppIcon name="compose" />
           <span class="nav-label">新对话</span>
           <span class="nav-shortcut">Ctrl Shift K</span>
         </button>
@@ -27,7 +27,7 @@
           :class="{ active: route.path === '/calendar-view' }"
           @click="router.push('/calendar-view')"
         >
-          <span class="nav-icon calendar-icon"></span>
+          <AppIcon name="calendar" />
           <span class="nav-label">待办日历</span>
         </button>
         <button
@@ -35,32 +35,32 @@
           :class="{ active: route.path === '/today' }"
           @click="router.push('/today')"
         >
-          <span class="nav-icon today-icon"></span>
+          <AppIcon name="today" />
           <span class="nav-label">本日事项</span>
         </button>
       </nav>
 
       <div class="sidebar-bottom">
-        <SidebarChatList ref="sidebarChatRef" />
+        <SidebarChatList ref="sidebarChatRef" :keyword="sidebarKeyword" />
       </div>
 
       <div class="sidebar-user" ref="userMenuRoot">
         <transition name="menu-pop">
           <div v-if="showUserMenu" class="user-popover">
             <button class="menu-action" @click="handleMenuAction('设置')">
-              <span class="menu-icon gear-icon"></span>
+              <AppIcon name="gear" />
               <span>设置</span>
             </button>
             <button class="menu-action" @click="handleMenuAction('升级到专业版')">
-              <span class="menu-icon sparkle-icon"></span>
+              <AppIcon name="sparkle" />
               <span>升级到专业版</span>
             </button>
             <button class="menu-action" @click="handleSwitchAccount">
-              <span class="menu-icon switch-icon"></span>
+              <AppIcon name="switch" />
               <span>切换账号</span>
             </button>
             <button class="menu-action danger" @click="handleLogout">
-              <span class="menu-icon logout-icon"></span>
+              <AppIcon name="logout" />
               <span>退出登录</span>
             </button>
           </div>
@@ -69,7 +69,7 @@
         <button class="user-trigger" @click="handleUserTrigger">
           <span class="user-avatar">{{ userInitial }}</span>
           <span class="user-name">{{ userName }}</span>
-          <span class="user-chevron" v-if="hasToken">›</span>
+          <AppIcon v-if="hasToken" name="chevron" class="user-chevron" />
         </button>
       </div>
     </aside>
@@ -109,6 +109,7 @@ import AuthModal from '../../components/AuthModal.vue';
 import Help from '../../components/Help.vue';
 import SidebarChatList from './components/SidebarChatList.vue';
 import LayoutNavBar from './components/LayoutNavBar.vue';
+import AppIcon from './components/AppIcon.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -118,7 +119,9 @@ const showHelp = ref(false);
 const showUserMenu = ref(false);
 const showHistorySidebar = ref(true);
 const isTodoExpanded = ref(false);
+const sidebarKeyword = ref('');
 const userMenuRoot = ref<HTMLElement | null>(null);
+const searchInputRef = ref<HTMLInputElement | null>(null);
 const sidebarChatRef = ref<InstanceType<typeof SidebarChatList> | null>(null);
 const isNewConversationRoute = computed(() => route.path === '/conversation' && !route.query.sessionId);
 const currentChatTitle = ref('新对话');
@@ -145,14 +148,6 @@ const handleRefresh = () => {
 
 const handleChatTitleChange = (title: string) => {
   currentChatTitle.value = title || '新对话';
-};
-
-const handleProfileEntry = () => {
-  if (!hasToken.value) {
-    showAuthModal.value = true;
-    return;
-  }
-  router.push('/conversation');
 };
 
 const handleUserTrigger = () => {
@@ -187,6 +182,14 @@ const handleOutsideClick = (event: MouseEvent) => {
   }
 };
 
+const handleShortcut = (event: KeyboardEvent) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !event.shiftKey) {
+    event.preventDefault();
+    if (!showHistorySidebar.value) showHistorySidebar.value = true;
+    searchInputRef.value?.focus();
+  }
+};
+
 watch(
   () => [route.path, route.query.sessionId],
   () => {
@@ -198,10 +201,12 @@ watch(
 
 onMounted(() => {
   document.addEventListener('click', handleOutsideClick);
+  document.addEventListener('keydown', handleShortcut);
 });
 
 onUnmounted(() => {
   document.removeEventListener('click', handleOutsideClick);
+  document.removeEventListener('keydown', handleShortcut);
 });
 </script>
 
@@ -217,13 +222,13 @@ onUnmounted(() => {
 }
 
 .app-sidebar {
-  width: 292px;
-  min-width: 292px;
+  width: 272px;
+  min-width: 272px;
   height: 100vh;
   display: flex;
   flex-direction: column;
   background: #f7f7f8;
-  border-right: 1px solid #e8e8eb;
+  border-right: 1px solid #ececef;
   position: relative;
   overflow: hidden;
   transition: width 0.22s ease, min-width 0.22s ease, border-color 0.22s ease;
@@ -241,16 +246,21 @@ onUnmounted(() => {
 }
 
 .sidebar-search {
-  height: 44px;
-  margin: 14px 14px 10px;
-  padding: 0 12px;
+  height: 38px;
+  margin: 12px 12px 8px;
+  padding: 0 10px 0 12px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  border: 1px solid #dedee3;
-  border-radius: 12px;
-  background: #f0f0f2;
+  gap: 8px;
+  border: 1px solid #e4e4e7;
+  border-radius: 10px;
+  background: #ffffff;
   color: #a1a1aa;
+}
+
+.sidebar-search:focus-within {
+  border-color: #d4d4d8;
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.04);
 }
 
 .sidebar-search input {
@@ -259,8 +269,8 @@ onUnmounted(() => {
   border: 0;
   outline: 0;
   background: transparent;
-  color: #111827;
-  font-size: 15px;
+  color: #18181b;
+  font-size: 13px;
 }
 
 .sidebar-search input::placeholder {
@@ -268,107 +278,69 @@ onUnmounted(() => {
 }
 
 .sidebar-search kbd {
-  border: 0;
-  background: transparent;
-  color: #9ca3af;
-  font-size: 14px;
-  font-family: inherit;
-}
-
-.search-icon,
-.nav-icon,
-.menu-icon {
-  width: 20px;
   height: 20px;
-  display: inline-block;
-  position: relative;
-  flex-shrink: 0;
-  color: currentColor;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #ececef;
+  border-radius: 6px;
+  background: #f7f7f8;
+  color: #a1a1aa;
+  font-size: 11px;
+  font-family: inherit;
+  white-space: nowrap;
 }
 
-.search-icon::before {
-  content: "";
-  position: absolute;
-  width: 11px;
-  height: 11px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-  left: 1px;
-  top: 1px;
-}
-
-.search-icon::after {
-  content: "";
-  position: absolute;
-  width: 8px;
-  height: 2px;
-  background: currentColor;
-  border-radius: 2px;
-  transform: rotate(45deg);
-  right: 2px;
-  bottom: 3px;
-}
-
-.profile-mini {
-  margin: 2px 14px 10px;
-  padding: 8px 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 0;
-  background: transparent;
-  color: #18181b;
-  border-radius: 10px;
-  cursor: pointer;
-  font-size: 15px;
-  text-align: left;
-}
-
-.profile-mini:hover {
-  background: #eeeeef;
+.search-icon {
+  color: #a1a1aa;
 }
 
 .mini-avatar,
 .user-avatar {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: #dbeafe;
-  color: #2563eb;
-  font-size: 13px;
-  font-weight: 700;
+  background: #18181b;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .sidebar-nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 0 14px;
+  gap: 2px;
+  padding: 4px 10px 0;
 }
 
 .nav-btn {
   width: 100%;
-  height: 44px;
+  height: 38px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 12px;
+  gap: 10px;
+  padding: 0 10px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 10px;
   background: transparent;
-  color: #18181b;
+  color: #3f3f46;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 14px;
   text-align: left;
-  transition: background 0.16s, box-shadow 0.16s;
+  transition: background 0.16s, color 0.16s;
 }
 
-.nav-btn:hover,
+.nav-btn:hover {
+  background: #ececef;
+  color: #18181b;
+}
+
 .nav-btn.active {
-  background: #ffffff;
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+  background: #e4e4e7;
+  color: #18181b;
+  font-weight: 600;
 }
 
 .nav-label {
@@ -377,104 +349,55 @@ onUnmounted(() => {
 
 .nav-shortcut {
   color: #a1a1aa;
-  font-size: 14px;
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.16s;
 }
 
-.compose-icon::before {
-  content: "";
-  position: absolute;
-  inset: 3px;
-  border: 2px solid currentColor;
-  border-radius: 6px;
-}
-
-.compose-icon::after {
-  content: "";
-  position: absolute;
-  width: 10px;
-  height: 2px;
-  left: 7px;
-  top: 9px;
-  background: currentColor;
-  transform: rotate(-38deg);
-  border-radius: 2px;
-}
-
-.calendar-icon::before {
-  content: "";
-  position: absolute;
-  inset: 3px 2px 2px;
-  border: 2px solid currentColor;
-  border-radius: 5px;
-}
-
-.calendar-icon::after {
-  content: "";
-  position: absolute;
-  left: 5px;
-  right: 5px;
-  top: 8px;
-  height: 2px;
-  background: currentColor;
-}
-
-.today-icon::before {
-  content: "";
-  position: absolute;
-  inset: 3px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-}
-
-.today-icon::after {
-  content: "";
-  position: absolute;
-  width: 7px;
-  height: 7px;
-  left: 7px;
-  top: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 7px 0 -2px currentColor;
+.nav-btn:hover .nav-shortcut,
+.nav-btn.active .nav-shortcut {
+  opacity: 1;
 }
 
 .sidebar-bottom {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  margin-top: 28px;
+  margin-top: 16px;
 }
 
 .sidebar-user {
   position: relative;
   flex-shrink: 0;
-  padding: 10px 14px 14px;
-  border-top: 1px solid #e8e8eb;
+  padding: 8px 10px 10px;
+  border-top: 1px solid #ececef;
 }
 
 .user-trigger {
   width: 100%;
-  height: 54px;
+  height: 44px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  padding: 0 8px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 10px;
   background: transparent;
   cursor: pointer;
-  color: #111827;
-  font-size: 16px;
+  color: #18181b;
+  font-size: 14px;
+  font-weight: 550;
   text-align: left;
 }
 
 .user-trigger:hover {
-  background: #eeeeef;
+  background: #ececef;
 }
 
 .user-avatar {
-  width: 42px;
-  height: 42px;
-  font-size: 16px;
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
 }
 
 .user-name {
@@ -487,119 +410,50 @@ onUnmounted(() => {
 
 .user-chevron {
   color: #a1a1aa;
-  font-size: 24px;
+  transform: rotate(90deg);
 }
 
 .user-popover {
   position: absolute;
-  left: 24px;
-  bottom: 78px;
-  width: 252px;
-  padding: 14px 18px;
+  left: 10px;
+  right: 10px;
+  bottom: 62px;
+  width: auto;
+  padding: 8px;
   background: #ffffff;
-  border: 1px solid #dedee3;
-  border-radius: 14px;
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.16);
+  border: 1px solid #ececef;
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(24, 24, 27, 0.12);
   z-index: 20;
 }
 
 .menu-action {
   width: 100%;
-  height: 50px;
+  height: 40px;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+  padding: 0 10px;
   border: 0;
   background: transparent;
-  color: #111827;
-  border-radius: 10px;
+  color: #3f3f46;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 17px;
+  font-size: 14px;
   text-align: left;
 }
 
 .menu-action:hover {
   background: #f4f4f5;
+  color: #18181b;
 }
 
 .menu-action + .menu-action {
-  margin-top: 6px;
+  margin-top: 2px;
 }
 
 .menu-action.danger {
-  color: #111827;
-}
-
-.gear-icon::before {
-  content: "";
-  position: absolute;
-  inset: 3px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-}
-
-.gear-icon::after {
-  content: "";
-  position: absolute;
-  width: 6px;
-  height: 6px;
-  left: 7px;
-  top: 7px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-  background: #ffffff;
-}
-
-.sparkle-icon::before {
-  content: "*";
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: 24px;
-}
-
-.switch-icon::before {
-  content: "";
-  position: absolute;
-  left: 2px;
-  right: 2px;
-  top: 5px;
-  height: 2px;
-  background: currentColor;
-  box-shadow: 0 8px 0 currentColor;
-}
-
-.switch-icon::after {
-  content: "";
-  position: absolute;
-  right: 1px;
-  top: 2px;
-  width: 7px;
-  height: 7px;
-  border-top: 2px solid currentColor;
-  border-right: 2px solid currentColor;
-  transform: rotate(45deg);
-}
-
-.logout-icon::before {
-  content: "";
-  position: absolute;
-  left: 3px;
-  top: 4px;
-  width: 10px;
-  height: 12px;
-  border: 2px solid currentColor;
-  border-right: 0;
-  border-radius: 4px 0 0 4px;
-}
-
-.logout-icon::after {
-  content: ">";
-  position: absolute;
-  right: 0;
-  top: -2px;
-  font-size: 20px;
+  color: #dc2626;
 }
 
 .app-main {
@@ -633,12 +487,12 @@ onUnmounted(() => {
 
 @media (max-width: 760px) {
   .app-sidebar {
-    width: 292px;
-    min-width: 292px;
+    width: 272px;
+    min-width: 272px;
   }
 
   .user-popover {
-    width: 244px;
+    width: auto;
   }
 }
 </style>

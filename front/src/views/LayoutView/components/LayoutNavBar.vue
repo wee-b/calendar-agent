@@ -6,7 +6,7 @@
         @click="$emit('toggle-sidebar')"
         :title="isSidebarOpen ? '隐藏历史对话' : '显示历史对话'"
       >
-        <span></span>
+        <AppIcon name="panel" />
       </button>
       <button class="new-chat-btn" @click="$emit('new-chat')">新对话</button>
     </div>
@@ -29,6 +29,8 @@
 </template>
 
 <script setup lang="ts">
+import AppIcon from './AppIcon.vue';
+
 defineProps<{
   title: string;
   isSidebarOpen: boolean;
@@ -103,25 +105,7 @@ defineEmits<{
   display: grid;
   place-items: center;
   border-radius: 12px;
-}
-
-.icon-btn span {
-  width: 16px;
-  height: 16px;
-  position: relative;
-  display: block;
-  border: 2px solid currentColor;
-  border-radius: 4px;
-}
-
-.icon-btn span::before {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: -2px;
-  bottom: -2px;
-  width: 2px;
-  background: currentColor;
+  color: #3f3f46;
 }
 
 .new-chat-btn,
