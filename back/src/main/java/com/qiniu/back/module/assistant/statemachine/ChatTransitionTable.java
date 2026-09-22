@@ -83,7 +83,7 @@ public class ChatTransitionTable {
             ),
             Map.entry(
                     key(ConversationStage.AWAITING_PLAN_CONFIRMATION, UserSignal.MODIFY),
-                    rule(ChatNode.MODIFY_PENDING_ACTION)
+                    rule(ChatNode.GENERATE_PLAN)
             ),
             Map.entry(
                     key(ConversationStage.AWAITING_PLAN_CONFIRMATION, UserSignal.NEW_REQUEST),

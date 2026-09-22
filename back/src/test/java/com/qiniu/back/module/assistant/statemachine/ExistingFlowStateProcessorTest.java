@@ -80,6 +80,32 @@ class ExistingFlowStateProcessorTest {
     }
 
     @Test
+    void shouldGenerateImmediatelyAfterUserSuppliesClarification() {
+        String message = "预算3000元，玩三天，喜欢美食";
+        AgentFlowState state = state(AgentFlowStateService.AGENT_PLANNER,
+                AgentFlowStateService.AGENT_PLANNER, AgentFlowStateService.STAGE_WAIT_CONFIRM);
+        state.setPendingTask("帮我规划一次旅行");
+        mockState(state, ConversationStage.AWAITING_PLAN_CONFIRMATION, UserSignal.MODIFY);
+        String refined = "帮我规划一次旅行\n用户补充/修改：" + message;
+        when(plannerAgent.generateDraft(refined))
+                .thenReturn(new PlannerAgent.GeneratedPlan(103L, "补充后的规划草稿"));
+        AgentFlowState feedbackState = state(AgentFlowStateService.AGENT_PLANNER,
+                AgentFlowStateService.AGENT_EXECUTOR, AgentFlowStateService.STAGE_WAIT_FEEDBACK);
+        when(flowStateService.waitPlanFeedback(
+                1L, "session-1", refined, 103L, "补充后的规划草稿"))
+                .thenReturn(feedbackState);
+
+        ChatDispatchResult result = processor.tryHandle(
+                1L, "session-1", message, state, UserSignal.MODIFY, null).orElseThrow();
+
+        assertEquals("PLAN", result.dispatchType());
+        assertEquals("补充后的规划草稿\n\n需要同步到日历中吗？", result.aiResult());
+        verify(flowStateService, never()).updatePendingTask(
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
     void shouldKeepPendingFlowUntouchedForNewRequest() {
         String message = "另外帮我查一下明天的待办";
         AgentFlowState state = state(AgentFlowStateService.AGENT_PLANNER,

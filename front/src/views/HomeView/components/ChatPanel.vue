@@ -68,6 +68,11 @@
               >{{ readingMsgIndex === index ? (isPaused ? '继续' : '暂停') : '朗读' }}</span>
               <span class="action-icon danger" @click="handleDeleteLastRound">撤回</span>
             </div>
+            <div v-if="!msg.loading && index === messages.length - 1 && msg.dispatchType === 'PLAN_CLARIFICATION'" class="plan-choices">
+              <button @click="focusPlanInput('请补充预算、时间、偏好等信息')">1. 补充信息</button>
+              <button class="primary" @click="sendQuickReply('不补充信息，直接规划')">2. 不补充信息，直接规划</button>
+              <button @click="focusPlanInput('请输入其他处理方式')">3. 其他</button>
+            </div>
           </div>
         </div>
       </div>
@@ -154,7 +159,7 @@ const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'refresh'): void }>();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
 
-interface ChatMessage { role: string; content: string; loading?: boolean; responseTimeMs?: number | null; }
+interface ChatMessage { role: string; content: string; loading?: boolean; responseTimeMs?: number | null; dispatchType?: string; }
 
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
@@ -202,6 +207,21 @@ const scrollToBottom = async () => {
 
 const toggleDropdown = () => { if (isUserLoggedIn.value) isDropdownOpen.value = !isDropdownOpen.value; };
 
+const focusPlanInput = async (placeholder: string) => {
+  inputText.value = '';
+  await nextTick();
+  const input = document.querySelector('.right-sidebar .chat-input') as HTMLTextAreaElement | null;
+  if (input) {
+    input.placeholder = placeholder;
+    input.focus();
+  }
+};
+
+const sendQuickReply = (content: string) => {
+  inputText.value = content;
+  handleSend();
+};
+
 // ================= 会话管理 =================
 const fetchSessions = async () => {
   if (!isUserLoggedIn.value) return;
@@ -217,7 +237,12 @@ const selectSession = async (session: ChatSessionVO) => {
   messages.value = [];
   try {
     const history = await getHistoryAPI(session.sessionId);
-    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
+    messages.value = history.map(h => ({
+      role: h.role,
+      content: h.content,
+      responseTimeMs: h.responseTimeMs,
+      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+    }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -306,7 +331,12 @@ const handleDeleteLastRound = async () => {
     await deleteLastRoundAPI(currentSessionId.value);
     ElMessage.success('已撤回上一轮对话');
     const history = await getHistoryAPI(currentSessionId.value);
-    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
+    messages.value = history.map(h => ({
+      role: h.role,
+      content: h.content,
+      responseTimeMs: h.responseTimeMs,
+      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+    }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -569,6 +599,12 @@ const handleSend = async () => {
         if (lastMsg && lastMsg.role === 'ai') {
           lastMsg.responseTimeMs = responseTimeMs;
         }
+      },
+      (dispatchType) => {
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai') {
+          lastMsg.dispatchType = dispatchType;
+        }
       }
     );
   } finally {
@@ -757,6 +793,31 @@ watch(isUserLoggedIn, async (newVal) => {
 .action-icon { font-size: 12px; font-weight: bold; color: #b5a992; cursor: pointer; transition: color 0.2s; }
 .action-icon:hover { color: #5c4b37; text-decoration: underline; }
 .action-icon.danger:hover { color: #bc423f; }
+
+.plan-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.plan-choices button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #ded7ca;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #5c4b37;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plan-choices button:hover,
+.plan-choices button.primary {
+  border-color: #5c4b37;
+  background: #5c4b37;
+  color: #ffffff;
+}
 
 /* 加载动画 */
 .typing-indicator { display: flex; gap: 4px; align-items: center; height: 20px; }

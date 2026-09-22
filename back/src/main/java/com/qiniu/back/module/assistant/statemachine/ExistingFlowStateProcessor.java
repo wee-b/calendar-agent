@@ -57,7 +57,12 @@ public class ExistingFlowStateProcessor {
                                        AgentFlowState state, Request request) {
         return switch (rule.targetNode()) {
             case EXECUTE_PENDING_ACTION -> executePending(state, request);
-            case GENERATE_PLAN -> generatePlan(state, request, false);
+            case GENERATE_PLAN -> {
+                if (signal == UserSignal.MODIFY) {
+                    state.setPendingTask(appendFeedback(state.getPendingTask(), request.message()));
+                }
+                yield generatePlan(state, request, false);
+            }
             case APPLY_PLAN -> applyPlan(state, request);
             case MODIFY_PENDING_ACTION -> modifyPending(state, request);
             case REVISE_PLAN -> revisePlan(state, request);
@@ -68,6 +73,14 @@ public class ExistingFlowStateProcessor {
                  PREPARE_PLAN_CONFIRMATION ->
                     throw new IllegalStateException("pending 状态不能执行 READY 节点");
         };
+    }
+
+    /** Starts a newly recognized planning task without an unnecessary confirmation round. */
+    public ChatDispatchResult startPlan(Long userId, String sessionId, String requirement,
+                                        Consumer<String> progress) {
+        AgentFlowState state = new AgentFlowState();
+        state.setPendingTask(requirement);
+        return generatePlan(state, new Request(userId, sessionId, requirement, progress), false);
     }
 
     private ChatDispatchResult executePending(AgentFlowState state, Request request) {

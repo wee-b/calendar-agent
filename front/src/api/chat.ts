@@ -54,7 +54,8 @@ export const streamChatAPI = async (
     onError: (error: string) => void,
     onOpen?: () => void,
     onProgress?: (message: string) => void,
-    onResponseTime?: (responseTimeMs: number) => void
+    onResponseTime?: (responseTimeMs: number) => void,
+    onDispatchType?: (dispatchType: string) => void
 ): Promise<void> => {
     const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
     const token = getToken();
@@ -109,6 +110,8 @@ export const streamChatAPI = async (
 
                 if (eventName === 'progress') {
                     onProgress?.(content);
+                } else if (eventName === 'dispatchType') {
+                    onDispatchType?.(content);
                 } else if (eventName === 'responseTime') {
                     const responseTimeMs = Number(content);
                     if (Number.isFinite(responseTimeMs)) onResponseTime?.(responseTimeMs);

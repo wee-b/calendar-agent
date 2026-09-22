@@ -39,7 +39,8 @@ app:
         temperature: 0.3
       planner:
         provider: deepseek
-        model: ${DEEPSEEK_PLANNER_MODEL:deepseek-v4-pro}
+        # 默认使用快速模型；需要更高质量时可通过环境变量切回 deepseek-v4-pro。
+        model: ${DEEPSEEK_PLANNER_MODEL:deepseek-flash}
         temperature: 0.1
       summary:
         provider: aliyun
@@ -67,5 +68,4 @@ app:
       base-url: ${RAG_ALIYUN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
       api-key: ${unknown.aliyun.api-key}
       model: ${RAG_ALIYUN_MODEL:text-embedding-v4}
-
 

@@ -33,6 +33,7 @@
         @copy="handleCopy"
         @read="handleRead"
         @delete-last-round="handleDeleteLastRound"
+        @quick-reply="handleQuickReply"
       />
 
       <ChatInputBox
@@ -325,6 +326,11 @@ const selectPrompt = (prompt: string) => {
   inputText.value = prompt;
 };
 
+const handleQuickReply = (content: string) => {
+  inputText.value = content;
+  handleSend();
+};
+
 // ================= 浼氳瘽绠＄悊 =================
 const sortSessionsByRecent = (list: ChatSessionVO[]) => {
   return [...list].sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime());
@@ -350,7 +356,12 @@ const loadSessionById = async (sessionId: string) => {
   try {
     const history = await getHistoryAPI(sessionId);
     if (loadToken !== historyLoadToken || sessionId !== currentSessionId.value) return;
-    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
+    messages.value = history.map(h => ({
+      role: h.role,
+      content: h.content,
+      responseTimeMs: h.responseTimeMs,
+      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+    }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -362,7 +373,12 @@ const selectSession = async (session: ChatSessionVO) => {
   router.replace({ path: '/conversation', query: { sessionId: session.sessionId } });
   try {
     const history = await getHistoryAPI(session.sessionId);
-    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
+    messages.value = history.map(h => ({
+      role: h.role,
+      content: h.content,
+      responseTimeMs: h.responseTimeMs,
+      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+    }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -465,7 +481,12 @@ const handleDeleteLastRound = async () => {
     await deleteLastRoundAPI(currentSessionId.value);
     ElMessage.success('已撤回上一轮对话');
     const history = await getHistoryAPI(currentSessionId.value);
-    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
+    messages.value = history.map(h => ({
+      role: h.role,
+      content: h.content,
+      responseTimeMs: h.responseTimeMs,
+      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+    }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -768,6 +789,12 @@ const handleSend = async () => {
         if (lastMsg && lastMsg.role === 'ai') {
           lastMsg.responseTimeMs = responseTimeMs;
           finishThinkingAfterQueue(lastMsg);
+        }
+      },
+      (dispatchType) => {
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai') {
+          lastMsg.dispatchType = dispatchType;
         }
       }
     );
@@ -1781,4 +1808,3 @@ watch(currentSessionTitle, (title) => {
   }
 }
 </style>
-

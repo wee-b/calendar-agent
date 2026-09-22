@@ -120,6 +120,24 @@ public class UserMemoryService {
                 .toList();
     }
 
+    /** Whether the planner already has reusable user preferences and does not need a generic clarification. */
+    public boolean hasActivePlanningPreference(Long userId) {
+        if (userId == null) return false;
+        Long count = userMemoryMapper.selectCount(new LambdaQueryWrapper<UserMemory>()
+                .eq(UserMemory::getUserId, userId)
+                .eq(UserMemory::getStatus, STATUS_ACTIVE)
+                .in(UserMemory::getMemoryType, List.of(
+                        TYPE_PREFERENCE_TIME,
+                        TYPE_PREFERENCE_LOAD,
+                        TYPE_PREFERENCE_STYLE,
+                        TYPE_AVOIDANCE,
+                        TYPE_DOMAIN_PREFERENCE,
+                        TYPE_LONG_TERM_GOAL))
+                .and(w -> w.isNull(UserMemory::getExpireTime)
+                        .or().gt(UserMemory::getExpireTime, LocalDateTime.now())));
+        return count != null && count > 0;
+    }
+
     public void delete(Long userId, Long memoryId) {
         int updated = userMemoryMapper.update(null, new LambdaUpdateWrapper<UserMemory>()
                 .eq(UserMemory::getUserId, userId)

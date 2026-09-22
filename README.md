@@ -36,6 +36,8 @@ calendar-agent/
 │       │   └── module/almanac/    # 现代黄历
 │       └── resources/
 │           ├── prompt/            # Route / Chat / Planner / Query / Executor 提示词
+│           ├── rag_data/          # RAG Markdown 原始语料
+│           ├── output/            # 语料处理历史输出
 │           ├── application.yml
 │           └── application-dev.yml
 ├── front/                   # Vue 前端
@@ -45,9 +47,6 @@ calendar-agent/
 │       ├── views/           # Layout/Home/Today/Chat 页面
 │       ├── router/
 │       └── utils/
-├── scripts/                 # RAG 语料处理脚本
-│   ├── dedup_corpus.py
-│   └── rag_data/
 ├── sql/                     # 表结构与初始化数据
 └── data/lucene-rag-index/   # Lucene 本地索引
 ```
@@ -181,26 +180,24 @@ Planner 生成计划前会读取 active 用户记忆，并按“本轮明确指�
 
 ## RAG 语料处理
 
-语料位于 `scripts/rag_data/`，处理脚本为 `scripts/dedup_corpus.py`。流程包括 Markdown 分块、TF-IDF 去重、SimHash 去重、MinHash 去重、Embedding、Qdrant 入库，并导出处理统计。
+语料位于 `back/src/main/resources/rag_data`，通过 Spring Boot 手动集成测试
+`RagCorpusImportManualTest` 完成 Markdown 分块、TF-IDF/SimHash/Jaccard 去重、
+Embedding 和 Qdrant 入库。Embedding 与 Qdrant 参数直接复用后端 Spring 配置，
+无需单独维护 Python 配置。
 
 ```bash
-cd scripts
-pip install -r requirements.txt
+cd back
 
-# 去重 + Ollama bge-m3 embedding + Qdrant 入库
-python dedup_corpus.py -i ./rag_data --embedding-backend ollama --qdrant
+# 只验证语料读取、分块和去重，不调用外部接口
+mvn -Dtest=RagCorpusImportManualTest "-Drag.corpus.dry-run=true" test
 
-# 只做去重并导出 JSON
-python dedup_corpus.py -i ./rag_data --skip-embedding
-
-# 使用 OpenAI 兼容 embedding 服务
-python dedup_corpus.py -i ./rag_data \
-  --embedding-backend openai \
-  --embedding-url https://dashscope.aliyuncs.com/compatible-mode \
-  --embedding-model text-embedding-v4 \
-  --embedding-api-key your_api_key \
-  --qdrant
+# 调用已配置的阿里云 Embedding，并写入 Qdrant
+mvn -Dtest=RagCorpusImportManualTest test
 ```
+
+默认读取 `src/main/resources/rag_data`。如需覆盖语料目录，可增加 Spring 配置
+`rag.corpus.source-dir`。阿里云 Embedding 参数读取 `app.rag.aliyun`，Qdrant
+参数读取 `app.qdrant`。导入使用确定性 UUID，重复执行会覆盖同一语料点。
 
 后端默认读取 `data/lucene-rag-index` 作为 Lucene 索引目录，Qdrant 默认连接 `localhost:6334`，集合名为 `rag_corpus`。
 

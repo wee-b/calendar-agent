@@ -117,7 +117,7 @@ public class ChatFacadeImpl implements ChatFacade {
 
             ChatDispatchResult result = assistantChatService.process(
                     userId, sid, message, userDialogueId, progress -> sendProgress(emitter, progress));
-            sendFinalResult(emitter, userId, sid, result.aiResult(), responseStartTime);
+            sendFinalResult(emitter, userId, sid, result, responseStartTime);
         } catch (Exception e) {
             log.error("Streaming agent orchestration failed", e);
             emitter.completeWithError(e);
@@ -128,12 +128,13 @@ public class ChatFacadeImpl implements ChatFacade {
     }
 
     private void sendFinalResult(SseEmitter emitter, Long userId, String sessionId,
-                                 String aiResult, long responseStartTime) throws Exception {
+                                 ChatDispatchResult result, long responseStartTime) throws Exception {
         sendProgress(emitter, "开始：保存助手回复");
         Long responseTimeMs = elapsedSince(responseStartTime);
-        chatDialogueService.saveAssistantDialogue(userId, sessionId, aiResult, responseTimeMs);
+        chatDialogueService.saveAssistantDialogue(userId, sessionId, result.aiResult(), responseTimeMs);
         sendProgress(emitter, "完成：保存助手回复");
-        emitter.send(SseEmitter.event().data(aiResult));
+        emitter.send(SseEmitter.event().name("dispatchType").data(result.dispatchType()));
+        emitter.send(SseEmitter.event().data(result.aiResult()));
         emitter.send(SseEmitter.event().name("responseTime").data(responseTimeMs));
         emitter.complete();
     }

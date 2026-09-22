@@ -7,6 +7,7 @@ import com.qiniu.back.module.assistant.domain.result.ChatDispatchResult;
 import com.qiniu.back.module.assistant.domain.vo.RouteDecision;
 import com.qiniu.back.module.assistant.service.ChatDialogueService;
 import com.qiniu.back.module.assistant.service.ProgressReporter;
+import com.qiniu.back.module.assistant.service.PlanClarificationPolicy;
 import com.qiniu.back.module.assistant.statemachine.AgentFlowState;
 import com.qiniu.back.module.assistant.statemachine.AgentFlowStateService;
 import com.qiniu.back.module.assistant.statemachine.ChatTransitionTable;
@@ -38,6 +39,7 @@ class ChatServiceImplTest {
     @Mock private ExecutorAgent executorAgent;
     @Mock private RouteAgent routeAgent;
     @Mock private AgentFlowStateService flowStateService;
+    @Mock private PlanClarificationPolicy planClarificationPolicy;
 
     private ChatServiceImpl service;
 
@@ -45,7 +47,7 @@ class ChatServiceImplTest {
     void setUp() {
         service = new ChatServiceImpl(flowStateProcessor, chatDialogueService,
                 chatAgent, executorAgent, routeAgent, flowStateService, new ChatTransitionTable(),
-                new ProgressReporter());
+                new ProgressReporter(), planClarificationPolicy);
     }
 
     @Test
@@ -128,6 +130,36 @@ class ChatServiceImplTest {
         int routeIndex = indexOf(progress, "结合上一轮回复生成结构化路由事件");
         int stateIndex = indexOf(progress, "状态机消费结构化路由事件");
         assertTrue(routeIndex >= 0 && stateIndex > routeIndex);
+    }
+
+    @Test
+    void planningStartsImmediatelyWhenClarificationIsNotNeeded() {
+        String message = "中秋节去杭州旅游，帮我规划时间安排";
+        stubReady(message, decision(message, UserSignal.READY_PLAN));
+        when(planClarificationPolicy.shouldAsk(1L, "session-1", message, 10L)).thenReturn(false);
+        ChatDispatchResult planned = new ChatDispatchResult(
+                "规划草稿", true, "PLAN", AgentFlowStateService.AGENT_PLANNER,
+                AgentFlowStateService.AGENT_EXECUTOR, AgentFlowStateService.STAGE_WAIT_FEEDBACK);
+        when(flowStateProcessor.startPlan(1L, "session-1", message, null)).thenReturn(planned);
+
+        ChatDispatchResult result = service.process(1L, "session-1", message, 10L);
+
+        assertEquals("PLAN", result.dispatchType());
+        assertEquals("规划草稿", result.aiResult());
+        verify(flowStateService, never()).waitPlannerConfirm(1L, "session-1", message);
+    }
+
+    @Test
+    void sparsePlanningRequestCanOfferClarificationChoices() {
+        String message = "帮我做个计划";
+        stubReady(message, decision(message, UserSignal.READY_PLAN));
+        when(planClarificationPolicy.shouldAsk(1L, "session-1", message, 10L)).thenReturn(true);
+        when(flowStateService.waitPlannerConfirm(1L, "session-1", message)).thenReturn(new AgentFlowState());
+
+        ChatDispatchResult result = service.process(1L, "session-1", message, 10L);
+
+        assertEquals("PLAN_CLARIFICATION", result.dispatchType());
+        assertTrue(result.aiResult().contains("可以补充"));
     }
 
     private void stubReady(String message, RouteDecision decision) {

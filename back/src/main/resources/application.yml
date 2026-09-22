@@ -41,15 +41,22 @@ sa-token:
 rag:
 
   top-k: 3
-  bm25-top-k: 10     # 原 20 → 10，BM25 候选数
+  bm25-top-k: 10
   dense-top-k: 10
-  recall-threshold: 0.1 # 新增，RRF 融合后低于此分数的直接丢弃
-  embedding-cache-ttl: 360  # 新增，embedding 缓存秒数
+  # 小规模规划语料直接使用 RRF 排序；关闭远程 LLM 重排可减少十几秒延迟。
+  rerank-enabled: false
+  # RRF 单路首位约 0.0164、双路重合首位约 0.0328；0.015 可保留单路前几名和双路重合结果。
+  recall-threshold: 0.015
+  # Embedding 由 provider+model+原文隔离，结果稳定，缓存一天以减少远程调用。
+  embedding-cache-ttl: 86400
   lucene-index-dir: ./data/lucene-rag-index
-
-  result-cache-ttl: 180
+  # 最终检索结果缓存 30 分钟，兼顾响应速度和语料更新后的生效时间。
+  result-cache-ttl: 1800
 
 app:
+  # 设为 true 时打印 SQL 及执行耗时；修改后需要重启应用。
+  sql-log:
+    enabled: ${SQL_LOG_ENABLED:false}
   chat:
     sse-executor:
       core-size: 4

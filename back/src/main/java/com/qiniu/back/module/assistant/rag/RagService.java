@@ -209,10 +209,14 @@ public class RagService {
             return fused;
         }
 
-        List<RagHit> ranked = rerank(query, fused);
+        List<RagHit> ranked = props.isRerankEnabled()
+                ? rerank(query, new ArrayList<>(fused))
+                : fused;
         int finalK = Math.min(props.getTopK(), ranked.size());
         List<RagHit> topK = ranked.subList(0, finalK);
-        log.info("[RAG] Rerank → Top-{}: scores={}", props.getTopK(),
+        log.info("[RAG] {} → Top-{}: scores={}",
+                props.isRerankEnabled() ? "Rerank" : "RRF",
+                props.getTopK(),
                 topK.stream().map(h -> String.format("%.3f", h.getScore())).toList());
 
         // 返回前写缓存

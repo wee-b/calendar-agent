@@ -51,7 +51,6 @@
             <groupId>p6spy</groupId>
             <artifactId>p6spy</artifactId>
             <version>3.9.1</version>
-            <scope>runtime</scope>
         </dependency>
 
         <!-- Knife4j 文档 -->

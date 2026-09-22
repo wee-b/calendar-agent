@@ -44,6 +44,8 @@ class ChatTransitionTableTest {
                 ChatNode.APPLY_PLAN);
         assertRule(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.MODIFY,
                 ChatNode.REVISE_PLAN);
+        assertRule(ConversationStage.AWAITING_PLAN_CONFIRMATION, UserSignal.MODIFY,
+                ChatNode.GENERATE_PLAN);
     }
 
     private void assertRule(ConversationStage stage, UserSignal signal, ChatNode node) {

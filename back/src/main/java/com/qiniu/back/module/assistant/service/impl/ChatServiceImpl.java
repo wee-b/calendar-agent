@@ -15,6 +15,7 @@ import com.qiniu.back.module.assistant.service.ChatDialogueService;
 import com.qiniu.back.module.assistant.statemachine.ExistingFlowStateProcessor;
 import com.qiniu.back.module.assistant.statemachine.UserSignal;
 import com.qiniu.back.module.assistant.service.ProgressReporter;
+import com.qiniu.back.module.assistant.service.PlanClarificationPolicy;
 import com.qiniu.back.util.ChatSessionContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,7 @@ public class ChatServiceImpl implements ChatService {
     private final AgentFlowStateService flowStateService;
     private final ChatTransitionTable transitionTable;
     private final ProgressReporter reporter;
+    private final PlanClarificationPolicy planClarificationPolicy;
 
     @Override
     public ChatDispatchResult process(Long userId, String sessionId, String message, Long userDialogueId) {
@@ -58,17 +60,22 @@ public class ChatServiceImpl implements ChatService {
             Optional<ChatDispatchResult> pending = reporter.report(progress, "状态机消费结构化路由事件",
                     () -> flowStateProcessor.tryHandle(
                             userId, sessionId, message, state, decision.getUserSignal(), progress));
-            if (pending.isPresent()) return pending.get();
-            return executeReadyTransition(userId, sessionId, message, decision, progress);
+            ChatDispatchResult result = pending.orElseGet(
+                    () -> executeReadyTransition(userId, sessionId, message, userDialogueId, decision, progress));
+            logConversationTrace(sessionId, decision, result);
+            return result;
         } catch (Exception exception) {
             log.error("Assistant chat processing failed", exception);
-            return failureResult(userId, sessionId);
+            ChatDispatchResult result = failureResult(userId, sessionId);
+            logConversationTrace(sessionId, null, result);
+            return result;
         } finally {
             ChatSessionContext.remove();
         }
     }
 
     private ChatDispatchResult executeReadyTransition(Long userId, String sessionId, String message,
+                                                      Long userDialogueId,
                                                       RouteDecision decision,
                                                       Consumer<String> progress) {
         UserSignal signal = decision.getUserSignal() == null ? UserSignal.READY_CHAT : decision.getUserSignal();
@@ -105,9 +112,13 @@ public class ChatServiceImpl implements ChatService {
                         AgentFlowStateService.STAGE_WAIT_CONFIRM);
             }
             case PREPARE_PLAN_CONFIRMATION -> {
+                if (!planClarificationPolicy.shouldAsk(userId, sessionId, task, userDialogueId)) {
+                    yield flowStateProcessor.startPlan(userId, sessionId, task, progress);
+                }
                 reporter.report(progress, "写入规划确认状态",
                         () -> flowStateService.waitPlannerConfirm(userId, sessionId, task));
-                yield result("这是一个规划类任务，需要我来帮你规划一下吗？", false, "PLAN_CONFIRM",
+                yield result("为了让规划更贴合你，我还缺少一些关键信息。你可以补充，也可以直接让我按通用方案规划。",
+                        false, "PLAN_CLARIFICATION",
                         AgentFlowStateService.AGENT_PLANNER, AgentFlowStateService.AGENT_PLANNER,
                         AgentFlowStateService.STAGE_WAIT_CONFIRM);
             }
@@ -138,6 +149,24 @@ public class ChatServiceImpl implements ChatService {
     private ChatDispatchResult result(String reply, boolean dispatched, String type,
                                       String currentAgent, String nextAgent, String stage) {
         return new ChatDispatchResult(reply, dispatched, type, currentAgent, nextAgent, stage);
+    }
+
+    /** 按实际处理节点逐行输出；同一 sessionId 的日志顺序即为 Agent 流转顺序。 */
+    private void logConversationTrace(String sessionId, RouteDecision decision, ChatDispatchResult result) {
+        log.info("[对话链路] sessionId={} | Agent=RouteAgent | 阶段=路由 | 事件={}",
+                sessionId,
+                decision == null || decision.getUserSignal() == null ? "ERROR" : decision.getUserSignal());
+        log.info("[对话链路] sessionId={} | Agent={} | 阶段=最终回复 | 类型={}",
+                sessionId,
+                result.needDispatchAgent() ? agentName(result.currentAgent()) : "系统",
+                result.dispatchType());
+    }
+
+    private String agentName(String agent) {
+        if (AgentFlowStateService.AGENT_CHAT.equals(agent)) return "ChatAgent";
+        if (AgentFlowStateService.AGENT_PLANNER.equals(agent)) return "PlannerAgent";
+        if (AgentFlowStateService.AGENT_EXECUTOR.equals(agent)) return "ExecutorAgent";
+        return "系统";
     }
 
     private boolean isBlank(String value) { return value == null || value.isBlank(); }
