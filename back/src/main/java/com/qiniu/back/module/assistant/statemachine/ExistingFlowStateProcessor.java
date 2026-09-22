@@ -63,7 +63,7 @@ public class ExistingFlowStateProcessor {
             case REVISE_PLAN -> revisePlan(state, request);
             case CANCEL_PENDING_ACTION -> cancel(state, request);
             case EXPLAIN_PENDING_STATE -> explainPending(state, signal);
-            case RESPOND_DIRECTLY, QUERY_CALENDAR, EXECUTE_SINGLE_DAY_ACTION,
+            case CHAT_DIALOGUE, QUERY_CALENDAR, EXECUTE_SINGLE_DAY_ACTION,
                  PREPARE_SINGLE_DAY_CONFIRMATION, PREPARE_EXECUTION_CONFIRMATION,
                  PREPARE_PLAN_CONFIRMATION ->
                     throw new IllegalStateException("pending 状态不能执行 READY 节点");

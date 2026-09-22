@@ -14,6 +14,7 @@ spring:
       host: ${app.redis.host}
       port: ${app.redis.port}
       database: ${app.redis.database}
+      password: ${app.redis.password:}
 
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml

@@ -1,5 +1,6 @@
 package com.qiniu.back.module.assistant.agent;
 
+import com.qiniu.back.module.assistant.config.AgentModelBeans;
 import com.qiniu.back.exception.BusinessException;
 import com.qiniu.back.module.assistant.service.PlanDraftService;
 import com.qiniu.back.module.assistant.rag.RagHit;
@@ -28,7 +29,7 @@ public class PlannerAgent {
     private final RagService ragService;
     private AgentRunner runner;
 
-    public PlannerAgent(@Qualifier("plannerChatModel") ChatModel plannerChatModel,
+    public PlannerAgent(@Qualifier(AgentModelBeans.PLANNER) ChatModel plannerChatModel,
                         PlanDraftService planDraftService,
                         UserMemoryService userMemoryService,
                         RagService ragService) {

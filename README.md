@@ -14,7 +14,7 @@
 | 数据库 | MySQL 8 + Druid + P6Spy |
 | 缓存 | Redis |
 | AI 框架 | LangChain4j 1.3，OpenAI 兼容 Chat/Streaming API |
-| 默认模型配置 | 阿里云百炼兼容接口，默认 `qwen3.7-plus`，Planner 可用 `deepseek-v4-flash` |
+| 默认模型配置 | 百炼：路由/执行/摘要/RAG 用 `qwen3.7-plus`；DeepSeek：对话 `deepseek-flash`、规划 `deepseek-v4-pro`。各厂家使用各自的 `api-key` 和 `base-url` |
 | RAG | Lucene BM25 + Qdrant Dense Vector + RRF 融合 + LLM Rerank |
 | Embedding | Ollama `bge-m3` 或阿里云 `text-embedding-v4` |
 | 文档 | Knife4j OpenAPI |
@@ -69,7 +69,7 @@ calendar-agent/
 - `ChatFacadeImpl`：HTTP 对话外层流程，负责消息落库、SSE 和会话历史。
 - `ChatServiceImpl`：Assistant 核心入口，按已有状态和新请求路由的顺序处理消息。
 - `ChatTransitionTable`：集中声明状态、用户事件、动作节点和下一状态。
-- `RouteAgent` / `ChatAgent` / `PlannerAgent` / `ExecutorAgent`：分别负责结构化每条消息、只读查询、规划生成和全部写操作。
+- `RouteAgent` / `ChatAgent` / `PlannerAgent` / `ExecutorAgent`：分别负责结构化路由、闲聊与只读查询、规划生成和全部写操作。
 - `AgentRunner`：各 Agent 复用的模型及工具调用循环。
 - `PlanDraftService`：保存规划草稿，并在确认后批量创建待办。
 - `RagService`：BM25 + Qdrant 混合检索、RRF 融合、Rerank、缓存。
@@ -163,10 +163,11 @@ calendar-agent/
 ```text
 用户输入
   ├─ 异步抽取长期偏好/目标记忆
-  ├─ 读取 AgentFlowState、上一轮助手回复与压缩历史上下文
-  ├─ RouteAgent 结合上一轮助手回复和本轮用户消息输出结构化事件
+  ├─ 读取 AgentFlowState 和上一轮助手回复
+  ├─ RouteAgent 只带上一轮助手回复和本轮用户消息，输出结构化事件
   └─ 状态机按当前 stage + userSignal 执行
-       ├─ READY_*：回复、查询、执行、等待确认或进入规划
+       ├─ READY_CHAT：交给 ChatAgent 闲聊或追问
+       ├─ READY_QUERY / READY_SINGLE_DAY_* / READY_EXECUTE / READY_PLAN：查询、执行、等待确认或进入规划
        ├─ CONFIRM / REJECT：继续或取消待处理流程
        ├─ MODIFY：补充 pending_task，必要时重新规划
        └─ NEW_REQUEST / UNKNOWN：保留当前待处理状态并说明
@@ -174,7 +175,7 @@ calendar-agent/
 
 规划类任务会先输出草稿预览。用户确认后，`PlanDraftService` 将 Planner 的结构化 JSON 转换为多个 `TodoCreateDTO`，批量写入日历。
 Planner 生成计划前会读取 active 用户记忆，并按“本轮明确指令 > pending 状态 > 长期记忆 > 公共 RAG”的优先级作为参考。
-助手回复落库后会异步检查是否需要刷新会话摘要。未摘要对话满 40 轮（用户+助手各一条算一轮）时，把最早 20 轮压进 `yl_chat_context_summary`；之后要再积累 20 轮才进行下一次压缩。原始 `yl_ai_dialogue` 不删除，历史页仍可查看；模型下一轮只读取 1 条活跃摘要 + 最近 20 轮原文。摘要只保留稳定事实、目标、偏好和重要指代，不把历史请求当作本轮待执行任务。
+助手回复落库后会异步检查是否需要刷新会话摘要。未摘要对话满 40 轮（用户+助手各一条算一轮）时，把最早 20 轮压进 `yl_chat_context_summary`；之后要再积累 20 轮才进行下一次压缩。原始 `yl_ai_dialogue` 不删除，历史页仍可查看。RouteAgent 不读压缩历史，只看上一轮助手回复和本轮用户消息。摘要只保留稳定事实、目标、偏好和重要指代，不把历史请求当作本轮待执行任务。
 
 ---
 
@@ -248,10 +249,41 @@ app:
     token-name: yvli-token
     timeout: 604800
   ai:
-    api-key: ${unknown.aliyun.api-key}
-    base-url: ${ALIYUN_AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
-    model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
-    planner-model: ${ALIYUN_PLANNER_MODEL:deepseek-v4-flash}
+    default-provider: dashscope
+    providers:
+      dashscope:
+        type: openai-compatible
+        api-key: ${unknown.aliyun.api-key}
+        base-url: ${unknown.aliyun.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      deepseek:
+        type: openai-compatible
+        api-key: ${unknown.deepseek.api-key}
+        base-url: ${unknown.deepseek.base-url:https://api.deepseek.com}
+    agents:
+      route:
+        provider: dashscope
+        model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
+        temperature: 0.1
+      chat:
+        provider: deepseek
+        model: ${DEEPSEEK_CHAT_MODEL:deepseek-flash}
+        temperature: 0.3
+      executor:
+        provider: dashscope
+        model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
+        temperature: 0.3
+      planner:
+        provider: deepseek
+        model: ${DEEPSEEK_PLANNER_MODEL:deepseek-v4-pro}
+        temperature: 0.1
+      summary:
+        provider: dashscope
+        model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
+        temperature: 0.1
+      rag:
+        provider: dashscope
+        model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
+        temperature: 0.1
   qdrant:
     host: localhost
     port: 6334

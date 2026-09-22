@@ -27,7 +27,7 @@ public class ChatTransitionTable {
             // READY：事件已经由 RouteAgent 结构化，状态机只负责映射动作
             Map.entry(
                     key(ConversationStage.READY_FOR_INPUT, UserSignal.READY_CHAT),
-                    rule(ChatNode.RESPOND_DIRECTLY)
+                    rule(ChatNode.CHAT_DIALOGUE)
             ),
             Map.entry(
                     key(ConversationStage.READY_FOR_INPUT, UserSignal.READY_QUERY),

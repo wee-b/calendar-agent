@@ -2,6 +2,7 @@ package com.qiniu.back.module.assistant.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.qiniu.back.module.assistant.config.AgentModelBeans;
 import com.qiniu.back.module.assistant.domain.model.AiDialogue;
 import com.qiniu.back.module.assistant.domain.model.ChatContextSummary;
 import com.qiniu.back.module.assistant.mapper.AiDialogueMapper;
@@ -14,6 +15,7 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,11 +44,18 @@ public class ChatContextSummaryService {
     private ChatContextSummaryMapper summaryMapper;
 
     @Autowired
+    @Qualifier(AgentModelBeans.SUMMARY)
     private ChatModel chatModel;
 
     public List<ChatMessage> buildCompressedReadonlyHistory(Long userId, String sessionId, Long beforeDialogueId) {
+        return buildCompressedReadonlyHistory(
+                userId, sessionId, beforeDialogueId, RECENT_ROUND_LIMIT, MAX_DIALOGUE_TEXT_LEN);
+    }
+
+    public List<ChatMessage> buildCompressedReadonlyHistory(Long userId, String sessionId, Long beforeDialogueId,
+                                                            int recentRoundLimit, int maxTextLen) {
         ChatContextSummary summary = latestActiveSummary(userId, sessionId);
-        List<AiDialogue> recent = loadRecentDialogues(userId, sessionId, beforeDialogueId, summary);
+        List<AiDialogue> recent = loadRecentDialogues(userId, sessionId, beforeDialogueId, summary, recentRoundLimit);
         if (summary == null && recent.isEmpty()) return Collections.emptyList();
 
         StringBuilder sb = new StringBuilder();
@@ -63,10 +72,10 @@ public class ChatContextSummaryService {
             sb.append("\n## 最近原始对话\n");
             for (AiDialogue d : recent) {
                 if (d.getUserText() != null && !d.getUserText().isBlank()) {
-                    sb.append("用户历史：").append(truncate(d.getUserText(), MAX_DIALOGUE_TEXT_LEN)).append("\n");
+                    sb.append("用户历史：").append(truncate(d.getUserText(), maxTextLen)).append("\n");
                 }
                 if (d.getAiResult() != null && !d.getAiResult().isBlank()) {
-                    sb.append("助手历史：").append(truncate(d.getAiResult(), MAX_DIALOGUE_TEXT_LEN)).append("\n");
+                    sb.append("助手历史：").append(truncate(d.getAiResult(), maxTextLen)).append("\n");
                 }
             }
         }
@@ -142,7 +151,7 @@ public class ChatContextSummaryService {
     }
 
     private List<AiDialogue> loadRecentDialogues(Long userId, String sessionId, Long beforeDialogueId,
-                                                 ChatContextSummary summary) {
+                                                 ChatContextSummary summary, int recentRoundLimit) {
         LambdaQueryWrapper<AiDialogue> wrapper = new LambdaQueryWrapper<AiDialogue>()
                 .eq(AiDialogue::getUserId, userId)
                 .eq(AiDialogue::getSessionId, sessionId);
@@ -155,9 +164,9 @@ public class ChatContextSummaryService {
 
         List<AiDialogue> recent = aiDialogueMapper.selectList(wrapper
                 .orderByDesc(AiDialogue::getDialogueId)
-                .last("LIMIT " + (RECENT_ROUND_LIMIT * 2 + 4)));
+                .last("LIMIT " + (recentRoundLimit * 2 + 4)));
         Collections.reverse(recent);
-        return keepLastRounds(recent, RECENT_ROUND_LIMIT);
+        return keepLastRounds(recent, recentRoundLimit);
     }
 
     private int countRounds(List<AiDialogue> dialogues) {

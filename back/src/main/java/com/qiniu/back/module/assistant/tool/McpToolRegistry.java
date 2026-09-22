@@ -144,9 +144,9 @@ public class McpToolRegistry {
                                 "endDate", Map.of("type", "string", "description", "结束日期 yyy-MM-dd"),
                                 "weekDays", Map.of("type", "array",
                                         "items", Map.of("type", "integer"),
-                                        "description", "每周执行日 1=周一至7=周日")
+                                        "description", "每周执行日 1=周一至7=周日；单日待办可省略")
                         ),
-                        "required", List.of("title", "startDate", "endDate", "weekDays")
+                        "required", List.of("title", "startDate", "endDate")
                 ))
                 .executor(args -> {
                     TodoCreateDTO dto = new TodoCreateDTO();
@@ -155,7 +155,9 @@ public class McpToolRegistry {
                     dto.setDayContent(args.get("dayContent") instanceof String s ? s : (String) args.get("title"));
                     dto.setStartDate(LocalDate.parse((String) args.get("startDate")));
                     dto.setEndDate(LocalDate.parse((String) args.get("endDate")));
-                    dto.setWeekDays(toWeekDayList(args.get("weekDays")));
+                    if (args.get("weekDays") != null) {
+                        dto.setWeekDays(toWeekDayList(args.get("weekDays")));
+                    }
                     return toolService.createTodo(dto);
                 })
                 .build());

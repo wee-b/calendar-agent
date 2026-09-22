@@ -84,7 +84,7 @@ public class ChatToolService {
             return "删除失败：未找到 ID=" + todoId + " 的待办，可能已被删除或不存在。请重新查询待办列表获取最新数据。";
         }
         todoService.delete(todoId);
-        return "已删除待办【" + target.getTitle() + "】ID=" + todoId + "。请调用 queryTodoList 验证删除结果。";
+        return "已删除待办【" + target.getTitle() + "】ID=" + todoId + "。";
     }
 
     public String updateTodo(Long todoId, TodoUpdateDTO dto) {
@@ -112,7 +112,7 @@ public class ChatToolService {
         }
         try {
             todoService.removeTodoDay(todoId, LocalDate.parse(date));
-            return "已从【" + target.getTitle() + "】中移除 " + date + "，其他天不受影响。请调用 queryDayDetail 验证。";
+            return "已从【" + target.getTitle() + "】中移除 " + date + "，其他天不受影响。";
         } catch (Exception e) {
             return "移除失败: " + e.getMessage();
         }
@@ -130,7 +130,7 @@ public class ChatToolService {
         }
         try {
             todoService.addTodoDay(todoId, LocalDate.parse(date), dayContent);
-            return "已给【" + target.getTitle() + "】增加 " + date + " 这一天。请调用 queryDayDetail 验证。";
+            return "已给【" + target.getTitle() + "】增加 " + date + " 这一天。";
         } catch (Exception e) {
             return "添加失败: " + e.getMessage();
         }

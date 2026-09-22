@@ -1,4 +1,4 @@
-package com.qiniu.back.config;
+package com.qiniu.back.module.assistant.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

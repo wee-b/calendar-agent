@@ -2,8 +2,8 @@ package com.qiniu.back.module.assistant.statemachine;
 
 public enum ChatNode {
 
-    /** 直接返回 RouteAgent 生成的普通回复。 */
-    RESPOND_DIRECTLY,
+    /** 交给 ChatAgent 处理闲聊或追问。 */
+    CHAT_DIALOGUE,
 
     /**
      * 直接调用 ChatAgent 查询工具。

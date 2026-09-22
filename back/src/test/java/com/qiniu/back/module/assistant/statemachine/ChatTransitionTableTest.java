@@ -11,7 +11,7 @@ class ChatTransitionTableTest {
     @Test
     void readyStructuredSignalsMapToActions() {
         assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.READY_CHAT,
-                ChatNode.RESPOND_DIRECTLY);
+                ChatNode.CHAT_DIALOGUE);
         assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.READY_QUERY,
                 ChatNode.QUERY_CALENDAR);
         assertRule(ConversationStage.READY_FOR_INPUT, UserSignal.READY_SINGLE_DAY_ACTION,

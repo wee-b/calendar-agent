@@ -2,7 +2,7 @@ package com.qiniu.back.util;
 
 import cn.dev33.satoken.exception.NotLoginException;
 
-import com.qiniu.back.config.ClientTokenConfig;
+import com.qiniu.back.module.user.config.ClientTokenConfig;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;

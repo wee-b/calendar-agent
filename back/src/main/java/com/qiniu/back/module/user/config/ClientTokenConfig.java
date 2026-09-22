@@ -1,4 +1,4 @@
-package com.qiniu.back.config;
+package com.qiniu.back.module.user.config;
 
 import cn.dev33.satoken.config.SaTokenConfig;
 import cn.dev33.satoken.stp.StpLogic;

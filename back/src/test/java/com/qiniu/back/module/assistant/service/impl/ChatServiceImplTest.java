@@ -5,7 +5,6 @@ import com.qiniu.back.module.assistant.agent.ExecutorAgent;
 import com.qiniu.back.module.assistant.agent.RouteAgent;
 import com.qiniu.back.module.assistant.domain.result.ChatDispatchResult;
 import com.qiniu.back.module.assistant.domain.vo.RouteDecision;
-import com.qiniu.back.module.assistant.service.ChatContextSummaryService;
 import com.qiniu.back.module.assistant.service.ChatDialogueService;
 import com.qiniu.back.module.assistant.service.ProgressReporter;
 import com.qiniu.back.module.assistant.statemachine.AgentFlowState;
@@ -34,7 +33,6 @@ import static org.mockito.Mockito.when;
 class ChatServiceImplTest {
 
     @Mock private ExistingFlowStateProcessor flowStateProcessor;
-    @Mock private ChatContextSummaryService contextSummaryService;
     @Mock private ChatDialogueService chatDialogueService;
     @Mock private ChatAgent chatAgent;
     @Mock private ExecutorAgent executorAgent;
@@ -45,7 +43,7 @@ class ChatServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        service = new ChatServiceImpl(flowStateProcessor, contextSummaryService, chatDialogueService,
+        service = new ChatServiceImpl(flowStateProcessor, chatDialogueService,
                 chatAgent, executorAgent, routeAgent, flowStateService, new ChatTransitionTable(),
                 new ProgressReporter());
     }
@@ -64,7 +62,7 @@ class ChatServiceImplTest {
         assertEquals(AgentFlowStateService.STAGE_IDLE, result.flowStage());
         verify(flowStateService, never()).waitExecutorConfirm(
                 org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString());
-        verify(routeAgent).route(message, null, List.of(), null);
+        verify(routeAgent).route(message, null, null);
         assertTrue(progress.stream().anyMatch(item -> item.contains("结合上一轮回复生成结构化路由事件")));
     }
 
@@ -73,7 +71,6 @@ class ChatServiceImplTest {
         String message = "不确定的单日操作表达";
         String task = "删除指定日期的目标";
         RouteDecision decision = decision(task, UserSignal.READY_SINGLE_DAY_CONFIRM);
-        decision.setReply("正在处理");
         stubReady(message, decision);
         when(flowStateService.waitExecutorConfirm(1L, "session-1", task)).thenReturn(new AgentFlowState());
         List<String> progress = new ArrayList<>();
@@ -82,9 +79,24 @@ class ChatServiceImplTest {
 
         assertEquals("CHAT_ACTION_CONFIRM", result.dispatchType());
         assertTrue(result.aiResult().contains("需要我执行"));
-        assertTrue(!result.aiResult().contains("正在处理"));
         verify(executorAgent, never()).execute(anyString());
         assertTrue(progress.stream().anyMatch(item -> item.contains("状态机消费结构化路由事件")));
+    }
+
+    @Test
+    void idleChatIsHandledByChatAgent() {
+        String message = "你好";
+        stubReady(message, decision(message, UserSignal.READY_CHAT));
+        when(chatAgent.chat(message)).thenReturn("你好，需要我帮你看日程吗？");
+        List<String> progress = new ArrayList<>();
+
+        ChatDispatchResult result = service.process(1L, "session-1", message, 10L, progress::add);
+
+        assertEquals("你好，需要我帮你看日程吗？", result.aiResult());
+        assertEquals("CHAT", result.dispatchType());
+        verify(chatAgent).chat(message);
+        verify(executorAgent, never()).execute(anyString());
+        assertTrue(progress.stream().anyMatch(item -> item.contains("调用 Chat Agent 回复闲聊")));
     }
 
     @Test
@@ -99,9 +111,7 @@ class ChatServiceImplTest {
         when(flowStateService.get(1L, "session-1")).thenReturn(Optional.of(state));
         when(chatDialogueService.findLatestAssistantReply(1L, "session-1", 10L))
                 .thenReturn("需要同步到日历中吗？");
-        when(contextSummaryService.buildCompressedReadonlyHistory(1L, "session-1", 10L)
-                ).thenReturn(List.of());
-        when(routeAgent.route(message, "需要同步到日历中吗？", List.of(), state)).thenReturn(decision);
+        when(routeAgent.route(message, "需要同步到日历中吗？", state)).thenReturn(decision);
         when(flowStateProcessor.tryHandle(
                 org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq("session-1"),
@@ -123,9 +133,7 @@ class ChatServiceImplTest {
     private void stubReady(String message, RouteDecision decision) {
         when(flowStateService.get(1L, "session-1")).thenReturn(Optional.empty());
         when(chatDialogueService.findLatestAssistantReply(1L, "session-1", 10L)).thenReturn(null);
-        when(contextSummaryService.buildCompressedReadonlyHistory(1L, "session-1", 10L))
-                .thenReturn(List.of());
-        when(routeAgent.route(message, null, List.of(), null)).thenReturn(decision);
+        when(routeAgent.route(message, null, null)).thenReturn(decision);
         when(flowStateProcessor.tryHandle(
                 org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq("session-1"),

@@ -1,6 +1,7 @@
 package com.qiniu.back.module.assistant.rag;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qiniu.back.module.assistant.config.AgentModelBeans;
 import com.qiniu.back.constant.RedisConstant;
 import com.qiniu.back.util.DigestUtil;
 import dev.langchain4j.data.message.UserMessage;
@@ -28,6 +29,7 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.MMapDirectory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -66,7 +68,8 @@ public class RagService {
     private SmartChineseAnalyzer analyzer;
 
     public RagService(RagProperties props, QdrantProperties qdrantProps, EmbeddingClient embeddingClient,
-                      QdrantClient qdrant, ChatModel chatModel, StringRedisTemplate redis, ObjectMapper objectMapper) {
+                      QdrantClient qdrant, @Qualifier(AgentModelBeans.RAG) ChatModel chatModel,
+                      StringRedisTemplate redis, ObjectMapper objectMapper) {
         this.props = props;
         this.qdrantProps = qdrantProps;
         this.embeddingClient = embeddingClient;

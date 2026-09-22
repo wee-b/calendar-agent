@@ -1,5 +1,6 @@
 package com.qiniu.back.module.assistant.agent;
 
+import com.qiniu.back.module.assistant.config.AgentModelBeans;
 import com.qiniu.back.module.assistant.domain.model.PlanDraft;
 import com.qiniu.back.module.assistant.service.PlanDraftService;
 import com.qiniu.back.module.assistant.tool.McpToolRegistry;
@@ -7,7 +8,7 @@ import com.qiniu.back.util.PromptLoader;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.ChatModel;
 import jakarta.annotation.PostConstruct;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -16,7 +17,6 @@ import java.util.Set;
 
 /** Executes confirmed write operations and applies confirmed plan drafts. */
 @Component
-@RequiredArgsConstructor
 public class ExecutorAgent {
 
     private static final Set<String> EXECUTOR_TOOLS = Set.of(
@@ -29,6 +29,14 @@ public class ExecutorAgent {
     private final PlanDraftService planDraftService;
     private AgentRunner runner;
 
+    public ExecutorAgent(@Qualifier(AgentModelBeans.EXECUTOR) ChatModel chatModel,
+                         McpToolRegistry toolRegistry,
+                         PlanDraftService planDraftService) {
+        this.chatModel = chatModel;
+        this.toolRegistry = toolRegistry;
+        this.planDraftService = planDraftService;
+    }
+
     @PostConstruct
     void init() {
         List<ToolSpecification> tools = toolRegistry.toLangChain4jSpecifications().stream()
@@ -40,10 +48,10 @@ public class ExecutorAgent {
                 .systemPrompt(PromptLoader.load("executor-system.txt"))
                 .tools(tools)
                 .toolExecutor(toolRegistry::execute)
-                .temperature(0.3)
+                .temperature(0.1)
                 .maxRounds(3)
-                .maxRetries(1)
-                .correctionHint("\n\nIf a tool returned an error JSON, query current todo data and retry only if safe.")
+                .maxRetries(0)
+                .correctionHint("")
                 .build();
     }
 

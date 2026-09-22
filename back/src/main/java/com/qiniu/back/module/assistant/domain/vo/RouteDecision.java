@@ -7,13 +7,10 @@ import lombok.Data;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class RouteDecision {
-    private String reply;
     private String task;
     private UserSignal userSignal;
 
-    public static RouteDecision fallback(String reply) {
-        RouteDecision decision = new RouteDecision();
-        decision.setReply(reply);
-        return decision;
+    public static RouteDecision fallback() {
+        return new RouteDecision();
     }
 }
