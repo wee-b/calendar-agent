@@ -40,6 +40,11 @@ public enum ChatNode {
     APPLY_PLAN,
 
     /**
+     * 为规划草稿生成示意图，不同步日历。
+     */
+    GENERATE_PLAN_IMAGE,
+
+    /**
      * 修改待执行动作。
      */
     MODIFY_PENDING_ACTION,

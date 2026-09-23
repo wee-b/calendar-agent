@@ -71,6 +71,14 @@ public class ChatTransitionTable {
                     key(ConversationStage.AWAITING_EXECUTION_CONFIRMATION, UserSignal.UNKNOWN),
                     rule(ChatNode.EXPLAIN_PENDING_STATE)
             ),
+            Map.entry(
+                    key(ConversationStage.AWAITING_EXECUTION_CONFIRMATION, UserSignal.SYNC_PLAN),
+                    rule(ChatNode.EXPLAIN_PENDING_STATE)
+            ),
+            Map.entry(
+                    key(ConversationStage.AWAITING_EXECUTION_CONFIRMATION, UserSignal.GENERATE_PLAN_IMAGE),
+                    rule(ChatNode.EXPLAIN_PENDING_STATE)
+            ),
 
             // 等待开始规划确认
             Map.entry(
@@ -93,11 +101,27 @@ public class ChatTransitionTable {
                     key(ConversationStage.AWAITING_PLAN_CONFIRMATION, UserSignal.UNKNOWN),
                     rule(ChatNode.EXPLAIN_PENDING_STATE)
             ),
+            Map.entry(
+                    key(ConversationStage.AWAITING_PLAN_CONFIRMATION, UserSignal.SYNC_PLAN),
+                    rule(ChatNode.EXPLAIN_PENDING_STATE)
+            ),
+            Map.entry(
+                    key(ConversationStage.AWAITING_PLAN_CONFIRMATION, UserSignal.GENERATE_PLAN_IMAGE),
+                    rule(ChatNode.EXPLAIN_PENDING_STATE)
+            ),
 
             // 等待规划草稿反馈
             Map.entry(
                     key(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.CONFIRM),
+                    rule(ChatNode.EXPLAIN_PENDING_STATE)
+            ),
+            Map.entry(
+                    key(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.SYNC_PLAN),
                     rule(ChatNode.APPLY_PLAN)
+            ),
+            Map.entry(
+                    key(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.GENERATE_PLAN_IMAGE),
+                    rule(ChatNode.GENERATE_PLAN_IMAGE)
             ),
             Map.entry(
                     key(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.REJECT),

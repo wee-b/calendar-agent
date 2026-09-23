@@ -2,7 +2,9 @@ package com.qiniu.back.module.assistant.statemachine;
 
 import com.qiniu.back.module.assistant.agent.ExecutorAgent;
 import com.qiniu.back.module.assistant.agent.PlannerAgent;
+import com.qiniu.back.module.assistant.agent.ImageAgent;
 import com.qiniu.back.module.assistant.domain.result.ChatDispatchResult;
+import com.qiniu.back.module.assistant.domain.model.PlanDraft;
 import com.qiniu.back.module.assistant.service.PlanDraftService;
 import com.qiniu.back.module.assistant.service.ProgressReporter;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,13 +28,15 @@ class ExistingFlowStateProcessorTest {
     @Mock private PlanDraftService planDraftService;
     @Mock private PlannerAgent plannerAgent;
     @Mock private ExecutorAgent executorAgent;
+    @Mock private ImageAgent imageAgent;
 
     private ExistingFlowStateProcessor processor;
 
     @BeforeEach
     void setUp() {
         processor = new ExistingFlowStateProcessor(flowStateService, planDraftService,
-                new ChatTransitionTable(), plannerAgent, executorAgent, new ProgressReporter());
+                new ChatTransitionTable(), plannerAgent, executorAgent, imageAgent,
+                new ProgressReporter());
     }
 
     @Test
@@ -74,7 +78,7 @@ class ExistingFlowStateProcessorTest {
                 1L, "session-1", message, state, UserSignal.CONFIRM, null).orElseThrow();
 
         assertEquals("PLAN", result.dispatchType());
-        assertEquals("规划草稿\n\n需要同步到日历中吗？", result.aiResult());
+        assertEquals("规划草稿\n\n接下来需要我**同步到日历**，还是**生成一张规划示意图**？", result.aiResult());
         assertEquals(AgentFlowStateService.STAGE_WAIT_FEEDBACK, result.flowStage());
         verify(flowStateService).waitPlanFeedback(1L, "session-1", "制定复习计划", 101L, "规划草稿");
     }
@@ -99,7 +103,7 @@ class ExistingFlowStateProcessorTest {
                 1L, "session-1", message, state, UserSignal.MODIFY, null).orElseThrow();
 
         assertEquals("PLAN", result.dispatchType());
-        assertEquals("补充后的规划草稿\n\n需要同步到日历中吗？", result.aiResult());
+        assertEquals("补充后的规划草稿\n\n接下来需要我**同步到日历**，还是**生成一张规划示意图**？", result.aiResult());
         verify(flowStateService, never()).updatePendingTask(
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString());
@@ -181,19 +185,56 @@ class ExistingFlowStateProcessorTest {
 
     @Test
     void shouldLoadTheDraftBoundToTheFlowState() {
-        String message = "确认";
+        String message = "同步到日历";
         AgentFlowState state = state(AgentFlowStateService.AGENT_PLANNER,
                 AgentFlowStateService.AGENT_EXECUTOR, AgentFlowStateService.STAGE_WAIT_FEEDBACK);
         state.setPendingDraftId(202L);
-        mockState(state, ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.CONFIRM);
+        mockState(state, ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.SYNC_PLAN);
         when(planDraftService.findPending(1L, "session-1", 202L)).thenReturn(Optional.empty());
 
         processor.tryHandle(
-                1L, "session-1", message, state, UserSignal.CONFIRM, null).orElseThrow();
+                1L, "session-1", message, state, UserSignal.SYNC_PLAN, null).orElseThrow();
 
         verify(planDraftService).findPending(1L, "session-1", 202L);
         verify(planDraftService, never()).findLatestPending(
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void shouldGenerateImageOnlyForExplicitImageSignal() {
+        String message = "生成一张规划示意图";
+        AgentFlowState state = state(AgentFlowStateService.AGENT_PLANNER,
+                AgentFlowStateService.AGENT_EXECUTOR, AgentFlowStateService.STAGE_WAIT_FEEDBACK);
+        state.setPendingDraftId(303L);
+        PlanDraft draft = new PlanDraft();
+        draft.setDraftId(303L);
+        mockState(state, ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.GENERATE_PLAN_IMAGE);
+        when(planDraftService.findPending(1L, "session-1", 303L)).thenReturn(Optional.of(draft));
+        when(imageAgent.generate(draft)).thenReturn("已生成规划示意图");
+
+        ChatDispatchResult result = processor.tryHandle(
+                1L, "session-1", message, state, UserSignal.GENERATE_PLAN_IMAGE, null).orElseThrow();
+
+        assertEquals("PLAN_IMAGE", result.dispatchType());
+        assertEquals("已生成规划示意图", result.aiResult());
+        verify(imageAgent).generate(draft);
+        verify(executorAgent, never()).applyPlan(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void shouldNotGenerateImageForAmbiguousConfirmation() {
+        String message = "需要";
+        AgentFlowState state = state(AgentFlowStateService.AGENT_PLANNER,
+                AgentFlowStateService.AGENT_EXECUTOR, AgentFlowStateService.STAGE_WAIT_FEEDBACK);
+        when(flowStateService.isProcessing(state)).thenReturn(false);
+        when(flowStateService.resolveStage(state)).thenReturn(ConversationStage.AWAITING_PLAN_FEEDBACK);
+
+        ChatDispatchResult result = processor.tryHandle(
+                1L, "session-1", message, state, UserSignal.CONFIRM, null).orElseThrow();
+
+        assertEquals("PENDING_UNKNOWN", result.dispatchType());
+        verify(imageAgent, never()).generate(org.mockito.ArgumentMatchers.any());
+        verify(executorAgent, never()).applyPlan(org.mockito.ArgumentMatchers.any());
     }
 
     private void mockState(AgentFlowState state, ConversationStage stage, UserSignal signal) {

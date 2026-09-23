@@ -24,6 +24,10 @@ app:
         type: openai-compatible
         api-key: ${unknown.deepseek.api-key}
         base-url: ${unknown.deepseek.base-url:https://api.deepseek.com}
+      ark:
+        type: image-generation
+        api-key: ${unknown.huosan.api-key}
+        base-url: ${unknown.huosan.base-url:https://ark.cn-beijing.volces.com/api/v3}
     agents:
       route:
         provider: aliyun
@@ -50,6 +54,11 @@ app:
         provider: aliyun
         model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
         temperature: 0.1
+      image:
+        provider: ark
+        model: ${ARK_IMAGE_MODEL:doubao-seedream-5-0-flash-260915}
+        size: ${ARK_IMAGE_SIZE:2K}
+        watermark: ${ARK_IMAGE_WATERMARK:true}
   qdrant:
     host: localhost
     port: 6334
@@ -68,4 +77,3 @@ app:
       base-url: ${RAG_ALIYUN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
       api-key: ${unknown.aliyun.api-key}
       model: ${RAG_ALIYUN_MODEL:text-embedding-v4}
-

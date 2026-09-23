@@ -1607,15 +1607,17 @@ watch(currentSessionTitle, (title) => {
 }
 
 .markdown-body table {
-  display: table;
+  display: block;
   width: 100%;
   max-width: 100%;
-  table-layout: fixed;
+  table-layout: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .markdown-body th,
 .markdown-body td {
-  min-width: 0;
+  min-width: 160px;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
@@ -1695,12 +1697,14 @@ watch(currentSessionTitle, (title) => {
 }
 
 .msg-item .markdown-body table {
-  display: table;
+  display: block;
   width: 100%;
-  table-layout: fixed;
+  max-width: 100%;
+  table-layout: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
   border-collapse: separate;
   border-spacing: 0;
-  overflow: hidden;
   border: 1px solid #ececef;
   border-radius: 12px;
   background: #ffffff;
@@ -1708,7 +1712,7 @@ watch(currentSessionTitle, (title) => {
 
 .msg-item .markdown-body th,
 .msg-item .markdown-body td {
-  min-width: 0;
+  min-width: 160px;
   padding: 12px 14px;
   border: 0;
   border-bottom: 1px solid #ececef;
@@ -1717,13 +1721,21 @@ watch(currentSessionTitle, (title) => {
 
 .msg-item .markdown-body th:nth-child(1),
 .msg-item .markdown-body td:nth-child(1) {
-  width: 26%;
+  width: auto;
+  min-width: 180px;
 }
 
 .msg-item .markdown-body th:nth-child(2),
 .msg-item .markdown-body td:nth-child(2) {
-  width: 118px;
-  white-space: nowrap;
+  width: auto;
+  min-width: 180px;
+  white-space: normal;
+}
+
+.msg-item .markdown-body th:nth-child(3),
+.msg-item .markdown-body td:nth-child(3) {
+  width: auto;
+  min-width: 280px;
 }
 
 .msg-item .msg-actions {

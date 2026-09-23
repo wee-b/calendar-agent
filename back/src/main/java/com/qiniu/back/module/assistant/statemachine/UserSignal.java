@@ -15,6 +15,16 @@ public enum UserSignal {
     CONFIRM,
 
     /**
+     * 明确要求把当前规划同步到日历。
+     */
+    SYNC_PLAN,
+
+    /**
+     * 明确要求为当前规划生成示意图。
+     */
+    GENERATE_PLAN_IMAGE,
+
+    /**
      * 取消当前待处理任务。
      */
     REJECT,

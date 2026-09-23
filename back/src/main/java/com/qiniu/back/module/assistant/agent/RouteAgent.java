@@ -35,7 +35,8 @@ public class RouteAgent {
             UserSignal.READY_CHAT, UserSignal.READY_QUERY, UserSignal.READY_SINGLE_DAY_ACTION,
             UserSignal.READY_SINGLE_DAY_CONFIRM, UserSignal.READY_EXECUTE, UserSignal.READY_PLAN);
     private static final Set<UserSignal> PENDING_SIGNALS = Set.of(
-            UserSignal.CONFIRM, UserSignal.REJECT, UserSignal.MODIFY,
+            UserSignal.CONFIRM, UserSignal.SYNC_PLAN, UserSignal.GENERATE_PLAN_IMAGE,
+            UserSignal.REJECT, UserSignal.MODIFY,
             UserSignal.NEW_REQUEST, UserSignal.UNKNOWN);
 
     private final ChatModel chatModel;
@@ -83,7 +84,9 @@ public class RouteAgent {
 
     private String waitingFor(AgentFlowState state) {
         if (AgentFlowStateService.STAGE_WAIT_FEEDBACK.equals(state.getStage())) {
-            return "用户是否把当前规划草稿同步到日历。短回复“需要/同步/确认/好的/可以”都是 CONFIRM。";
+            return "用户需要在处理当前规划草稿时明确选择：说“同步到日历/同步”是 SYNC_PLAN；"
+                    + "说“生成图片/画示意图/生成规划图”是 GENERATE_PLAN_IMAGE。"
+                    + "只有明确提到图片或示意图才能选择 GENERATE_PLAN_IMAGE；含糊的“需要/确认/好的/可以”是 CONFIRM。";
         }
         if (AgentFlowStateService.AGENT_PLANNER.equals(state.getNextAgent())) {
             return "用户是否开始生成规划或是否跳过补充信息直接规划。短回复“需要/开始规划/确认/好的/不补充信息，直接规划”都是 CONFIRM；预算、时间、偏好等补充内容是 MODIFY。";
@@ -108,17 +111,21 @@ public class RouteAgent {
                 - READY_PLAN：需要拆解的复杂规划
 
                 当前存在待处理流程时，userSignal 只能是：
-                - CONFIRM：同意继续当前等待的动作。包括回答“需要同步吗”“开始规划吗”“是否直接规划”“确认执行吗”的肯定短句，例如“需要”“同步”“确认”“好的”“可以”“是的”“不补充信息，直接规划”
+                - CONFIRM：对二选一问题只做含糊确认，或同意开始规划、直接规划、执行普通写操作。示例：“需要”“确认”“好的”“可以”“是的”“不补充信息，直接规划”
+                - SYNC_PLAN：在规划草稿反馈阶段，明确说“同步到日历”“同步日历”或“同步”
+                - GENERATE_PLAN_IMAGE：在规划草稿反馈阶段，明确说“生成图片”“画示意图”“生成规划图”
                 - REJECT：明确取消上一项任务
                 - MODIFY：补充约束、修改内容或回答澄清问题，但不是在回答是否继续
                 - NEW_REQUEST：明确提出一项与上一任务无关且可以独立执行的新请求
                 - UNKNOWN：内容无法理解
 
-                上一轮如果在问是否同步、是否开始规划、是否跳过补充直接规划或是否执行，用户的肯定短句必须是 CONFIRM，不能标成 MODIFY 或 UNKNOWN。
+                规划草稿后的“同步到日历”和“生成示意图”必须严格区分。只有明确提到图片、图像、示意图或规划图时才能输出 GENERATE_PLAN_IMAGE，禁止因为“需要”“确认”“好的”等肯定短句生成图片。
+                用户明确说同步日历时必须输出 SYNC_PLAN，不能输出 GENERATE_PLAN_IMAGE。
+                上一轮如果在问是否开始规划、是否跳过补充直接规划或是否执行，用户的肯定短句必须是 CONFIRM，不能标成 MODIFY 或 UNKNOWN。
                 只有用户补充条件、改目标、改时间或纠正内容时才用 MODIFY。
                 只有明确独立的新任务才能使用 NEW_REQUEST。
                 不要因为删除或修改有副作用就自动要求确认，是否确认只取决于用户意图是否明确。
-                必须结合上一轮助手回复判断本轮用户消息。上一轮在问是否同步、是否开始规划、是否跳过补充直接规划或是否执行时，用户回答“需要”就是 CONFIRM。
+                必须结合上一轮助手回复判断本轮用户消息。二选一问题中用户只回答“需要”时输出 CONFIRM，让状态机继续追问，不能猜测为生成图片。
                 只使用上一轮助手回复和本轮用户消息，禁止执行历史请求。
                 """;
     }

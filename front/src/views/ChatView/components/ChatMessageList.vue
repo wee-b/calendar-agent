@@ -60,6 +60,7 @@
         <div
           v-else-if="msg.content"
           class="markdown-body"
+          @dblclick="openImagePreview"
           v-html="renderMarkdown(msg.content)"
         ></div>
         <TypingIndicator v-else-if="msg.loading" />
@@ -70,6 +71,17 @@
             2. 不补充信息，直接规划
           </button>
           <button type="button" @click="openChoiceInput(index, '其他')">3. 其他</button>
+        </div>
+        <div
+          v-if="!msg.loading && index === messages.length - 1 && ['PLAN', 'PLAN_REFINE'].includes(msg.dispatchType || '')"
+          class="plan-choices"
+        >
+          <button type="button" class="primary" @click="$emit('quick-reply', '同步到日历')">
+            同步到日历
+          </button>
+          <button type="button" @click="$emit('quick-reply', '生成一张规划示意图')">
+            生成示意图
+          </button>
         </div>
         <form
           v-if="index === messages.length - 1 && inlineChoiceIndex === index"
@@ -95,11 +107,34 @@
         </div>
       </div>
     </article>
+
+    <Teleport to="body">
+      <div
+        v-if="previewImageUrl"
+        class="image-preview-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label="图片预览"
+        @click.self="closeImagePreview"
+        @wheel.prevent="handlePreviewWheel"
+      >
+        <button type="button" class="image-preview-close" aria-label="关闭图片预览" @click="closeImagePreview">
+          ×
+        </button>
+        <img
+          :src="previewImageUrl"
+          alt="图片预览"
+          class="image-preview-content"
+          :style="{ transform: `scale(${previewScale})` }"
+        />
+        <div class="image-preview-scale">{{ Math.round(previewScale * 100) }}%</div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { renderMarkdown } from '../../../utils/markdown';
 import EmptyChat from './EmptyChat.vue';
 import TypingIndicator from './TypingIndicator.vue';
@@ -120,6 +155,37 @@ const chatHistoryRef = ref<HTMLElement | null>(null);
 const inlineChoiceIndex = ref<number | null>(null);
 const inlineChoiceKind = ref('');
 const inlineChoiceText = ref('');
+const previewImageUrl = ref('');
+const previewScale = ref(1);
+
+const MIN_PREVIEW_SCALE = 0.5;
+const MAX_PREVIEW_SCALE = 5;
+const PREVIEW_SCALE_STEP = 0.15;
+
+const openImagePreview = (event: MouseEvent) => {
+  const target = event.target;
+  if (!(target instanceof HTMLImageElement) || !target.currentSrc) return;
+  previewScale.value = 1;
+  previewImageUrl.value = target.currentSrc;
+};
+
+const closeImagePreview = () => {
+  previewImageUrl.value = '';
+  previewScale.value = 1;
+};
+
+const handlePreviewWheel = (event: WheelEvent) => {
+  const direction = event.deltaY < 0 ? 1 : -1;
+  const nextScale = previewScale.value + direction * PREVIEW_SCALE_STEP;
+  previewScale.value = Math.min(MAX_PREVIEW_SCALE, Math.max(MIN_PREVIEW_SCALE, nextScale));
+};
+
+const handlePreviewKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && previewImageUrl.value) closeImagePreview();
+};
+
+onMounted(() => document.addEventListener('keydown', handlePreviewKeydown));
+onBeforeUnmount(() => document.removeEventListener('keydown', handlePreviewKeydown));
 
 const openChoiceInput = async (index: number, kind: string) => {
   inlineChoiceIndex.value = index;
@@ -248,6 +314,84 @@ defineExpose({ scrollToBottom });
   margin: 0 0 12px;
 }
 
+.markdown-body :deep(img) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 12px 0;
+  border-radius: 14px;
+  cursor: zoom-in;
+}
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  background: rgba(9, 9, 11, 0.88);
+  backdrop-filter: blur(4px);
+}
+
+.image-preview-content {
+  display: block;
+  max-width: min(94vw, 1600px);
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  transform-origin: center center;
+  transition: transform 0.08s ease-out;
+  user-select: none;
+}
+
+.image-preview-scale {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  min-width: 64px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-size: 13px;
+  text-align: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.image-preview-close {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-size: 30px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-preview-close:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+@media (max-width: 640px) {
+  .image-preview-overlay {
+    padding: 20px;
+  }
+
+  .image-preview-content {
+    max-width: 100%;
+    max-height: 86vh;
+  }
+}
+
 .markdown-body :deep(p:last-child),
 .markdown-body :deep(ul:last-child),
 .markdown-body :deep(ol:last-child),
@@ -260,12 +404,14 @@ defineExpose({ scrollToBottom });
 }
 
 .markdown-body :deep(table) {
-  display: table;
+  display: block;
   width: 100%;
-  table-layout: fixed;
+  max-width: 100%;
+  table-layout: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
   border-collapse: separate;
   border-spacing: 0;
-  overflow: hidden;
   border: 1px solid #ececef;
   border-radius: 12px;
   background: #ffffff;
@@ -273,7 +419,7 @@ defineExpose({ scrollToBottom });
 
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
-  min-width: 0;
+  min-width: 160px;
   padding: 12px 14px;
   border: 0;
   border-bottom: 1px solid #ececef;
@@ -303,18 +449,21 @@ defineExpose({ scrollToBottom });
 
 .markdown-body :deep(th:nth-child(1)),
 .markdown-body :deep(td:nth-child(1)) {
-  width: 26%;
+  width: auto;
+  min-width: 180px;
 }
 
 .markdown-body :deep(th:nth-child(2)),
 .markdown-body :deep(td:nth-child(2)) {
-  width: 118px;
-  white-space: nowrap;
+  width: auto;
+  min-width: 180px;
+  white-space: normal;
 }
 
 .markdown-body :deep(th:nth-child(3)),
 .markdown-body :deep(td:nth-child(3)) {
   width: auto;
+  min-width: 280px;
 }
 
 .msg-actions {

@@ -3,6 +3,7 @@ package com.qiniu.back.module.assistant.statemachine;
 import com.qiniu.back.module.assistant.domain.model.PlanDraft;
 import com.qiniu.back.module.assistant.agent.ExecutorAgent;
 import com.qiniu.back.module.assistant.agent.PlannerAgent;
+import com.qiniu.back.module.assistant.agent.ImageAgent;
 import com.qiniu.back.module.assistant.domain.result.ChatDispatchResult;
 import com.qiniu.back.module.assistant.service.PlanDraftService;
 import com.qiniu.back.module.assistant.service.ProgressReporter;
@@ -22,6 +23,7 @@ public class ExistingFlowStateProcessor {
     private final ChatTransitionTable transitionTable;
     private final PlannerAgent plannerAgent;
     private final ExecutorAgent executorAgent;
+    private final ImageAgent imageAgent;
     private final ProgressReporter reporter;
 
     public Optional<ChatDispatchResult> tryHandle(Long userId, String sessionId, String message,
@@ -64,6 +66,7 @@ public class ExistingFlowStateProcessor {
                 yield generatePlan(state, request, false);
             }
             case APPLY_PLAN -> applyPlan(state, request);
+            case GENERATE_PLAN_IMAGE -> generatePlanImage(state, request);
             case MODIFY_PENDING_ACTION -> modifyPending(state, request);
             case REVISE_PLAN -> revisePlan(state, request);
             case CANCEL_PENDING_ACTION -> cancel(state, request);
@@ -114,6 +117,18 @@ public class ExistingFlowStateProcessor {
                 AgentFlowStateService.AGENT_NONE, AgentFlowStateService.STAGE_IDLE);
     }
 
+    private ChatDispatchResult generatePlanImage(AgentFlowState state, Request request) {
+        Optional<PlanDraft> draft = reporter.report(request.progress(), "读取待生成示意图的规划草稿",
+                () -> planDraftService.findPending(
+                        request.userId(), request.sessionId(), state.getPendingDraftId()));
+        String reply = draft.map(value -> reporter.report(request.progress(), "生成规划示意图",
+                        () -> imageAgent.generate(value)))
+                .orElse("没有找到待生成示意图的规划草稿，先回到对话状态。");
+        clear(request);
+        return result(reply, true, "PLAN_IMAGE", AgentFlowStateService.AGENT_PLANNER,
+                AgentFlowStateService.AGENT_NONE, AgentFlowStateService.STAGE_IDLE);
+    }
+
     private ChatDispatchResult modifyPending(AgentFlowState state, Request request) {
         AgentFlowState updated = updatePending(state, request);
         ConversationStage currentStage = flowStateService.resolveStage(updated);
@@ -141,7 +156,8 @@ public class ExistingFlowStateProcessor {
     private ChatDispatchResult explainPending(AgentFlowState state, UserSignal signal) {
         ConversationStage currentStage = flowStateService.resolveStage(state);
         String subject = currentStage == ConversationStage.AWAITING_EXECUTION_CONFIRMATION ? "待执行任务" : "规划";
-        String action = currentStage == ConversationStage.AWAITING_PLAN_FEEDBACK ? "同步、取消或修改当前规划"
+        String action = currentStage == ConversationStage.AWAITING_PLAN_FEEDBACK
+                ? "明确选择“同步到日历”或“生成示意图”，也可以取消或修改当前规划"
                 : "确认、取消或补充上一项" + subject;
         String prefix = signal == UserSignal.NEW_REQUEST
                 ? "当前还有一项未完成的" + subject + "，所以没有处理这条新请求。"
@@ -171,7 +187,9 @@ public class ExistingFlowStateProcessor {
         return new ChatDispatchResult(reply, dispatched, type, currentAgent, nextAgent, stage);
     }
 
-    private String buildPlanReply(String planResult) { return planResult + "\n\n需要同步到日历中吗？"; }
+    private String buildPlanReply(String planResult) {
+        return planResult + "\n\n接下来需要我**同步到日历**，还是**生成一张规划示意图**？";
+    }
 
     private record Request(Long userId, String sessionId, String message, Consumer<String> progress) { }
 }

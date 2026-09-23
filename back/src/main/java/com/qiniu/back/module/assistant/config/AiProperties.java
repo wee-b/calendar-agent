@@ -21,7 +21,7 @@ public class AiProperties {
 
     @Data
     public static class Provider {
-        /** openai-compatible 可对接百炼、OpenAI、DeepSeek 官方等；后续可加 ollama 等类型。 */
+        /** 对话模型使用 openai-compatible；ImageAgent 使用 image-generation。 */
         private String type = "openai-compatible";
         private String apiKey;
         private String baseUrl;
@@ -32,5 +32,9 @@ public class AiProperties {
         private String provider;
         private String model;
         private Double temperature;
+        /** ImageAgent 输出尺寸，例如 2K。 */
+        private String size;
+        /** ImageAgent 是否添加模型水印。 */
+        private Boolean watermark;
     }
 }

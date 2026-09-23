@@ -40,8 +40,12 @@ class ChatTransitionTableTest {
                 ChatNode.EXECUTE_PENDING_ACTION);
         assertRule(ConversationStage.AWAITING_PLAN_CONFIRMATION, UserSignal.CONFIRM,
                 ChatNode.GENERATE_PLAN);
-        assertRule(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.CONFIRM,
+        assertRule(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.SYNC_PLAN,
                 ChatNode.APPLY_PLAN);
+        assertRule(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.GENERATE_PLAN_IMAGE,
+                ChatNode.GENERATE_PLAN_IMAGE);
+        assertRule(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.CONFIRM,
+                ChatNode.EXPLAIN_PENDING_STATE);
         assertRule(ConversationStage.AWAITING_PLAN_FEEDBACK, UserSignal.MODIFY,
                 ChatNode.REVISE_PLAN);
         assertRule(ConversationStage.AWAITING_PLAN_CONFIRMATION, UserSignal.MODIFY,
