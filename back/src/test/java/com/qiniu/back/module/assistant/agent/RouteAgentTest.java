@@ -1,0 +1,114 @@
+package com.qiniu.back.module.assistant.agent;
+
+import com.qiniu.back.module.assistant.domain.vo.RouteDecision;
+import com.qiniu.back.module.assistant.statemachine.AgentFlowState;
+import com.qiniu.back.module.assistant.statemachine.AgentFlowStateService;
+import com.qiniu.back.module.assistant.statemachine.UserSignal;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class RouteAgentTest {
+
+    @Test
+    void preservesStructuredModificationSignalForPendingFlow() {
+        ChatModel model = modelReturning("""
+                {"userSignal":"MODIFY","reply":"","task":"补充当前规划"}
+                """);
+        RouteAgent agent = new RouteAgent(model);
+        AgentFlowState state = new AgentFlowState();
+        state.setStage(AgentFlowStateService.STAGE_WAIT_CONFIRM);
+        state.setCurrentAgent(AgentFlowStateService.AGENT_PLANNER);
+        state.setNextAgent(AgentFlowStateService.AGENT_PLANNER);
+        state.setPendingTask("制定学习计划");
+
+        RouteDecision decision = agent.route("补充说明", "需要我现在开始规划吗？", state);
+
+        assertEquals(UserSignal.MODIFY, decision.getUserSignal());
+    }
+
+    @Test
+    void keepsExplicitSyncChoiceSeparateFromImageGeneration() {
+        ChatModel model = modelReturning("""
+                {"userSignal":"SYNC_PLAN","reply":"","task":"同步当前规划"}
+                """);
+        RouteAgent agent = new RouteAgent(model);
+        AgentFlowState state = new AgentFlowState();
+        state.setStage(AgentFlowStateService.STAGE_WAIT_FEEDBACK);
+        state.setCurrentAgent(AgentFlowStateService.AGENT_PLANNER);
+        state.setNextAgent(AgentFlowStateService.AGENT_EXECUTOR);
+        state.setPendingTask("中秋节突击计算机二级");
+
+        String previous = "规划草稿\n\n接下来需要我同步到日历，还是生成一张规划示意图？";
+        RouteDecision decision = agent.route("同步到日历", previous, state);
+
+        assertEquals(UserSignal.SYNC_PLAN, decision.getUserSignal());
+        ArgumentCaptor<ChatRequest> request = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(model).chat(request.capture());
+        UserMessage turn = (UserMessage) request.getValue().messages().get(request.getValue().messages().size() - 1);
+        assertEquals(2, request.getValue().messages().size());
+        assertTrue(turn.singleText().contains("还是生成一张规划示意图"));
+        assertTrue(turn.singleText().contains("本轮用户消息：\n同步到日历"));
+    }
+
+    @Test
+    void recognizesExplicitPlanImageChoice() {
+        ChatModel model = modelReturning("""
+                {"userSignal":"GENERATE_PLAN_IMAGE","reply":"","task":"生成规划示意图"}
+                """);
+        RouteAgent agent = new RouteAgent(model);
+        AgentFlowState state = new AgentFlowState();
+        state.setStage(AgentFlowStateService.STAGE_WAIT_FEEDBACK);
+        state.setCurrentAgent(AgentFlowStateService.AGENT_PLANNER);
+        state.setNextAgent(AgentFlowStateService.AGENT_EXECUTOR);
+
+        RouteDecision decision = agent.route("画一张示意图", "同步到日历，还是生成示意图？", state);
+
+        assertEquals(UserSignal.GENERATE_PLAN_IMAGE, decision.getUserSignal());
+    }
+
+    @Test
+    void defaultsToReadyChatWhenModelOmitsSignal() {
+        ChatModel model = modelReturning("""
+                {"reply":"","task":"查询明天安排"}
+                """);
+        RouteAgent agent = new RouteAgent(model);
+
+        RouteDecision decision = agent.route("查看明天", null, null);
+
+        assertEquals(UserSignal.READY_CHAT, decision.getUserSignal());
+    }
+
+    @Test
+    void ignoresLegacyNextAgentFieldWhenUserSignalIsPresent() {
+        ChatModel model = modelReturning("""
+                {"userSignal":"READY_QUERY","needDispatchAgent":true,"dispatchType":"QUERY",
+                 "nextAgent":"SUPERVISOR","reply":"不要把这段当用户回复","task":"查询明天安排"}
+                """);
+        RouteAgent agent = new RouteAgent(model);
+
+        RouteDecision decision = agent.route("查看明天", null, null);
+
+        assertEquals(UserSignal.READY_QUERY, decision.getUserSignal());
+        assertEquals("查询明天安排", decision.getTask());
+    }
+
+    private ChatModel modelReturning(String json) {
+        ChatModel model = mock(ChatModel.class);
+        when(model.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder()
+                .aiMessage(AiMessage.from(json))
+                .build());
+        return model;
+    }
+}

@@ -22,9 +22,10 @@ Return raw JSON in this exact shape:
 weekDays: 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday, 7=Sunday.
 
 Rules:
-- If the user gives a relative date, resolve it using the current date context from the supervisor.
+- The user message includes the current date. Resolve relative dates, festivals, and holidays from that context, not from training memory.
 - If the user gives a month/day without a year, use the current year unless that date has already passed; then use the next year.
 - The returned dates must not be earlier than the current date unless the user explicitly asks for a past date.
+- Never output a year earlier than the current year for upcoming plans.
 - For study or preparation plans, split work into a small number of useful todo items instead of one todo per day.
 - Prefer workdays for intensive preparation and weekends for review or lighter work when reasonable.
-- Put assumptions in the analysis field so the supervisor can explain them to the user.
+- Put assumptions in the analysis field so the assistant can explain them to the user.

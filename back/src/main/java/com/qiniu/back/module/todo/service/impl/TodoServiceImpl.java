@@ -55,6 +55,8 @@ public class TodoServiceImpl implements TodoService {
 
     private TodoVO createForUser(Long userId, TodoCreateDTO request) {
         validateDateRange(request.getStartDate(), request.getEndDate());
+        List<Integer> weekDays = normalizeWeekDays(
+                request.getStartDate(), request.getEndDate(), request.getWeekDays());
 
         // 1. 插入待办
         Todo todo = new Todo();
@@ -63,11 +65,14 @@ public class TodoServiceImpl implements TodoService {
         todo.setColor(request.getColor() != null ? request.getColor() : "#5c4b37");
         todo.setStartDate(request.getStartDate());
         todo.setEndDate(request.getEndDate());
-        todo.setWeekDays(toWeekDaysStr(request.getWeekDays()));
+        todo.setWeekDays(toWeekDaysStr(weekDays));
         todoMapper.insert(todo);
 
         // 2. 批量插入每日任务
-        List<LocalDate> dates = calcDates(request.getStartDate(), request.getEndDate(), request.getWeekDays());
+        List<LocalDate> dates = calcDates(request.getStartDate(), request.getEndDate(), weekDays);
+        if (dates.isEmpty()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "未生成任何日期，请检查开始/结束日期和星期");
+        }
         batchInsertTodoDates(todo.getTodoId(), dates, request.getDayContent());
 
         return toTodoVO(todo, dates);
@@ -247,6 +252,22 @@ public class TodoServiceImpl implements TodoService {
 
     private String toWeekDaysStr(List<Integer> weekDays) {
         return weekDays.stream().sorted().map(String::valueOf).collect(Collectors.joining(","));
+    }
+
+    /** 单日待办按当天星期写入，避免模型把 weekDays 填错导致 0 天。 */
+    private List<Integer> normalizeWeekDays(LocalDate start, LocalDate end, List<Integer> weekDays) {
+        if (start.equals(end)) {
+            return List.of(start.getDayOfWeek().getValue());
+        }
+        if (weekDays == null || weekDays.isEmpty()) {
+            LinkedHashSet<Integer> days = new LinkedHashSet<>();
+            for (LocalDate current = start; !current.isAfter(end); current = current.plusDays(1)) {
+                days.add(current.getDayOfWeek().getValue());
+                if (days.size() == 7) break;
+            }
+            return new ArrayList<>(days);
+        }
+        return weekDays;
     }
 
     private List<Integer> parseWeekDays(String weekDaysStr) {

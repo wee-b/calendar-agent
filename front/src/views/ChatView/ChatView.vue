@@ -19,7 +19,11 @@ const emit = defineEmits<{
 <style scoped>
 .chat-view {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 </style>

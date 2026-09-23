@@ -41,3 +41,6 @@ docs/
 
 # 用于存放密钥
 application-unknown.yml
+
+# 运行时生成的 Lucene 索引和 Qdrant 向量库
+/data/

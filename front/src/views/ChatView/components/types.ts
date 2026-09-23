@@ -10,4 +10,5 @@ export interface ChatMessage {
   thinkingFinishedAt?: number;
   responseTimeMs?: number | null;
   showServerResponseTime?: boolean;
+  dispatchType?: string;
 }

@@ -33,6 +33,7 @@
         @copy="handleCopy"
         @read="handleRead"
         @delete-last-round="handleDeleteLastRound"
+        @quick-reply="handleQuickReply"
       />
 
       <ChatInputBox
@@ -325,6 +326,11 @@ const selectPrompt = (prompt: string) => {
   inputText.value = prompt;
 };
 
+const handleQuickReply = (content: string) => {
+  inputText.value = content;
+  handleSend();
+};
+
 // ================= 浼氳瘽绠＄悊 =================
 const sortSessionsByRecent = (list: ChatSessionVO[]) => {
   return [...list].sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime());
@@ -350,7 +356,12 @@ const loadSessionById = async (sessionId: string) => {
   try {
     const history = await getHistoryAPI(sessionId);
     if (loadToken !== historyLoadToken || sessionId !== currentSessionId.value) return;
-    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
+    messages.value = history.map(h => ({
+      role: h.role,
+      content: h.content,
+      responseTimeMs: h.responseTimeMs,
+      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+    }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -362,7 +373,12 @@ const selectSession = async (session: ChatSessionVO) => {
   router.replace({ path: '/conversation', query: { sessionId: session.sessionId } });
   try {
     const history = await getHistoryAPI(session.sessionId);
-    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
+    messages.value = history.map(h => ({
+      role: h.role,
+      content: h.content,
+      responseTimeMs: h.responseTimeMs,
+      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+    }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -465,7 +481,12 @@ const handleDeleteLastRound = async () => {
     await deleteLastRoundAPI(currentSessionId.value);
     ElMessage.success('已撤回上一轮对话');
     const history = await getHistoryAPI(currentSessionId.value);
-    messages.value = history.map(h => ({ role: h.role, content: h.content, responseTimeMs: h.responseTimeMs }));
+    messages.value = history.map(h => ({
+      role: h.role,
+      content: h.content,
+      responseTimeMs: h.responseTimeMs,
+      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+    }));
     scrollToBottom();
   } catch (error) {}
 };
@@ -769,6 +790,12 @@ const handleSend = async () => {
           lastMsg.responseTimeMs = responseTimeMs;
           finishThinkingAfterQueue(lastMsg);
         }
+      },
+      (dispatchType) => {
+        const lastMsg = messages.value[messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'ai') {
+          lastMsg.dispatchType = dispatchType;
+        }
       }
     );
   } finally {
@@ -1023,9 +1050,10 @@ watch(currentSessionTitle, (title) => {
 }
 
 .thinking-arrow {
-  display: inline-block;
-  color: #98a2b3;
-  font-size: 14px;
+  width: 14px;
+  height: 14px;
+  display: block;
+  color: #a1a1aa;
   transform: rotate(-90deg);
   transition: transform 0.16s ease;
 }
@@ -1035,58 +1063,28 @@ watch(currentSessionTitle, (title) => {
 }
 
 .thinking-steps {
-  margin-top: 10px;
-  padding-top: 12px;
-  border-top: 1px solid #e4e7ec;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #f4f4f5;
 }
 
 .thinking-step {
-  position: relative;
-  padding-left: 20px;
-  color: #667085;
-  font-size: 14px;
-  line-height: 1.7;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-left: 0;
+  color: #71717a;
+  font-size: 13px;
+  line-height: 1.6;
   word-break: break-word;
 }
 
-.thinking-step::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 9px;
-  width: 12px;
-  height: 12px;
-  color: #2563eb;
-  font-size: 12px;
-  line-height: 12px;
-  text-align: center;
-}
-
-.thinking-step:not(.done)::before {
-  width: 6px;
-  height: 6px;
-  top: 10px;
-  left: 3px;
-  border-radius: 50%;
-  background: #2563eb;
-}
-
-.thinking-step.done::before {
-  content: "√";
-  color: #16a34a;
-  font-weight: 800;
-}
-
+.thinking-step::before,
+.thinking-step:not(.done)::before,
+.thinking-step.done::before,
 .thinking-step.failed::before {
-  content: "!";
-  top: 9px;
-  left: 0;
-  width: 12px;
-  height: 12px;
-  background: transparent;
-  color: #dc2626;
-  font-weight: 800;
-  line-height: 12px;
+  content: none;
+  display: none;
 }
 
 .thinking-step.failed {
@@ -1565,17 +1563,63 @@ watch(currentSessionTitle, (title) => {
 
 .chat-page,
 .chat-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 
-.chat-history {
+.chat-history,
+.chat-history.has-messages {
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   overflow-x: hidden;
-  overflow-y: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #b4b4bc transparent;
 }
 
 .chat-history.has-messages {
-  overflow-y: auto;
+  overflow-y: scroll;
+}
+
+.chat-history::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-history::-webkit-scrollbar-thumb {
+  background: #c4c4cc;
+  border-radius: 4px;
+}
+
+.msg-bubble {
+  max-width: min(760px, 100%);
+  min-width: 0;
+}
+
+.bubble-content,
+.markdown-body {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.markdown-body table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  table-layout: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-body th,
+.markdown-body td {
+  min-width: 160px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .empty-chat {
@@ -1602,6 +1646,114 @@ watch(currentSessionTitle, (title) => {
 
 .chat-input-area {
   max-width: calc(100% - 48px);
+}
+
+.chat-content::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 148px;
+  background: linear-gradient(to top, #ffffff 46%, rgba(255, 255, 255, 0));
+  pointer-events: none;
+  z-index: 2;
+}
+
+.chat-history.has-messages {
+  gap: 28px;
+  padding: 28px 24px 248px;
+}
+
+.msg-item {
+  width: min(800px, 100%);
+  margin: 0 auto;
+  min-width: 0;
+}
+
+.msg-item.is-ai .bubble-content {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.msg-item.is-user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.msg-item.is-user .bubble-content {
+  max-width: min(640px, 86%);
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 20px;
+  background: #f4f4f5;
+  box-shadow: none;
+}
+
+.msg-item.is-user .bubble-content p {
+  color: #18181b;
+}
+
+.msg-item .markdown-body table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  table-layout: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid #ececef;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.msg-item .markdown-body th,
+.msg-item .markdown-body td {
+  min-width: 160px;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid #ececef;
+  word-break: break-word;
+}
+
+.msg-item .markdown-body th:nth-child(1),
+.msg-item .markdown-body td:nth-child(1) {
+  width: auto;
+  min-width: 180px;
+}
+
+.msg-item .markdown-body th:nth-child(2),
+.msg-item .markdown-body td:nth-child(2) {
+  width: auto;
+  min-width: 180px;
+  white-space: normal;
+}
+
+.msg-item .markdown-body th:nth-child(3),
+.msg-item .markdown-body td:nth-child(3) {
+  width: auto;
+  min-width: 280px;
+}
+
+.msg-item .msg-actions {
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #f4f4f5;
+}
+
+.msg-item .action-icon {
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #71717a;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 @media (max-width: 960px) {
@@ -1668,4 +1820,3 @@ watch(currentSessionTitle, (title) => {
   }
 }
 </style>
-

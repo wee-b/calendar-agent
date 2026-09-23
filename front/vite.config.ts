@@ -5,6 +5,7 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   plugins: [vue()],
   server: {
+    host: '0.0.0.0', // 允许同一局域网内的设备访问开发服务器
     allowedHosts: true, // 放行 frp 公网域名
     proxy: {
       '/user': { target: 'http://localhost:8080', changeOrigin: true },
