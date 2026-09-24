@@ -2,6 +2,8 @@ package com.qiniu.back.module.dailyNote.controller;
 
 import com.qiniu.back.domain.ResponseDTO;
 import com.qiniu.back.domain.dailyNote.dto.DailyNoteSaveDTO;
+import com.qiniu.back.domain.dailyNote.dto.DayDetailQueryDTO;
+import com.qiniu.back.domain.dailyNote.dto.MonthCountQueryDTO;
 import com.qiniu.back.domain.dailyNote.vo.DayTodosVO;
 import com.qiniu.back.domain.dailyNote.vo.MonthCountVO;
 import com.qiniu.back.module.dailyNote.service.DailyNoteService;
@@ -22,14 +24,14 @@ public class DailyNoteController {
 
     @GetMapping("/calendar/month-count")
     @Operation(summary = "获取当月每日待办数量（日历小圆点）")
-    public ResponseDTO<List<MonthCountVO>> monthCount(@RequestParam int year, @RequestParam int month) {
-        return ResponseDTO.ok(dailyNoteService.getMonthCount(year, month));
+    public ResponseDTO<List<MonthCountVO>> monthCount(@Valid @ModelAttribute MonthCountQueryDTO request) {
+        return ResponseDTO.ok(dailyNoteService.getMonthCount(request.getYear(), request.getMonth()));
     }
 
     @GetMapping("/calendar/day")
     @Operation(summary = "查看某天的所有待办 + 日记")
-    public ResponseDTO<DayTodosVO> dayDetail(@RequestParam String date) {
-        return ResponseDTO.ok(dailyNoteService.getDayDetail(date));
+    public ResponseDTO<DayTodosVO> dayDetail(@Valid @ModelAttribute DayDetailQueryDTO request) {
+        return ResponseDTO.ok(dailyNoteService.getDayDetail(request.getDate().toString()));
     }
 
     @PutMapping("/daily-note")

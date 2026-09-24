@@ -1,5 +1,6 @@
 package com.qiniu.back.domain.todo.dto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -15,6 +16,7 @@ public class TodoDateToggleDTO {
     private Long todoId;
 
     @NotNull(message = "日期不能为空")
+    @JsonAlias("date")
     @Schema(description = "任务日期", requiredMode = Schema.RequiredMode.REQUIRED, example = "2026-06-01")
     private LocalDate todoDate;
 }

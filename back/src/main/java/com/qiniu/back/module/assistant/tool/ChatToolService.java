@@ -1,11 +1,13 @@
 package com.qiniu.back.module.assistant.tool;
 
-import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
-import com.qiniu.back.domain.todo.dto.TodoUpdateDTO;
-import com.qiniu.back.domain.todo.vo.TodoVO;
+import com.qiniu.back.domain.ErrorCode;
 import com.qiniu.back.domain.dailyNote.dto.DailyNoteSaveDTO;
 import com.qiniu.back.domain.dailyNote.vo.DayTodosVO;
 import com.qiniu.back.domain.dailyNote.vo.MonthCountVO;
+import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
+import com.qiniu.back.domain.todo.dto.TodoUpdateDTO;
+import com.qiniu.back.domain.todo.vo.TodoVO;
+import com.qiniu.back.exception.BusinessException;
 import com.qiniu.back.module.dailyNote.service.DailyNoteService;
 import com.qiniu.back.module.todo.service.TodoService;
 import lombok.extern.slf4j.Slf4j;
@@ -14,11 +16,17 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Component
 public class ChatToolService {
+
+    public record DayDetailResult(LocalDate date, List<DayTodosVO.DayTodoItem> todos, String dailyNote) {}
+    public record MonthCountResult(int year, int month, List<MonthCountVO> days) {}
+    public record TodoListResult(List<TodoVO> todos) {}
+    public record TodoMutationResult(String operation, Long todoId, String title, Integer dayCount) {}
+    public record TodoDateResult(String operation, Long todoId, LocalDate date, Integer status) {}
+    public record DailyNoteResult(LocalDate date, boolean saved) {}
 
     @Autowired
     private TodoService todoService;
@@ -26,122 +34,77 @@ public class ChatToolService {
     @Autowired
     private DailyNoteService dailyNoteService;
 
-    public String createTodo(TodoCreateDTO dto) {
+    public TodoMutationResult createTodo(TodoCreateDTO dto) {
         log.info("Tool-createTodo: {}", dto.getTitle());
-        var vo = todoService.create(dto);
-        return "已创建目标：" + vo.getTitle() + "，颜色" + vo.getColor() + "，共" + vo.getDates().size() + "天。";
+        TodoVO vo = todoService.create(dto);
+        return new TodoMutationResult("created", vo.getTodoId(), vo.getTitle(), vo.getDates().size());
     }
 
-    public String queryMonthCount(int year, int month) {
+    public MonthCountResult queryMonthCount(int year, int month) {
         log.info("Tool-queryMonthCount: {}-{}", year, month);
-        List<MonthCountVO> counts = dailyNoteService.getMonthCount(year, month);
-        if (counts.isEmpty()) {
-            return year + "年" + month + "月暂无待办。";
-        }
-        return counts.stream()
-                .map(c -> c.getDate() + ": " + c.getCount() + "个待办")
-                .collect(Collectors.joining(", "));
+        return new MonthCountResult(year, month, dailyNoteService.getMonthCount(year, month));
     }
 
-    public String queryDayDetail(String date) {
+    public DayDetailResult queryDayDetail(String date) {
         log.info("Tool-queryDayDetail: {}", date);
         DayTodosVO vo = dailyNoteService.getDayDetail(date);
-        if (vo.getTodos().isEmpty()) {
-            return date + " 暂无待办。";
-        }
-        String todoStr = vo.getTodos().stream()
-                .map(t -> "[" + t.getTodoId() + "] "
-                        + (t.getStatus() == 1 ? "[✓]" : "[ ]") + t.getTitle()
-                        + (t.getDayContent() != null ? " - " + t.getDayContent() : ""))
-                .collect(Collectors.joining("; "));
-        return date + " 待办: " + todoStr + "。";
+        return new DayDetailResult(LocalDate.parse(date), vo.getTodos(), vo.getDailyNote());
     }
 
-    public String queryTodoList() {
+    public TodoListResult queryTodoList() {
         log.info("Tool-queryTodoList");
-        List<TodoVO> todos = todoService.listByUser();
-        if (todos.isEmpty()) {
-            return "你目前没有待办目标。";
-        }
-        return todos.stream()
-                .map(t -> "[" + t.getTodoId() + "] " + t.getTitle()
-                        + "（" + t.getStartDate() + " ~ " + t.getEndDate()
-                        + "，状态" + (t.getStatus() == 1 ? "已完成" : "进行中")
-                        + "，" + t.getDates().size() + "天"
-                        + "，创建于" + t.getCreateTime() + "）")
-                .collect(Collectors.joining("; "));
+        return new TodoListResult(todoService.listByUser());
     }
 
-    public String deleteTodo(Long todoId) {
+    public TodoMutationResult deleteTodo(Long todoId) {
         log.info("Tool-deleteTodo: {}", todoId);
-        // 先查询确认待办存在
-        List<TodoVO> todos = todoService.listByUser();
-        TodoVO target = todos.stream()
-                .filter(t -> t.getTodoId().equals(todoId))
-                .findFirst()
-                .orElse(null);
-        if (target == null) {
-            return "删除失败：未找到 ID=" + todoId + " 的待办，可能已被删除或不存在。请重新查询待办列表获取最新数据。";
-        }
+        TodoVO target = findTodo(todoId);
         todoService.delete(todoId);
-        return "已删除待办【" + target.getTitle() + "】ID=" + todoId + "。";
+        return new TodoMutationResult("deleted", todoId, target.getTitle(), null);
     }
 
-    public String updateTodo(Long todoId, TodoUpdateDTO dto) {
+    public TodoMutationResult updateTodo(Long todoId, TodoUpdateDTO dto) {
         log.info("Tool-updateTodo: {}", todoId);
         TodoVO vo = todoService.update(todoId, dto);
-        return "已更新目标：" + vo.getTitle() + "，颜色" + vo.getColor() + "，共" + vo.getDates().size() + "天。";
+        return new TodoMutationResult("updated", vo.getTodoId(), vo.getTitle(), vo.getDates().size());
     }
 
-    public String toggleTodoDate(Long todoId, String date) {
+    public TodoDateResult toggleTodoDate(Long todoId, String date) {
         log.info("Tool-toggleTodoDate: todoId={}, date={}", todoId, date);
-        int newStatus = todoService.toggleDateStatus(todoId, LocalDate.parse(date));
-        String statusText = newStatus == 1 ? "已完成" : "取消完成";
-        return "待办 ID=" + todoId + " 在 " + date + " " + statusText + "。";
+        LocalDate parsedDate = LocalDate.parse(date);
+        int newStatus = todoService.toggleDateStatus(todoId, parsedDate);
+        return new TodoDateResult("toggled", todoId, parsedDate, newStatus);
     }
 
-    public String removeTodoDay(Long todoId, String date) {
+    public TodoDateResult removeTodoDay(Long todoId, String date) {
         log.info("Tool-removeTodoDay: todoId={}, date={}", todoId, date);
-        List<TodoVO> todos = todoService.listByUser();
-        TodoVO target = todos.stream()
-                .filter(t -> t.getTodoId().equals(todoId))
-                .findFirst()
-                .orElse(null);
-        if (target == null) {
-            return "移除失败：未找到 ID=" + todoId + " 的待办，可能已被删除。请调用 queryTodoList 获取最新数据。";
-        }
-        try {
-            todoService.removeTodoDay(todoId, LocalDate.parse(date));
-            return "已从【" + target.getTitle() + "】中移除 " + date + "，其他天不受影响。";
-        } catch (Exception e) {
-            return "移除失败: " + e.getMessage();
-        }
+        LocalDate parsedDate = LocalDate.parse(date);
+        todoService.removeTodoDay(todoId, parsedDate);
+        return new TodoDateResult("removed", todoId, parsedDate, null);
     }
 
-    public String addTodoDay(Long todoId, String date, String dayContent) {
-        log.info("Tool-addTodoDay: todoId={}, date={}, content={}", todoId, date, dayContent);
-        List<TodoVO> todos = todoService.listByUser();
-        TodoVO target = todos.stream()
-                .filter(t -> t.getTodoId().equals(todoId))
-                .findFirst()
-                .orElse(null);
-        if (target == null) {
-            return "添加失败：未找到 ID=" + todoId + " 的待办。请调用 queryTodoList 获取最新数据。";
-        }
-        try {
-            todoService.addTodoDay(todoId, LocalDate.parse(date), dayContent);
-            return "已给【" + target.getTitle() + "】增加 " + date + " 这一天。";
-        } catch (Exception e) {
-            return "添加失败: " + e.getMessage();
-        }
+    public TodoDateResult addTodoDay(Long todoId, String date, String dayContent) {
+        log.info("Tool-addTodoDay: todoId={}, date={}", todoId, date);
+        LocalDate parsedDate = LocalDate.parse(date);
+        todoService.addTodoDay(todoId, parsedDate, dayContent);
+        return new TodoDateResult("added", todoId, parsedDate, null);
     }
 
-    public String saveDailyNote(String date, String content) {
+    public DailyNoteResult saveDailyNote(String date, String content) {
         log.info("Tool-saveDailyNote: date={}", date);
+        LocalDate parsedDate = LocalDate.parse(date);
         DailyNoteSaveDTO dto = new DailyNoteSaveDTO();
-        dto.setNoteDate(LocalDate.parse(date));
+        dto.setNoteDate(parsedDate);
         dto.setContent(content);
         dailyNoteService.saveDailyNote(dto);
-        return "已保存" + date + "的日记。";
+        return new DailyNoteResult(parsedDate, true);
+    }
+
+    private TodoVO findTodo(Long todoId) {
+        return todoService.listByUser().stream()
+                .filter(todo -> todo.getTodoId().equals(todoId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND,
+                        "未找到 ID=" + todoId + " 的待办"));
     }
 }

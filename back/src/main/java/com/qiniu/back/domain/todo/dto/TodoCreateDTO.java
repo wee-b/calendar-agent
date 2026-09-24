@@ -17,7 +17,7 @@ public class TodoCreateDTO {
     @Schema(description = "目标名称", requiredMode = Schema.RequiredMode.REQUIRED, example = "学英语")
     private String title;
 
-    @Schema(description = "高亮颜色（hex）", example = "#4CAF50")
+    @Schema(description = "高亮颜色（十六进制，如 #4CAF50）", example = "#4CAF50")
     private String color;
 
     @Schema(description = "每日任务描述", example = "背50个单词并跟读课文")
@@ -31,8 +31,7 @@ public class TodoCreateDTO {
     @Schema(description = "结束日期（距开始日期最多180天）", requiredMode = Schema.RequiredMode.REQUIRED, example = "2026-06-30")
     private LocalDate endDate;
 
-    @NotNull(message = "执行日不能为空")
     @Size(min = 1, max = 7, message = "至少选择一天")
-    @Schema(description = "每周执行日：1=周一 7=周日", requiredMode = Schema.RequiredMode.REQUIRED, example = "[1,3,5]")
+    @Schema(description = "每周执行日：1=周一，7=周日；单日待办可省略", example = "[1,3,5]")
     private List<Integer> weekDays;
 }

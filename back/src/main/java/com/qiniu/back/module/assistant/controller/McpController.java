@@ -1,5 +1,7 @@
 package com.qiniu.back.module.assistant.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qiniu.back.module.assistant.tool.McpToolRegistry;
 
 import lombok.RequiredArgsConstructor;
@@ -19,6 +21,7 @@ import java.util.Map;
 public class McpController {
 
     private final McpToolRegistry registry;
+    private final ObjectMapper mapper;
 
     /**
      * MCP JSON-RPC 统一入口。
@@ -68,10 +71,15 @@ public class McpController {
             throw new RuntimeException("参数序列化失败", e);
         }
 
-        String text = registry.execute(name, argumentsJson);
+        McpToolRegistry.McpToolResult result = registry.executeResult(name, argumentsJson);
+        String text;
+        try {
+            text = mapper.writeValueAsString(result.success() ? result.data() : result.error());
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("工具结果序列化失败", e);
+        }
 
-        return Map.of("content", java.util.List.of(
-                Map.of("type", "text", "text", text)
-        ));
+        return Map.of("content", java.util.List.of(Map.of("type", "text", "text", text)),
+                "isError", !result.success());
     }
 }

@@ -23,11 +23,17 @@ public class McpToolDefinition {
     /** 工具描述 */
     private String description;
 
+    private boolean readOnly;
+    private boolean idempotent;
+    private boolean parallelSafe;
+    private boolean confirmationRequired;
+    private long timeoutMs;
+
     /** MCP inputSchema（等价于 OpenAI function parameters） */
     private Map<String, Object> inputSchema;
 
-    /** 执行函数：输入 arguments JSON Map，输出结果字符串 */
-    private Function<Map<String, Object>, String> executor;
+    /** 执行函数：输入 arguments JSON Map，输出可序列化的结构化结果 */
+    private Function<Map<String, Object>, Object> executor;
 
     /** 最大重试次数（默认 1 = 失败后重试 1 次，即共 2 次尝试） */
     @Builder.Default
