@@ -1,7 +1,7 @@
 import httpx
 from fastapi import HTTPException, status
 
-from app.auth.schemas import JavaUserInfo, JavaUserResponse
+from app.schemas.auth import JavaUserInfo, JavaUserResponse
 from app.core.config import get_settings
 
 

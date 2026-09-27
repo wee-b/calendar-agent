@@ -2,7 +2,12 @@ import uvicorn
 from fastapi import FastAPI
 from scalar_fastapi import get_scalar_api_reference
 
-from app.auth.router import router as auth_router
+from app.api.endpoints import api_router
+from app.core.config.logging_config import configure_logging
+from app.core.exception.handlers import register_exception_handlers
+from app.core.middleware.access_log import access_log
+from app.core.middleware.auth import authenticate_request
+from app.core.middleware.cors import configure_cors
 
 app = FastAPI(
     title="Calendar AI Service",
@@ -12,7 +17,12 @@ app = FastAPI(
     redoc_url=None,
 )
 
-app.include_router(auth_router)
+configure_logging()
+app.include_router(api_router)
+register_exception_handlers(app)
+configure_cors(app)
+app.middleware("http")(authenticate_request)
+app.middleware("http")(access_log)
 
 
 @app.get("/docs", include_in_schema=False)

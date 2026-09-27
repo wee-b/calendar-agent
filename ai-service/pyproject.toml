@@ -8,4 +8,7 @@ dependencies = [
     "httpx",
     "pydantic-settings",
     "scalar-fastapi",
+    "redis>=5",
+    "SQLAlchemy[asyncio]>=2",
+    "aiomysql>=0.2",
 ]
