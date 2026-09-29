@@ -1,6 +1,6 @@
 # Calendar Agent
 
-智能日程管理应用。项目从早期的语音日历工具升级为 **日历 + 待办 + 日记 + AI Agent 对话助手**：支持日程 CRUD、每日任务拆分、现代黄历、语音/文字聊天、多会话管理、规划草稿确认后同步到日历，以及基于 RAG 的学习/备考类计划生成。
+智能日程管理应用。项目从早期的语音日历工具升级为 **日历 + 待办 + 日记 + AI Agent 对话助手**：支持日程 CRUD、每日任务拆分、现代黄历、语音/文字聊天、多会话管理和规划草稿确认后同步到日历。RAG 已迁移到 Python 服务，暂未接入对话。
 
 
 ---
@@ -14,9 +14,9 @@
 | 数据库 | MySQL 8 + Druid + P6Spy |
 | 缓存 | Redis |
 | AI 框架 | LangChain4j 1.3，OpenAI 兼容 Chat/Streaming API |
-| 默认模型配置 | 百炼：路由/执行/摘要/RAG 用 `qwen3.7-plus`；DeepSeek：对话 `deepseek-flash`、规划 `deepseek-v4-pro`。各厂家使用各自的 `api-key` 和 `base-url` |
-| RAG | Lucene BM25 + Qdrant Dense Vector + RRF 融合 + LLM Rerank |
-| Embedding | Ollama `bge-m3` 或阿里云 `text-embedding-v4` |
+| 默认模型配置 | 百炼：路由/执行/摘要用 `qwen3.7-plus`；DeepSeek：对话 `deepseek-flash`、规划 `deepseek-v4-pro`。各厂家使用各自的 `api-key` 和 `base-url` |
+| RAG | Python 中文 BM25 + Qdrant Dense Vector + RRF 融合 + 可选 LLM Rerank |
+| Embedding | 阿里云 `text-embedding-v4` 等远程 OpenAI 兼容模型 |
 | 文档 | Knife4j OpenAPI |
 | 语音 | Web Speech API + SpeechSynthesisUtterance + Web Audio API |
 
@@ -32,11 +32,10 @@ calendar-agent/
 │       │   ├── module/user/       # 用户模块
 │       │   ├── module/todo/       # 待办与每日任务
 │       │   ├── module/dailyNote/  # 日历统计、日详情、日记
-│       │   ├── module/assistant/  # AI 对话、状态机、Agent、RAG、MCP
+│       │   ├── module/assistant/  # AI 对话、状态机、Agent、MCP
 │       │   └── module/almanac/    # 现代黄历
 │       └── resources/
 │           ├── prompt/            # Route / Chat / Planner / Query / Executor 提示词
-│           ├── rag_data/          # RAG Markdown 原始语料
 │           ├── output/            # 语料处理历史输出
 │           ├── application.yml
 │           └── application-dev.yml
@@ -48,7 +47,8 @@ calendar-agent/
 │       ├── router/
 │       └── utils/
 ├── sql/                     # 表结构与初始化数据
-└── data/lucene-rag-index/   # Lucene 本地索引
+└── ai-service/              # Python 对话与独立 RAG 检索、语料导入
+    └── rag_data/            # RAG Markdown 原始语料
 ```
 
 ---
@@ -60,7 +60,7 @@ calendar-agent/
 | `user` | 注册、登录、当前用户信息、登出 |
 | `todo` | 目标待办 CRUD、按日期展开、每日完成状态、增删单日任务 |
 | `dailyNote` | 月待办数量、日详情、每日笔记 upsert |
-| `assistant` | 多会话对话、SSE 流式响应、状态转换、Agent 调度、草稿确认、MCP 工具、RAG 检索 |
+| `assistant` | 多会话对话、SSE 流式响应、状态转换、Agent 调度、草稿确认、MCP 工具 |
 | `almanac` | 现代黄历计算与查询 |
 
 核心 Agent 类：
@@ -71,7 +71,7 @@ calendar-agent/
 - `RouteAgent` / `ChatAgent` / `PlannerAgent` / `ExecutorAgent`：分别负责结构化路由、闲聊与只读查询、规划生成和全部写操作。
 - `AgentRunner`：各 Agent 复用的模型及工具调用循环。
 - `PlanDraftService`：保存规划草稿，并在确认后批量创建待办。
-- `RagService`：BM25 + Qdrant 混合检索、RRF 融合、Rerank、缓存。
+- Python `ai-service/app/service/rag.py`：BM25 + Qdrant 混合检索、RRF 融合、可选 Rerank、缓存。
 - `McpToolRegistry`：注册 AI/MCP 可调用的日程工具。
 
 ---
@@ -173,33 +173,26 @@ calendar-agent/
 ```
 
 规划类任务会先输出草稿预览。用户确认后，`PlanDraftService` 将 Planner 的结构化 JSON 转换为多个 `TodoCreateDTO`，批量写入日历。
-Planner 生成计划前会读取 active 用户记忆，并按“本轮明确指令 > pending 状态 > 长期记忆 > 公共 RAG”的优先级作为参考。
+Planner 生成计划前会读取 active 用户记忆；公共 RAG 当前仅能通过 Python 独立检索接口调用，尚未注入规划对话。
 助手回复落库后会异步检查是否需要刷新会话摘要。未摘要对话满 40 轮（用户+助手各一条算一轮）时，把最早 20 轮压进 `yl_chat_context_summary`；之后要再积累 20 轮才进行下一次压缩。原始 `yl_ai_dialogue` 不删除，历史页仍可查看。RouteAgent 不读压缩历史，只看上一轮助手回复和本轮用户消息。摘要只保留稳定事实、目标、偏好和重要指代，不把历史请求当作本轮待执行任务。
 
 ---
 
 ## RAG 语料处理
 
-语料位于 `back/src/main/resources/rag_data`，通过 Spring Boot 手动集成测试
-`RagCorpusImportManualTest` 完成 Markdown 分块、TF-IDF/SimHash/Jaccard 去重、
-Embedding 和 Qdrant 入库。Embedding 与 Qdrant 参数直接复用后端 Spring 配置，
-无需单独维护 Python 配置。
+语料位于 `ai-service/rag_data`，由 Python `ai-service` 完成 Markdown 分块、TF-IDF/SimHash/Jaccard 去重、Embedding 和 Qdrant 入库。模型、Qdrant 和检索参数分别配置在 `EmbeddingSettings`、`QdrantSettings`、`RagSettings`。
 
 ```bash
-cd back
+cd ai-service
 
 # 只验证语料读取、分块和去重，不调用外部接口
-mvn -Dtest=RagCorpusImportManualTest "-Drag.corpus.dry-run=true" test
+python -m app.import_rag_corpus --dry-run
 
 # 调用已配置的阿里云 Embedding，并写入 Qdrant
-mvn -Dtest=RagCorpusImportManualTest test
+python -m app.import_rag_corpus
 ```
 
-默认读取 `src/main/resources/rag_data`。如需覆盖语料目录，可增加 Spring 配置
-`rag.corpus.source-dir`。阿里云 Embedding 参数读取 `app.rag.aliyun`，Qdrant
-参数读取 `app.qdrant`。导入使用确定性 UUID，重复执行会覆盖同一语料点。
-
-后端默认读取 `data/lucene-rag-index` 作为 Lucene 索引目录，Qdrant 默认连接 `localhost:6334`，集合名为 `rag_corpus`。
+默认读取 `ai-service/rag_data`，可用 `--source-dir` 指定其他目录。导入使用与旧 Java 实现兼容的确定性 UUID，重复执行会覆盖同一语料点。Qdrant 默认连接 REST 端口 `6333`，集合名为 `rag_corpus`。独立接口为 `POST /rag/search`，需要登录 token；当前不参与对话。
 
 ---
 
@@ -216,8 +209,8 @@ mysql -u root -p < sql/insert_data.sql
 
 - MySQL：默认库名 `yl_database`
 - Redis：默认 `localhost:6379`，数据库 `15`
-- Qdrant：默认 gRPC 端口 `6334`，集合 `rag_corpus`
-- Embedding：可使用 Ollama `bge-m3`，或阿里云 `text-embedding-v4`
+- Qdrant：Python 默认使用 REST 端口 `6333`，集合 `rag_corpus`
+- Embedding：使用阿里云 `text-embedding-v4` 等远程 OpenAI 兼容模型
 - Chat Model：OpenAI 兼容接口，默认配置在 `back/src/main/resources/application-dev.yml`
 
 ### 3. 配置后端
@@ -277,16 +270,6 @@ app:
         provider: dashscope
         model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
         temperature: 0.1
-      rag:
-        provider: dashscope
-        model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
-        temperature: 0.1
-  qdrant:
-    host: localhost
-    port: 6334
-    collection: rag_corpus
-  rag:
-    embedding-provider: aliyun
 ```
 
 ### 4. 启动后端
@@ -362,7 +345,7 @@ Vite 会代理 `/user`、`/todo`、`/chat`、`/calendar`、`/almanac`、`/memory
 - [x] 长会话自动摘要与上下文压缩
 - [x] Executor 单日及通用写操作工具
 - [x] MCP `tools/list` / `tools/call`
-- [x] Lucene BM25 + Qdrant 向量检索 + RRF + Rerank
+- [x] Python 中文 BM25 + Qdrant 向量检索 + RRF + 可选 Rerank（独立能力）
 - [x] RAG 语料去重、Embedding、Qdrant 入库脚本
 - [x] 现代黄历模块
 - [x] Knife4j 接口文档

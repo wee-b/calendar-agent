@@ -22,8 +22,8 @@ class JavaMcpClientTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http_client:
             async with JavaMcpClient(http_client) as mcp:
                 tools = await mcp.list_tools("token")
-        self.assertEqual("queryDayDetail", tools[0]["name"])
-        self.assertTrue(tools[0]["metadata"]["readOnly"])
+        self.assertEqual("queryDayDetail", tools[0].name)
+        self.assertTrue(tools[0].metadata.readOnly)
 
     async def test_call_tool_forwards_token_and_decodes_structured_result(self):
         def handle(request: httpx.Request) -> httpx.Response:

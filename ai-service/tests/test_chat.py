@@ -2,10 +2,10 @@ import unittest
 from unittest.mock import patch
 
 import httpx
-from fastapi import HTTPException
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.cache.token_cache import RedisTokenVerifier
+from app.core.exception.exceptions import BusinessException
 from app.main import app
 
 
@@ -25,7 +25,7 @@ class RedisTokenTests(unittest.IsolatedAsyncioTestCase):
         verifier = RedisTokenVerifier(client)
         self.assertEqual(23, await verifier.verify("valid"))
         self.assertEqual("yvli-token:client:token:valid", client.last_key)
-        with self.assertRaises(HTTPException) as caught:
+        with self.assertRaises(BusinessException) as caught:
             await verifier.verify("revoked")
         self.assertEqual(401, caught.exception.status_code)
 
@@ -33,7 +33,7 @@ class RedisTokenTests(unittest.IsolatedAsyncioTestCase):
         verifier = RedisTokenVerifier(FakeRedis({
             "yvli-token:client:token:kicked": "-5",
         }))
-        with self.assertRaises(HTTPException) as caught:
+        with self.assertRaises(BusinessException) as caught:
             await verifier.verify("kicked")
         self.assertEqual(401, caught.exception.status_code)
 
@@ -42,7 +42,7 @@ class RedisTokenTests(unittest.IsolatedAsyncioTestCase):
             async def get(self, _):
                 raise RedisConnectionError("offline")
 
-        with self.assertRaises(HTTPException) as caught:
+        with self.assertRaises(BusinessException) as caught:
             await RedisTokenVerifier(BrokenRedis()).verify("valid")
         self.assertEqual(503, caught.exception.status_code)
 
@@ -66,13 +66,13 @@ class ChatEndpointTests(unittest.IsolatedAsyncioTestCase):
                 Repository.saved = (user_id, session_id, message, answer, elapsed_ms)
 
         class Model:
-            async def complete(self, messages):
+            async def chat(self, messages, tools=None):
                 assert messages[-1] == {"role": "user", "content": "你好"}
-                return "你好，我能帮你安排日程。"
+                return {"role": "assistant", "content": "你好，我能帮你安排日程。"}
 
         with patch("app.core.middleware.auth.RedisTokenVerifier", return_value=Verifier()), \
              patch("app.service.chat.ChatRepository", return_value=Repository()), \
-             patch("app.service.chat.ModelClient", return_value=Model()):
+             patch("app.service.chat_graph.ModelClient", return_value=Model()):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:

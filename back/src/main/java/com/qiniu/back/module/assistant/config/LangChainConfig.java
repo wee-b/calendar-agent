@@ -35,11 +35,6 @@ public class LangChainConfig {
         return factory.createForAgent(AgentModelBeans.SUMMARY_AGENT);
     }
 
-    @Bean(AgentModelBeans.RAG)
-    public ChatModel ragChatModel(ChatModelFactory factory) {
-        return factory.createForAgent(AgentModelBeans.RAG_AGENT);
-    }
-
     @Bean
     @Primary
     public OpenAiStreamingChatModel streamingChatModel(ChatModelFactory factory) {

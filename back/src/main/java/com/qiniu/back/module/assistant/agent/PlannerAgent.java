@@ -3,8 +3,6 @@ package com.qiniu.back.module.assistant.agent;
 import com.qiniu.back.module.assistant.config.AgentModelBeans;
 import com.qiniu.back.exception.BusinessException;
 import com.qiniu.back.module.assistant.service.PlanDraftService;
-import com.qiniu.back.module.assistant.rag.RagHit;
-import com.qiniu.back.module.assistant.rag.RagService;
 import com.qiniu.back.module.memory.service.UserMemoryService;
 import com.qiniu.back.util.ChatSessionContext;
 import com.qiniu.back.util.LoginUserContext;
@@ -16,7 +14,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
-import java.util.List;
 
 /** Generates and persists structured plan drafts. */
 @Component
@@ -26,17 +23,14 @@ public class PlannerAgent {
     private final ChatModel plannerChatModel;
     private final PlanDraftService planDraftService;
     private final UserMemoryService userMemoryService;
-    private final RagService ragService;
     private AgentRunner runner;
 
     public PlannerAgent(@Qualifier(AgentModelBeans.PLANNER) ChatModel plannerChatModel,
                         PlanDraftService planDraftService,
-                        UserMemoryService userMemoryService,
-                        RagService ragService) {
+                        UserMemoryService userMemoryService) {
         this.plannerChatModel = plannerChatModel;
         this.planDraftService = planDraftService;
         this.userMemoryService = userMemoryService;
-        this.ragService = ragService;
     }
 
     @PostConstruct
@@ -79,7 +73,7 @@ public class PlannerAgent {
     }
 
     private String buildContext(String requirement) {
-        return dateContext() + memoryContext(requirement) + ragContext(requirement) + "## User requirement\n";
+        return dateContext() + memoryContext(requirement) + "## User requirement\n";
     }
 
     private String dateContext() {
@@ -115,19 +109,4 @@ public class PlannerAgent {
         }
     }
 
-    private String ragContext(String requirement) {
-        try {
-            List<RagHit> hits = ragService.search(requirement);
-            if (hits.isEmpty()) return "";
-            StringBuilder context = new StringBuilder("## Reference snippets\n");
-            for (RagHit hit : hits) {
-                context.append("- (").append(hit.getSection()).append(") ")
-                        .append(hit.getText()).append('\n');
-            }
-            return context.append('\n').toString();
-        } catch (Exception exception) {
-            log.warn("[Planner] RAG search failed: {}", exception.getMessage());
-            return "";
-        }
-    }
 }

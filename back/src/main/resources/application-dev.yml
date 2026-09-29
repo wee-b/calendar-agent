@@ -50,30 +50,8 @@ app:
         provider: aliyun
         model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
         temperature: 0.1
-      rag:
-        provider: aliyun
-        model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
-        temperature: 0.1
       image:
         provider: ark
         model: ${ARK_IMAGE_MODEL:doubao-seedream-5-0-flash-260915}
         size: ${ARK_IMAGE_SIZE:2K}
         watermark: ${ARK_IMAGE_WATERMARK:true}
-  qdrant:
-    host: localhost
-    port: 6334
-    collection: rag_corpus
-
-  rag:
-    # 本地默认使用 ollama；部署时设置 RAG_EMBEDDING_PROVIDER=aliyun 切到阿里云百炼
-#    embedding-provider: ${RAG_EMBEDDING_PROVIDER:ollama}
-    embedding-provider: aliyun
-
-    ollama:
-      url: ${RAG_OLLAMA_URL:http://localhost:11434}
-      model: ${RAG_OLLAMA_MODEL:bge-m3}
-
-    aliyun:
-      base-url: ${RAG_ALIYUN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
-      api-key: ${unknown.aliyun.api-key}
-      model: ${RAG_ALIYUN_MODEL:text-embedding-v4}

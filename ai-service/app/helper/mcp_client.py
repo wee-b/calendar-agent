@@ -1,24 +1,24 @@
-"""Async client for the Java service's lightweight /mcp JSON-RPC endpoint."""
+"""Java /mcp 的异步 JSON-RPC 客户端；只在边界处理协议字典。"""
 
 from __future__ import annotations
 
 import json
-from typing import Any
 from uuid import uuid4
 
 import httpx
+from pydantic import ValidationError
 
 from app.core.config import get_settings
-
-
-class McpClientError(Exception):
-    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
-        super().__init__(message)
-        self.code = code
-        self.retryable = retryable
+from app.core.exception.exceptions import McpClientError
+from app.schemas.mcp import (
+    JavaErrorResponse, JsonRpcResponse, McpCallResult, McpToolDefinition,
+    McpToolFailure, McpToolList,
+)
 
 
 class JavaMcpClient:
+    """负责 token 转发、JSON-RPC 校验和 Java 工具错误解码。"""
+
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         settings = get_settings()
         self._url = f"{settings.java_base_url.rstrip('/')}/mcp"
@@ -33,41 +33,43 @@ class JavaMcpClient:
         if self._owns_client:
             await self._client.aclose()
 
-    async def list_tools(self, token: str) -> list[dict[str, Any]]:
-        result = await self._request("tools/list", {}, token)
-        tools = result.get("tools") if isinstance(result, dict) else None
-        if not isinstance(tools, list) or any(not isinstance(tool, dict) for tool in tools):
-            raise McpClientError("INVALID_RESPONSE", "Java 工具列表格式异常")
-        return tools
+    async def list_tools(self, token: str) -> list[McpToolDefinition]:
+        """解析工具目录及只读元数据。"""
 
-    async def call_tool(self, name: str, arguments: dict[str, Any], token: str) -> Any:
+        result = await self._request("tools/list", {}, token)
+        try:
+            return McpToolList.model_validate(result).tools
+        except ValidationError as exc:
+            raise McpClientError("INVALID_RESPONSE", "Java 工具列表格式异常") from exc
+
+    async def call_tool(self, name: str, arguments: dict[str, str], token: str) -> object:
+        """解析 MCP 外壳和文本内容；具体工具结果由调用服务继续校验。"""
+
         result = await self._request(
             "tools/call", {"name": name, "arguments": arguments}, token
         )
-        if not isinstance(result, dict) or not isinstance(result.get("isError"), bool):
-            raise McpClientError("INVALID_RESPONSE", "Java 工具结果格式异常")
-        content = result.get("content")
-        if not isinstance(content, list) or not content or not isinstance(content[0], dict):
-            raise McpClientError("INVALID_RESPONSE", "Java 工具结果缺少内容")
-        text = content[0].get("text")
-        if content[0].get("type") != "text" or not isinstance(text, str):
-            raise McpClientError("INVALID_RESPONSE", "Java 工具结果内容格式异常")
         try:
-            data = json.loads(text)
+            call = McpCallResult.model_validate(result)
+        except ValidationError as exc:
+            raise McpClientError("INVALID_RESPONSE", "Java 工具结果格式异常") from exc
+        try:
+            data = json.loads(call.content[0].text)
         except json.JSONDecodeError as exc:
             raise McpClientError("INVALID_RESPONSE", "Java 工具结果不是 JSON") from exc
 
-        if result["isError"]:
-            if not isinstance(data, dict):
-                raise McpClientError("INVALID_RESPONSE", "Java 工具错误格式异常")
+        if call.isError:
+            try:
+                failure = McpToolFailure.model_validate(data)
+            except ValidationError as exc:
+                raise McpClientError("INVALID_RESPONSE", "Java 工具错误格式异常") from exc
             raise McpClientError(
-                str(data.get("code", "TOOL_ERROR")),
-                str(data.get("message", "Java 工具调用失败")),
-                retryable=data.get("retryable") is True,
+                str(failure.code), failure.message, retryable=failure.retryable,
             )
         return data
 
-    async def _request(self, method: str, params: dict[str, Any], token: str) -> Any:
+    async def _request(self, method: str, params: dict[str, object], token: str) -> object:
+        """执行一次 JSON-RPC 请求，核对请求 ID 并区分拦截器与 RPC 错误。"""
+
         if not token:
             raise McpClientError("MISSING_TOKEN", "缺少用户 token")
         request_id = uuid4().hex
@@ -90,20 +92,22 @@ class JavaMcpClient:
             body = response.json()
         except ValueError as exc:
             raise McpClientError("INVALID_RESPONSE", "Java 工具服务返回的不是 JSON") from exc
-        if not isinstance(body, dict):
-            raise McpClientError("INVALID_RESPONSE", "Java 工具服务返回格式异常")
         # Java's login interceptor can return HTTP 200 with a ResponseDTO error.
-        if body.get("ok") is False:
-            code = "AUTH_FAILED" if body.get("code") in (401, 403) else "JAVA_ERROR"
-            raise McpClientError(code, str(body.get("msg") or "Java 工具服务拒绝请求"))
-        if body.get("jsonrpc") != "2.0" or body.get("id") != request_id:
+        if isinstance(body, dict) and body.get("ok") is False:
+            try:
+                java_error = JavaErrorResponse.model_validate(body)
+            except ValidationError as exc:
+                raise McpClientError("INVALID_RESPONSE", "Java 工具服务返回格式异常") from exc
+            code = "AUTH_FAILED" if java_error.code in (401, 403) else "JAVA_ERROR"
+            raise McpClientError(code, java_error.msg or "Java 工具服务拒绝请求")
+        try:
+            rpc = JsonRpcResponse.model_validate(body)
+        except ValidationError as exc:
+            raise McpClientError("INVALID_RESPONSE", "Java 工具服务返回格式异常") from exc
+        if rpc.id != request_id:
             raise McpClientError("INVALID_RESPONSE", "Java JSON-RPC 响应标识不匹配")
-        if "error" in body:
-            error = body["error"]
-            if not isinstance(error, dict):
-                raise McpClientError("INVALID_RESPONSE", "Java JSON-RPC 错误格式异常")
-            raise McpClientError(str(error.get("code", "RPC_ERROR")),
-                                 str(error.get("message", "Java JSON-RPC 调用失败")))
-        if "result" not in body:
+        if rpc.error is not None:
+            raise McpClientError(str(rpc.error.code), rpc.error.message)
+        if "result" not in rpc.model_fields_set:
             raise McpClientError("INVALID_RESPONSE", "Java JSON-RPC 响应缺少结果")
-        return body["result"]
+        return rpc.result

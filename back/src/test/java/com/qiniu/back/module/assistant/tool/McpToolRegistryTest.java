@@ -99,7 +99,7 @@ class McpToolRegistryTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void publishesToolMetadataAndDoesNotRetryWrites() {
+    void publishesToolMetadataAndExecutesWritesOnce() {
         ChatToolService toolService = mock(ChatToolService.class);
         when(toolService.createTodo(any(TodoCreateDTO.class)))
                 .thenThrow(new org.springframework.dao.QueryTimeoutException("timeout"));
@@ -108,7 +108,6 @@ class McpToolRegistryTest {
 
         McpToolDefinition writeTool = registry.getTool("createTodo");
         assertFalse(writeTool.isReadOnly());
-        assertEquals(0, writeTool.getRetryCount());
         McpToolRegistry.McpToolResult failure = registry.executeResult("createTodo", """
                 {"title":"学英语","startDate":"2026-09-24","endDate":"2026-09-24"}
                 """);
@@ -123,6 +122,22 @@ class McpToolRegistryTest {
         assertEquals(true, metadata.get("readOnly"));
         assertEquals(true, metadata.get("parallelSafe"));
         assertEquals(3000L, metadata.get("timeoutMs"));
+    }
+
+    @Test
+    void reportsRetryableReadFailureWithoutRetryingInJava() {
+        ChatToolService toolService = mock(ChatToolService.class);
+        when(toolService.queryDayDetail("2026-09-25"))
+                .thenThrow(new org.springframework.dao.QueryTimeoutException("timeout"));
+        McpToolRegistry registry = new McpToolRegistry(toolService);
+        registry.init();
+
+        McpToolRegistry.McpToolResult failure = registry.executeResult(
+                "queryDayDetail", "{\"date\":\"2026-09-25\"}");
+
+        assertFalse(failure.success());
+        assertTrue(failure.error().retryable());
+        verify(toolService, times(1)).queryDayDetail("2026-09-25");
     }
 
     @Test

@@ -11,4 +11,10 @@ dependencies = [
     "redis>=5",
     "SQLAlchemy[asyncio]>=2",
     "aiomysql>=0.2",
+    "jieba>=0.42.1",
+    "langgraph>=1.0,<2",
+    "tzdata>=2025.2",
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

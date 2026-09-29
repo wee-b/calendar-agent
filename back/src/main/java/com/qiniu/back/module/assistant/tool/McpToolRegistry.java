@@ -176,39 +176,20 @@ public class McpToolRegistry {
                 return McpToolResult.failure("INVALID_ARGUMENTS", "缺少必填参数: " + field, false);
             }
         }
-        return executeWithRetry(tool, args);
+        return executeOnce(tool, args);
     }
 
-    private McpToolResult executeWithRetry(McpToolDefinition tool, Map<String, Object> args) {
-        int maxAttempts = tool.isReadOnly() && tool.isIdempotent()
-                ? tool.getRetryCount() + 1 : 1;
-        long delayMs = tool.getRetryDelayMs();
-
-        for (int attempt = 0; attempt < maxAttempts; attempt++) {
-            try {
-                return McpToolResult.success(tool.getExecutor().apply(args));
-            } catch (Exception e) {
-                if (e instanceof BusinessException business) {
-                    return McpToolResult.failure("BUSINESS_" + business.getCode(), business.getMsg(), false);
-                }
-                boolean retryable = isRetryable(e);
-                if (attempt < maxAttempts - 1 && retryable) {
-                    log.warn("MCP 工具 {} 执行异常(可重试) 第{}/{}次, {}",
-                            tool.getName(), attempt + 1, maxAttempts, e.getMessage());
-                    try {
-                        Thread.sleep(delayMs);
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        return McpToolResult.failure("TOOL_INTERRUPTED", "工具调用已中断", false);
-                    }
-                } else {
-                    log.error("MCP 工具 {} 执行失败: {}", tool.getName(), e);
-                    return McpToolResult.failure("TOOL_EXECUTION_FAILED",
-                            e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), retryable);
-                }
+    private McpToolResult executeOnce(McpToolDefinition tool, Map<String, Object> args) {
+        try {
+            return McpToolResult.success(tool.getExecutor().apply(args));
+        } catch (Exception e) {
+            if (e instanceof BusinessException business) {
+                return McpToolResult.failure("BUSINESS_" + business.getCode(), business.getMsg(), false);
             }
+            log.error("MCP 工具 {} 执行失败: {}", tool.getName(), e);
+            return McpToolResult.failure("TOOL_EXECUTION_FAILED",
+                    e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), isRetryable(e));
         }
-        return McpToolResult.failure("TOOL_EXECUTION_FAILED", "重试耗尽", false);
     }
 
     /**
@@ -235,7 +216,7 @@ public class McpToolRegistry {
                 .name(McpToolName.CreateTodo.getName())
                 .description(McpToolName.CreateTodo.getDescription())
                 .readOnly(false).idempotent(false).parallelSafe(false)
-                .confirmationRequired(true).timeoutMs(5000).retryCount(0)
+                .confirmationRequired(true).timeoutMs(5000)
                 .inputSchema(DtoInputSchema.from(TodoCreateDTO.class))
                 .executor(args -> {
                     TodoCreateDTO dto = mapper.convertValue(args, TodoCreateDTO.class);
@@ -290,7 +271,7 @@ public class McpToolRegistry {
                 .name(McpToolName.DeleteTodo.getName())
                 .description(McpToolName.DeleteTodo.getDescription())
                 .readOnly(false).idempotent(false).parallelSafe(false)
-                .confirmationRequired(true).timeoutMs(5000).retryCount(0)
+                .confirmationRequired(true).timeoutMs(5000)
                 .inputSchema(DtoInputSchema.select(TodoDateToggleDTO.class, "todoId"))
                 .executor(args -> {
                     TodoDateToggleDTO dto = mapper.convertValue(args, TodoDateToggleDTO.class);
@@ -304,7 +285,7 @@ public class McpToolRegistry {
                 .name(McpToolName.UpdateTodo.getName())
                 .description(McpToolName.UpdateTodo.getDescription())
                 .readOnly(false).idempotent(false).parallelSafe(false)
-                .confirmationRequired(true).timeoutMs(5000).retryCount(0)
+                .confirmationRequired(true).timeoutMs(5000)
                 .inputSchema(DtoInputSchema.merge(
                         DtoInputSchema.select(TodoDateToggleDTO.class, "todoId"),
                         DtoInputSchema.from(TodoUpdateDTO.class)))
@@ -323,7 +304,7 @@ public class McpToolRegistry {
                 .name(McpToolName.ToggleTodoDate.getName())
                 .description(McpToolName.ToggleTodoDate.getDescription())
                 .readOnly(false).idempotent(false).parallelSafe(false)
-                .confirmationRequired(true).timeoutMs(5000).retryCount(0)
+                .confirmationRequired(true).timeoutMs(5000)
                 .inputSchema(DtoInputSchema.from(TodoDateToggleDTO.class))
                 .executor(args -> {
                     TodoDateToggleDTO dto = mapper.convertValue(args, TodoDateToggleDTO.class);
@@ -337,7 +318,7 @@ public class McpToolRegistry {
                 .name(McpToolName.SaveDailyNote.getName())
                 .description(McpToolName.SaveDailyNote.getDescription())
                 .readOnly(false).idempotent(false).parallelSafe(false)
-                .confirmationRequired(true).timeoutMs(5000).retryCount(0)
+                .confirmationRequired(true).timeoutMs(5000)
                 .inputSchema(DtoInputSchema.from(DailyNoteSaveDTO.class))
                 .executor(args -> {
                     DailyNoteSaveDTO dto = mapper.convertValue(args, DailyNoteSaveDTO.class);
@@ -351,7 +332,7 @@ public class McpToolRegistry {
                 .name(McpToolName.RemoveTodoDay.getName())
                 .description(McpToolName.RemoveTodoDay.getDescription())
                 .readOnly(false).idempotent(false).parallelSafe(false)
-                .confirmationRequired(true).timeoutMs(5000).retryCount(0)
+                .confirmationRequired(true).timeoutMs(5000)
                 .inputSchema(DtoInputSchema.from(TodoDateToggleDTO.class))
                 .executor(args -> {
                     TodoDateToggleDTO dto = mapper.convertValue(args, TodoDateToggleDTO.class);
@@ -365,7 +346,7 @@ public class McpToolRegistry {
                 .name(McpToolName.AddTodoDay.getName())
                 .description(McpToolName.AddTodoDay.getDescription())
                 .readOnly(false).idempotent(false).parallelSafe(false)
-                .confirmationRequired(true).timeoutMs(5000).retryCount(0)
+                .confirmationRequired(true).timeoutMs(5000)
                 .inputSchema(DtoInputSchema.merge(
                         DtoInputSchema.from(TodoDateToggleDTO.class),
                         DtoInputSchema.select(TodoCreateDTO.class, "dayContent")))

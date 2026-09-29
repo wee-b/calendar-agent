@@ -44,10 +44,11 @@ application-unknown.yml
 
 # 运行时生成的 Lucene 索引和 Qdrant 向量库
 /data/
+/back/data/
 
 # Python AI service
 ai-service/.venv/
-ai-service/.env
+ai-service/.env.prod
 ai-service/*.egg-info/
 **/__pycache__/
 .pytest_cache/
@@ -56,4 +57,3 @@ ai-service/*.egg-info/
 __pycache__/
 *.py[cod]
 .venv/
-ai-service/.env

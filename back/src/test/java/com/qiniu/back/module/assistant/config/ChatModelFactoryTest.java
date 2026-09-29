@@ -59,12 +59,12 @@ class ChatModelFactoryTest {
     @Test
     void rejectsUnknownProviderType() {
         AiProperties properties = sampleProperties();
-        properties.getProviders().get("dashscope").setType("ollama");
+        properties.getProviders().get("dashscope").setType("unsupported-provider");
         ChatModelFactory factory = new ChatModelFactory(properties);
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> factory.createForAgent("route"));
-        assertTrue(error.getMessage().contains("ollama"));
+        assertTrue(error.getMessage().contains("unsupported-provider"));
     }
 
     private AiProperties sampleProperties() {

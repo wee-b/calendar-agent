@@ -4,6 +4,7 @@ import httpx
 from fastapi import FastAPI
 
 from app.core.exception.exceptions import BusinessException
+from app.core.exception.error_code import ErrorCode
 from app.core.exception.handlers import register_exception_handlers
 from app.main import app
 
@@ -23,11 +24,25 @@ class AppStructureTests(unittest.IsolatedAsyncioTestCase):
 
         @sample.get("/fail")
         async def fail():
-            raise BusinessException("示例错误")
+            raise BusinessException(ErrorCode.BUSINESS_ERROR)
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=sample),
                                      base_url="http://test") as client:
             response = await client.get("/fail")
         self.assertEqual(400, response.status_code)
-        self.assertEqual({"code": 4000, "ok": False, "msg": "示例错误", "data": None},
+        self.assertEqual({"code": 4000, "ok": False, "msg": "业务错误", "data": None},
                          response.json())
+
+    async def test_chat_error_keeps_existing_http_shape(self):
+        sample = FastAPI()
+        register_exception_handlers(sample)
+
+        @sample.get("/fail")
+        async def fail():
+            raise BusinessException(ErrorCode.MODEL_EMPTY_ANSWER)
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=sample),
+                                     base_url="http://test") as client:
+            response = await client.get("/fail")
+        self.assertEqual(502, response.status_code)
+        self.assertEqual({"detail": "模型未返回有效回答"}, response.json())

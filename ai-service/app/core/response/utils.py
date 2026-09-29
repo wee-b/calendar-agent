@@ -1,14 +1,13 @@
-from typing import Any
+from collections.abc import Sequence
 
 from pydantic import BaseModel
 
 from app.core.response.models import FailResponse, SuccessResponse
 
 
-def success(data: BaseModel | dict[str, Any]) -> dict[str, Any]:
-    payload = data.model_dump() if isinstance(data, BaseModel) else data
-    return SuccessResponse(data=payload).model_dump()
+def success(data: BaseModel | Sequence[BaseModel]) -> dict[str, object]:
+    return SuccessResponse(data=data).model_dump()
 
 
-def fail(code: int, msg: str) -> dict[str, Any]:
+def fail(code: int, msg: str) -> dict[str, object]:
     return FailResponse(code=code, msg=msg).model_dump()

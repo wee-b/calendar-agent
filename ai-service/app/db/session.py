@@ -1,4 +1,4 @@
-"""Async MySQL connection and session factories."""
+"""异步 MySQL 引擎及会话工厂；聊天仓库通过它读取和保存对话。"""
 
 from functools import lru_cache
 
@@ -16,6 +16,8 @@ def get_engine() -> AsyncEngine:
 
 
 def session_factory_for_engine(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    """允许仓库测试注入引擎；提交后对象属性继续可读。"""
+
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
