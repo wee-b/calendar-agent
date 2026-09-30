@@ -20,6 +20,10 @@ public class AgentFlowState {
     private String pendingTask;
     private String pendingPayload;
     private Long pendingDraftId;
+    private String imageInstruction;
+    /** 与业务阶段独立；异常写调用会保留该标记以阻止重复执行。 */
+    private boolean processing;
+    private long version;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

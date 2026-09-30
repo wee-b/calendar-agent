@@ -160,10 +160,13 @@ CREATE TABLE `yl_agent_flow_state`
     `session_id`      VARCHAR(64)  NOT NULL COMMENT 'Chat session id',
     `current_agent`   VARCHAR(32)  NOT NULL DEFAULT 'NONE' COMMENT 'Current owner: NONE/CHAT/PLANNER/EXECUTOR',
     `next_agent`      VARCHAR(32)  NOT NULL DEFAULT 'NONE' COMMENT 'Agent to run after user confirms',
-    `stage`           VARCHAR(32)  NOT NULL DEFAULT 'IDLE' COMMENT 'IDLE/WAIT_CONFIRM/WAIT_FEEDBACK/PROCESSING',
+    `stage`           VARCHAR(32)  NOT NULL DEFAULT 'CHAT' COMMENT 'Conversation stage: CHAT/PLAN/EXECUTE/IMAGE',
     `pending_task`    TEXT         NULL DEFAULT NULL COMMENT 'Pending user task or refined instruction',
     `pending_payload` MEDIUMTEXT   NULL DEFAULT NULL COMMENT 'Agent output payload, such as planner result',
     `pending_draft_id` BIGINT      NULL DEFAULT NULL COMMENT 'Plan draft bound to the pending confirmation',
+    `image_instruction` TEXT      NULL COMMENT 'Accumulated image generation feedback',
+    `processing`      TINYINT(1)   NOT NULL DEFAULT 0 COMMENT 'Request claimed or write result uncertain',
+    `version`         BIGINT       NOT NULL DEFAULT 0 COMMENT 'Optimistic conversation version',
     `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Created time',
     `update_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Updated time',
 
@@ -247,6 +250,5 @@ CREATE TABLE `yl_ai_dialogue`
     KEY `idx_user_session` (`user_id`, `session_id`),
     KEY `idx_user_create_time` (`user_id`, `create_time`)
 )ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'AI对话记录表';
-
 
 

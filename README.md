@@ -86,7 +86,7 @@ calendar-agent/
 | `yl_daily_note` | 每日日记/备注表，每个用户每天一条 |
 | `yl_ai_dialogue` | AI 对话历史，按 `session_id` 分组 |
 | `yl_plan_draft` | Planner 生成的待同步规划草稿 |
-| `yl_agent_flow_state` | 当前会话的 Agent 待确认/待反馈状态 |
+| `yl_agent_flow_state` | 会话主流程 CHAT/PLAN/EXECUTE/IMAGE、任务产物及版本认领 |
 | `yl_user_memory` | 用户长期偏好、长期目标和行为习惯记忆 |
 | `yl_chat_context_summary` | 长会话上下文摘要，用于压缩 Agent 历史输入 |
 
@@ -163,16 +163,18 @@ calendar-agent/
 用户输入
   ├─ 异步抽取长期偏好/目标记忆
   ├─ 读取 AgentFlowState 和上一轮助手回复
-  ├─ RouteAgent 只带上一轮助手回复和本轮用户消息，输出结构化事件
-  └─ 状态机按当前 stage + userSignal 执行
-       ├─ READY_CHAT：交给 ChatAgent 闲聊或追问
-       ├─ READY_QUERY / READY_SINGLE_DAY_* / READY_EXECUTE / READY_PLAN：查询、执行、等待确认或进入规划
-       ├─ CONFIRM / REJECT：继续或取消待处理流程
-       ├─ MODIFY：补充 pending_task，必要时重新规划
-       └─ NEW_REQUEST / UNKNOWN：保留当前待处理状态并说明
+  ├─ RouteAgent 结合主流程、当前任务、上一轮回复和本轮消息输出 UserSignal
+  └─ 唯一转换表按 ConversationStage + UserSignal 选择 Agent 和成功后阶段
+       ├─ NEW_CHAT / NEW_QUERY：Chat 回复或查询，保留当前主流程
+       ├─ NEW_PLAN：Planner 处理规划，进入 PLAN
+       ├─ NEW_EXECUTE：Executor 展示待执行内容，进入 EXECUTE 等待确认
+       ├─ CONFIRM / MODIFY / REJECT：按当前主流程继续、修改或取消
+       ├─ GENERATE_PLAN_IMAGE：Image 生图，进入 IMAGE 并保留规划草稿
+       └─ SYNC_PLAN：Executor 同步当前草稿，成功后回到 CHAT
 ```
 
-规划类任务会先输出草稿预览。用户确认后，`PlanDraftService` 将 Planner 的结构化 JSON 转换为多个 `TodoCreateDTO`，批量写入日历。
+规划类任务会先输出草稿预览。用户明确要求同步后，`PlanDraftService` 将 Planner 的结构化 JSON 转换为多个 `TodoCreateDTO`，批量写入日历；普通“好的”不会触发同步。生图后仍可同步同一草稿。
+完整流转表和发布步骤见 [08 设计文档](docs/08-chat-state-transition-table.md)。已有数据库启动此版本前需执行一次 `sql/migrations/20260930_agent_conversation_stage.sql`。
 Planner 生成计划前会读取 active 用户记忆；公共 RAG 当前仅能通过 Python 独立检索接口调用，尚未注入规划对话。
 助手回复落库后会异步检查是否需要刷新会话摘要。未摘要对话满 40 轮（用户+助手各一条算一轮）时，把最早 20 轮压进 `yl_chat_context_summary`；之后要再积累 20 轮才进行下一次压缩。原始 `yl_ai_dialogue` 不删除，历史页仍可查看。RouteAgent 不读压缩历史，只看上一轮助手回复和本轮用户消息。摘要只保留稳定事实、目标、偏好和重要指代，不把历史请求当作本轮待执行任务。
 

@@ -1,11 +1,9 @@
 package com.qiniu.back.module.assistant.statemachine;
 
-/**
- * 状态描述的是业务流程，不是当前由哪个 Agent 处理。
- */
+/** 会话当前的主流程；临时闲聊、查询不会改变它。 */
 public enum ConversationStage {
-    READY_FOR_INPUT, // 等待新任务
-    AWAITING_EXECUTION_CONFIRMATION,  // 等待执行确认
-    AWAITING_PLAN_CONFIRMATION,   // 等待规划确认
-    AWAITING_PLAN_FEEDBACK   // 等待规划反馈
+    CHAT,       // 无活动任务
+    PLAN,       // 规划需求或草稿讨论中
+    EXECUTE,    // 有待执行内容，等待确认或修改
+    IMAGE       // 图片反馈中，仍关联原规划草稿
 }

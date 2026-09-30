@@ -154,6 +154,27 @@ public class McpToolRegistry {
         }
     }
 
+    /** 已确认的 Java Executor 单次调用：保留结构化工具数据，异常上抛且不重试。 */
+    public String executeOnce(String name, String argumentsJson) {
+        McpToolDefinition tool = tools.get(name);
+        if (tool == null) throw new IllegalArgumentException("未知的工具: " + name);
+        try {
+            Map<String, Object> args = mapper.readValue(argumentsJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            if (args == null) throw new IllegalArgumentException("工具参数必须是 JSON 对象");
+            @SuppressWarnings("unchecked")
+            List<String> required = (List<String>) tool.getInputSchema().getOrDefault("required", List.of());
+            for (String field : required) {
+                if (args.get(field) == null || args.get(field) instanceof String value && value.isBlank()) {
+                    throw new IllegalArgumentException("缺少必填参数: " + field);
+                }
+            }
+            return mapper.writeValueAsString(tool.getExecutor().apply(args));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("工具参数解析或结果序列化失败", exception);
+        }
+    }
+
     /** 供 MCP 网关使用的结构化执行结果。 */
     public McpToolResult executeResult(String name, String argumentsJson) {
         McpToolDefinition tool = tools.get(name);

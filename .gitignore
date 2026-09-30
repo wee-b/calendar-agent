@@ -37,10 +37,16 @@ PR_SUMMARY_DAY1.md
 PR_SUMMARY_DAY2.md
 PR_SUMMARY_DAY3.md
 
-docs/
+docs/*
+!docs/08-chat-state-transition-table.md
 
 # 用于存放密钥
 application-unknown.yml
+.env.prod
+
+# Python 分支切换后保留的本地运行缓存与安装元数据
+__pycache__/
+*.egg-info/
 
 # 运行时生成的 Lucene 索引和 Qdrant 向量库
 /data/

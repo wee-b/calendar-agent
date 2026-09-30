@@ -25,6 +25,47 @@ import static org.mockito.Mockito.when;
 class McpToolRegistryTest {
 
     @Test
+    void confirmedExecutorSerializesStructuredResults() {
+        ChatToolService toolService = mock(ChatToolService.class);
+        when(toolService.deleteTodo(42L))
+                .thenReturn(new ChatToolService.TodoMutationResult("deleted", 42L, "学习", null));
+        McpToolRegistry registry = new McpToolRegistry(toolService);
+        registry.init();
+
+        assertEquals("{\"operation\":\"deleted\",\"todoId\":42,\"title\":\"学习\",\"dayCount\":null}",
+                registry.executeOnce("deleteTodo", "{\"todoId\":42}"));
+        verify(toolService, times(1)).deleteTodo(42L);
+    }
+
+    @Test
+    void confirmedExecutorPropagatesOriginalFailureWithoutRetry() {
+        ChatToolService toolService = mock(ChatToolService.class);
+        var failure = new org.springframework.dao.QueryTimeoutException("timeout");
+        when(toolService.deleteTodo(42L)).thenThrow(failure);
+        McpToolRegistry registry = new McpToolRegistry(toolService);
+        registry.init();
+
+        org.junit.jupiter.api.Assertions.assertSame(failure,
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        org.springframework.dao.QueryTimeoutException.class,
+                        () -> registry.executeOnce("deleteTodo", "{\"todoId\":42}")));
+        verify(toolService, times(1)).deleteTodo(42L);
+    }
+
+    @Test
+    void confirmedExecutorRejectsInvalidArgumentsBeforeCallingTools() {
+        ChatToolService toolService = mock(ChatToolService.class);
+        McpToolRegistry registry = new McpToolRegistry(toolService);
+        registry.init();
+
+        for (String args : List.of("{}", "null", "[]", "{broken")) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                    () -> registry.executeOnce("deleteTodo", args));
+        }
+        org.mockito.Mockito.verifyNoInteractions(toolService);
+    }
+
+    @Test
     void registersOriginalGeneralPurposeTodoTools() {
         McpToolRegistry registry = new McpToolRegistry(mock(ChatToolService.class));
         registry.init();

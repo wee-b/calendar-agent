@@ -1,7 +1,6 @@
 package com.qiniu.back.module.assistant.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qiniu.back.domain.ErrorCode;
 import com.qiniu.back.module.assistant.domain.model.PlanDraft;
@@ -29,7 +28,6 @@ public class PlanDraftService {
 
     private static final String STATUS_PENDING = "pending";
     private static final String STATUS_SYNCED = "synced";
-    private static final String STATUS_EXPIRED = "expired";
     private static final Pattern COLOR_PATTERN = Pattern.compile("^#[0-9a-fA-F]{6}$");
     @Autowired
     private PlanDraftMapper planDraftMapper;
@@ -65,11 +63,8 @@ public class PlanDraftService {
         String planJson = extractJson(rawPlanJson);
         PlanDraftDTO dto = parseAndValidate(planJson);
 
-        planDraftMapper.update(null, new LambdaUpdateWrapper<PlanDraft>()
-                .eq(PlanDraft::getUserId, userId)
-                .eq(PlanDraft::getSessionId, sessionId)
-                .eq(PlanDraft::getStatus, STATUS_PENDING)
-                .set(PlanDraft::getStatus, STATUS_EXPIRED));
+        // 会话只通过显式 draftId 引用当前草稿。生成新草稿不提前作废旧草稿，
+        // 否则后续状态提交失败会使原任务无法重试；历史草稿留作记录。
 
         PlanDraft draft = new PlanDraft();
         draft.setUserId(userId);
