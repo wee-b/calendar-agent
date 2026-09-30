@@ -2,159 +2,86 @@ package com.qiniu.back.module.assistant.statemachine;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.qiniu.back.domain.ErrorCode;
+import com.qiniu.back.exception.BusinessException;
+import com.qiniu.back.module.assistant.domain.result.PendingTask;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-
 import java.time.LocalDateTime;
-import java.util.Optional;
 
+/** 会话阶段与执行认领分开保存；每轮通过版本号阻止并发覆盖。 */
 @Service
+@RequiredArgsConstructor
 public class AgentFlowStateService {
+    private final AgentFlowStateMapper stateMapper;
 
-    public static final String AGENT_NONE = "NONE";
-    public static final String AGENT_CHAT = "CHAT";
-    public static final String AGENT_PLANNER = "PLANNER";
-    public static final String AGENT_EXECUTOR = "EXECUTOR";
-
-    public static final String STAGE_IDLE = "IDLE";
-    public static final String STAGE_WAIT_CONFIRM = "WAIT_CONFIRM";
-    public static final String STAGE_WAIT_FEEDBACK = "WAIT_FEEDBACK";
-    public static final String STAGE_PROCESSING = "PROCESSING";
-
-    private static final int EXPIRE_MINUTES = 30;
-
-    @Autowired
-    private AgentFlowStateMapper stateMapper;
-
-    public Optional<AgentFlowState> get(Long userId, String sessionId) {
-        AgentFlowState state = stateMapper.selectOne(baseQuery(userId, sessionId).last("LIMIT 1"));
-        if (state == null) return Optional.empty();
-        if (state.getUpdateTime() != null
-                && state.getUpdateTime().plusMinutes(EXPIRE_MINUTES).isBefore(LocalDateTime.now())) {
-            clear(userId, sessionId);
-            return Optional.empty();
-        }
-        return Optional.of(state);
-    }
-
-    public AgentFlowState waitExecutorConfirm(Long userId, String sessionId, String task) {
-        AgentFlowState state = baseState(userId, sessionId);
-        state.setCurrentAgent(AGENT_EXECUTOR);
-        state.setNextAgent(AGENT_EXECUTOR);
-        state.setStage(STAGE_WAIT_CONFIRM);
-        state.setPendingTask(task);
-        return save(state);
-    }
-
-    public AgentFlowState waitPlannerConfirm(Long userId, String sessionId, String requirement) {
-        AgentFlowState state = baseState(userId, sessionId);
-        state.setCurrentAgent(AGENT_PLANNER);
-        state.setNextAgent(AGENT_PLANNER);
-        state.setStage(STAGE_WAIT_CONFIRM);
-        state.setPendingTask(requirement);
-        return save(state);
-    }
-
-    public AgentFlowState waitPlanFeedback(Long userId, String sessionId, String requirement,
-                                           Long draftId, String planResult) {
-        AgentFlowState state = baseState(userId, sessionId);
-        state.setCurrentAgent(AGENT_PLANNER);
-        state.setNextAgent(AGENT_EXECUTOR);
-        state.setStage(STAGE_WAIT_FEEDBACK);
-        state.setPendingTask(requirement);
-        state.setPendingPayload(planResult);
-        state.setPendingDraftId(draftId);
-        return save(state);
-    }
-
-    public AgentFlowState updatePendingTask(Long userId, String sessionId, AgentFlowState oldState, String userFeedback) {
-        oldState.setPendingTask(oldState.getPendingTask() + "\n用户补充/修改：" + userFeedback);
-        return save(oldState);
-    }
-
-    public void clear(Long userId, String sessionId) {
-        stateMapper.delete(baseQuery(userId, sessionId));
-    }
-
-    /**
-     * Atomically owns a pending state before executing its transition.
-     * Only one concurrent request can change the expected stage to PROCESSING.
-     */
-    public boolean claim(AgentFlowState state) {
-        if (state == null || state.getStateId() == null || state.getStage() == null) return false;
-        int updated = stateMapper.update(null, new LambdaUpdateWrapper<AgentFlowState>()
-                .eq(AgentFlowState::getStateId, state.getStateId())
-                .eq(AgentFlowState::getStage, state.getStage())
-                .set(AgentFlowState::getStage, STAGE_PROCESSING)
-                .set(AgentFlowState::getUpdateTime, LocalDateTime.now()));
-        return updated == 1;
-    }
-
-    public boolean isProcessing(AgentFlowState state) {
-        return state != null && STAGE_PROCESSING.equals(state.getStage());
-    }
-
-    public void releaseClaim(AgentFlowState originalState) {
-        if (originalState == null || originalState.getStateId() == null) return;
-        stateMapper.update(null, new LambdaUpdateWrapper<AgentFlowState>()
-                .eq(AgentFlowState::getStateId, originalState.getStateId())
-                .eq(AgentFlowState::getStage, STAGE_PROCESSING)
-                .set(AgentFlowState::getStage, originalState.getStage())
-                .set(AgentFlowState::getUpdateTime, LocalDateTime.now()));
+    public AgentFlowState getOrCreate(Long userId, String sessionId) {
+        // 唯一键保证第一次并发访问也只建立一个会话状态。
+        stateMapper.createIfAbsent(userId, sessionId);
+        return stateMapper.selectOne(new LambdaQueryWrapper<AgentFlowState>()
+                .eq(AgentFlowState::getUserId, userId).eq(AgentFlowState::getSessionId, sessionId));
     }
 
     public ConversationStage resolveStage(AgentFlowState state) {
-        if (state == null) return ConversationStage.READY_FOR_INPUT;
-        if (STAGE_WAIT_FEEDBACK.equals(state.getStage())) {
-            return ConversationStage.AWAITING_PLAN_FEEDBACK;
-        }
-        if (STAGE_WAIT_CONFIRM.equals(state.getStage())
-                && AGENT_PLANNER.equals(state.getNextAgent())) {
-            return ConversationStage.AWAITING_PLAN_CONFIRMATION;
-        }
-        if (STAGE_WAIT_CONFIRM.equals(state.getStage())
-                && (AGENT_EXECUTOR.equals(state.getNextAgent())
-                || AGENT_CHAT.equals(state.getNextAgent()))) {
-            return ConversationStage.AWAITING_EXECUTION_CONFIRMATION;
-        }
-        throw new IllegalStateException("无法识别会话状态: stage=" + state.getStage()
-                + ", currentAgent=" + state.getCurrentAgent() + ", nextAgent=" + state.getNextAgent());
+        return ConversationStage.valueOf(state.getStage());
     }
 
-    private AgentFlowState save(AgentFlowState state) {
-        state.setUpdateTime(LocalDateTime.now());
-        AgentFlowState old = stateMapper.selectOne(baseQuery(state.getUserId(), state.getSessionId()).last("LIMIT 1"));
-        if (old == null) {
-            state.setCreateTime(LocalDateTime.now());
-            stateMapper.insert(state);
-            return state;
-        }
-
-        stateMapper.update(null, new LambdaUpdateWrapper<AgentFlowState>()
-                .eq(AgentFlowState::getStateId, old.getStateId())
-                .set(AgentFlowState::getCurrentAgent, state.getCurrentAgent())
-                .set(AgentFlowState::getNextAgent, state.getNextAgent())
-                .set(AgentFlowState::getStage, state.getStage())
-                .set(AgentFlowState::getPendingTask, state.getPendingTask())
-                .set(AgentFlowState::getPendingPayload, state.getPendingPayload())
-                .set(AgentFlowState::getPendingDraftId, state.getPendingDraftId())
-                .set(AgentFlowState::getUpdateTime, state.getUpdateTime()));
-        state.setStateId(old.getStateId());
-        state.setCreateTime(old.getCreateTime());
-        return state;
+    public PendingTask pending(AgentFlowState state) {
+        return new PendingTask(state.getPendingTask(), state.getPendingDraftId(),
+                state.getPendingPayload(), state.getImageInstruction());
     }
 
-    private AgentFlowState baseState(Long userId, String sessionId) {
-        AgentFlowState state = new AgentFlowState();
-        state.setUserId(userId);
-        state.setSessionId(sessionId);
-        return state;
+    public boolean claim(AgentFlowState state) {
+        if (state.isProcessing()) return false;
+        int count = stateMapper.update(null, expected(state)
+                .eq(AgentFlowState::isProcessing, false)
+                .set(AgentFlowState::isProcessing, true)
+                .set(AgentFlowState::getVersion, state.getVersion() + 1)
+                .set(AgentFlowState::getUpdateTime, LocalDateTime.now()));
+        if (count == 1) state.setVersion(state.getVersion() + 1);
+        return count == 1;
     }
 
-    private LambdaQueryWrapper<AgentFlowState> baseQuery(Long userId, String sessionId) {
-        return new LambdaQueryWrapper<AgentFlowState>()
-                .eq(AgentFlowState::getUserId, userId)
-                .eq(AgentFlowState::getSessionId, sessionId);
+    /** 仅当前持有版本的请求可以提交阶段及产物，然后释放认领。 */
+    public void complete(AgentFlowState state, ConversationStage next, PendingTask pending, AgentType agent) {
+        int count = stateMapper.update(null, expected(state)
+                .eq(AgentFlowState::isProcessing, true)
+                .set(AgentFlowState::getStage, next.name())
+                .set(AgentFlowState::getCurrentAgent, agent.name())
+                .set(AgentFlowState::getNextAgent, owner(next))
+                .set(AgentFlowState::getPendingTask, pending.task())
+                .set(AgentFlowState::getPendingDraftId, pending.draftId())
+                .set(AgentFlowState::getPendingPayload, pending.planPreview())
+                .set(AgentFlowState::getImageInstruction, pending.imageInstruction())
+                .set(AgentFlowState::isProcessing, false)
+                .set(AgentFlowState::getVersion, state.getVersion() + 1)
+                .set(AgentFlowState::getUpdateTime, LocalDateTime.now()));
+        if (count != 1) throw new BusinessException(ErrorCode.BAD_REQUEST, "会话状态已变化，请刷新后重试");
     }
 
+    /** 未进入写调用的失败可重试；数据库中的原阶段和产物一直保留。 */
+    public void releaseClaim(AgentFlowState state) {
+        stateMapper.update(null, expected(state)
+                .eq(AgentFlowState::isProcessing, true)
+                .set(AgentFlowState::isProcessing, false)
+                .set(AgentFlowState::getVersion, state.getVersion() + 1)
+                .set(AgentFlowState::getUpdateTime, LocalDateTime.now()));
+    }
+
+    public String owner(ConversationStage stage) {
+        return switch (stage) {
+            case CHAT -> "NONE";
+            case PLAN -> AgentType.PLANNER.name();
+            case EXECUTE -> AgentType.EXECUTOR.name();
+            case IMAGE -> AgentType.IMAGE.name();
+        };
+    }
+
+    private LambdaUpdateWrapper<AgentFlowState> expected(AgentFlowState state) {
+        return new LambdaUpdateWrapper<AgentFlowState>()
+                .eq(AgentFlowState::getStateId, state.getStateId())
+                .eq(AgentFlowState::getUserId, state.getUserId())
+                .eq(AgentFlowState::getSessionId, state.getSessionId())
+                .eq(AgentFlowState::getVersion, state.getVersion());
+    }
 }

@@ -1,6 +1,8 @@
 package com.qiniu.back.module.assistant.tool;
 
 import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
+import com.qiniu.back.domain.ErrorCode;
+import com.qiniu.back.exception.BusinessException;
 import com.qiniu.back.domain.todo.dto.TodoUpdateDTO;
 import com.qiniu.back.domain.todo.vo.TodoVO;
 import com.qiniu.back.domain.dailyNote.dto.DailyNoteSaveDTO;
@@ -81,7 +83,7 @@ public class ChatToolService {
                 .findFirst()
                 .orElse(null);
         if (target == null) {
-            return "删除失败：未找到 ID=" + todoId + " 的待办，可能已被删除或不存在。请重新查询待办列表获取最新数据。";
+            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到待办，请重新查询后再操作");
         }
         todoService.delete(todoId);
         return "已删除待办【" + target.getTitle() + "】ID=" + todoId + "。";
@@ -108,14 +110,10 @@ public class ChatToolService {
                 .findFirst()
                 .orElse(null);
         if (target == null) {
-            return "移除失败：未找到 ID=" + todoId + " 的待办，可能已被删除。请调用 queryTodoList 获取最新数据。";
+            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到待办，请重新查询后再操作");
         }
-        try {
-            todoService.removeTodoDay(todoId, LocalDate.parse(date));
-            return "已从【" + target.getTitle() + "】中移除 " + date + "，其他天不受影响。";
-        } catch (Exception e) {
-            return "移除失败: " + e.getMessage();
-        }
+        todoService.removeTodoDay(todoId, LocalDate.parse(date));
+        return "已从【" + target.getTitle() + "】中移除 " + date + "，其他天不受影响。";
     }
 
     public String addTodoDay(Long todoId, String date, String dayContent) {
@@ -126,14 +124,10 @@ public class ChatToolService {
                 .findFirst()
                 .orElse(null);
         if (target == null) {
-            return "添加失败：未找到 ID=" + todoId + " 的待办。请调用 queryTodoList 获取最新数据。";
+            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到待办，请重新查询后再操作");
         }
-        try {
-            todoService.addTodoDay(todoId, LocalDate.parse(date), dayContent);
-            return "已给【" + target.getTitle() + "】增加 " + date + " 这一天。";
-        } catch (Exception e) {
-            return "添加失败: " + e.getMessage();
-        }
+        todoService.addTodoDay(todoId, LocalDate.parse(date), dayContent);
+        return "已给【" + target.getTitle() + "】增加 " + date + " 这一天。";
     }
 
     public String saveDailyNote(String date, String content) {

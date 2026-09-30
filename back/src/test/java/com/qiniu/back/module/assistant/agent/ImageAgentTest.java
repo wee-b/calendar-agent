@@ -16,6 +16,8 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 class ImageAgentTest {
@@ -62,6 +64,21 @@ class ImageAgentTest {
                 () -> agent.generate(new PlanDraft()));
 
         assertEquals("ImageAgent provider 的 api-key 和 base-url 必须配置", error.getMessage());
+    }
+
+    @Test
+    void imageRevisionIncludesPlanAndAccumulatedFeedback() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("https://ark.example.com/api/v3/images/generations"))
+                .andExpect(jsonPath("$.prompt", containsString("原规划")))
+                .andExpect(jsonPath("$.prompt", containsString("换成蓝色")))
+                .andRespond(withSuccess("{\"data\":[{\"url\":\"https://images.example.com/new.jpg\"}]}",
+                        MediaType.APPLICATION_JSON));
+        PlanDraft draft = new PlanDraft();
+        draft.setPlanJson("{\"goal\":\"原规划\"}");
+        new ImageAgent(properties(), new ObjectMapper(), builder).generate(draft, "换成蓝色");
+        server.verify();
     }
 
     private AiProperties properties() {

@@ -1,191 +1,254 @@
 package com.qiniu.back.module.assistant.service.impl;
 
-import com.qiniu.back.module.assistant.agent.ChatAgent;
-import com.qiniu.back.module.assistant.agent.ExecutorAgent;
-import com.qiniu.back.module.assistant.agent.RouteAgent;
-import com.qiniu.back.module.assistant.domain.result.ChatDispatchResult;
+import com.qiniu.back.module.assistant.agent.*;
+import com.qiniu.back.module.assistant.domain.model.PlanDraft;
+import com.qiniu.back.module.assistant.domain.result.*;
 import com.qiniu.back.module.assistant.domain.vo.RouteDecision;
-import com.qiniu.back.module.assistant.service.ChatDialogueService;
-import com.qiniu.back.module.assistant.service.ProgressReporter;
-import com.qiniu.back.module.assistant.service.PlanClarificationPolicy;
-import com.qiniu.back.module.assistant.statemachine.AgentFlowState;
-import com.qiniu.back.module.assistant.statemachine.AgentFlowStateService;
-import com.qiniu.back.module.assistant.statemachine.ChatTransitionTable;
-import com.qiniu.back.module.assistant.statemachine.ExistingFlowStateProcessor;
-import com.qiniu.back.module.assistant.statemachine.UserSignal;
+import com.qiniu.back.module.assistant.service.*;
+import com.qiniu.back.module.assistant.statemachine.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-
-import java.util.ArrayList;
-import java.util.List;
+import org.springframework.beans.BeanUtils;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
-@ExtendWith(MockitoExtension.class)
+/** 用真实转换表和四 Agent 分派器验证完整多轮流程，外部模型与数据库使用替身。 */
 class ChatServiceImplTest {
-
-    @Mock private ExistingFlowStateProcessor flowStateProcessor;
-    @Mock private ChatDialogueService chatDialogueService;
-    @Mock private ChatAgent chatAgent;
-    @Mock private ExecutorAgent executorAgent;
-    @Mock private RouteAgent routeAgent;
-    @Mock private AgentFlowStateService flowStateService;
-    @Mock private PlanClarificationPolicy planClarificationPolicy;
-
+    private ChatAgent chat;
+    private PlannerAgent planner;
+    private ExecutorAgent executor;
+    private ImageAgent image;
+    private RouteAgent route;
+    private PlanDraftService drafts;
+    private PlanClarificationPolicy clarification;
+    private MemoryStates states;
     private ChatServiceImpl service;
 
-    @BeforeEach
-    void setUp() {
-        service = new ChatServiceImpl(flowStateProcessor, chatDialogueService,
-                chatAgent, executorAgent, routeAgent, flowStateService, new ChatTransitionTable(),
-                new ProgressReporter(), planClarificationPolicy);
+    @BeforeEach void setup() {
+        chat = mock(ChatAgent.class);
+        planner = mock(PlannerAgent.class);
+        executor = mock(ExecutorAgent.class);
+        image = mock(ImageAgent.class);
+        route = mock(RouteAgent.class);
+        drafts = mock(PlanDraftService.class);
+        clarification = mock(PlanClarificationPolicy.class);
+        states = new MemoryStates();
+        ProgressReporter reporter = new ProgressReporter();
+        service = new ChatServiceImpl(mock(ChatDialogueService.class), route, states, new ChatTransitionTable(),
+                new ConversationAgentDispatcher(chat, planner, executor, image, drafts, clarification, reporter), reporter);
     }
 
-    @Test
-    void explicitSingleDayActionExecutesImmediatelyThroughExecutor() {
-        String message = "明确的单日删除指令";
-        stubReady(message, decision(message, UserSignal.READY_SINGLE_DAY_ACTION));
-        when(executorAgent.execute(message)).thenReturn("操作成功");
-        List<String> progress = new ArrayList<>();
+    @Test void planQueryImageRevisionThenSyncUsesTheOriginalDraft() {
+        signal("做计划", UserSignal.NEW_PLAN);
+        when(planner.generateDraft("做计划")).thenReturn(new PlannerAgent.GeneratedPlan(17L, "规划正文"));
+        assertEquals("PLAN", send("做计划").flowStage());
 
-        ChatDispatchResult result = service.process(1L, "session-1", message, 10L, progress::add);
+        signal("查明天", UserSignal.NEW_QUERY);
+        when(chat.query("查明天")).thenReturn("明天有两项待办");
+        assertEquals("PLAN", send("查明天").flowStage());
+        assertEquals(17L, state().getPendingDraftId());
 
-        assertEquals("操作成功", result.aiResult());
-        assertEquals("CHAT_ACTION", result.dispatchType());
-        assertEquals(AgentFlowStateService.STAGE_IDLE, result.flowStage());
-        verify(flowStateService, never()).waitExecutorConfirm(
-                org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString());
-        verify(routeAgent).route(message, null, null);
-        assertTrue(progress.stream().anyMatch(item -> item.contains("结合上一轮回复生成结构化路由事件")));
+        signal("好的", UserSignal.CONFIRM);
+        assertEquals("PLAN_FEEDBACK", send("好的").dispatchType());
+        verifyNoInteractions(executor, image);
+
+        PlanDraft draft = new PlanDraft();
+        draft.setDraftId(17L);
+        when(drafts.findPending(1L, "s", 17L)).thenReturn(Optional.of(draft));
+        when(image.generate(eq(draft), anyString())).thenReturn("图片");
+        signal("画图", UserSignal.GENERATE_PLAN_IMAGE);
+        assertEquals("IMAGE", send("画图").flowStage());
+        signal("换成蓝色", UserSignal.MODIFY);
+        assertEquals("IMAGE", send("换成蓝色").flowStage());
+        assertTrue(state().getImageInstruction().contains("换成蓝色"));
+        assertTrue(state().getImageInstruction().contains("画图"));
+        assertEquals(17L, state().getPendingDraftId());
+        assertEquals("规划正文", state().getPendingPayload());
+
+        signal("同步", UserSignal.SYNC_PLAN);
+        when(executor.applyPlan(draft)).thenReturn("已同步");
+        assertEquals("CHAT", send("同步").flowStage());
+        assertNull(state().getPendingDraftId());
+        verify(executor).applyPlan(draft);
+        verify(drafts, never()).findLatestPending(anyLong(), anyString());
     }
 
-    @Test
-    void uncertainSingleDayActionUsesARealConfirmationQuestion() {
-        String message = "不确定的单日操作表达";
-        String task = "删除指定日期的目标";
-        RouteDecision decision = decision(task, UserSignal.READY_SINGLE_DAY_CONFIRM);
-        stubReady(message, decision);
-        when(flowStateService.waitExecutorConfirm(1L, "session-1", task)).thenReturn(new AgentFlowState());
-        List<String> progress = new ArrayList<>();
-
-        ChatDispatchResult result = service.process(1L, "session-1", message, 10L, progress::add);
-
-        assertEquals("CHAT_ACTION_CONFIRM", result.dispatchType());
-        assertTrue(result.aiResult().contains("需要我执行"));
-        verify(executorAgent, never()).execute(anyString());
-        assertTrue(progress.stream().anyMatch(item -> item.contains("状态机消费结构化路由事件")));
+    @Test void allNewWritesWaitAndConfirmationUsesTheRevisedTask() {
+        signal("删除明天待办", UserSignal.NEW_EXECUTE);
+        assertEquals("EXECUTE", send("删除明天待办").flowStage());
+        verifyNoInteractions(executor);
+        signal("只删除早上的", UserSignal.MODIFY);
+        assertEquals("REFINE", send("只删除早上的").dispatchType());
+        String revised = state().getPendingTask();
+        assertTrue(revised.contains("只删除早上的"));
+        verifyNoInteractions(executor);
+        signal("确认", UserSignal.CONFIRM);
+        when(executor.executeConfirmed(revised)).thenReturn(new ExecutorAgent.ExecutionResult("完成", true));
+        assertEquals("CHAT", send("确认").flowStage());
+        verify(executor).executeConfirmed(revised);
+        assertNull(state().getPendingTask());
+        // 再次确认没有活动任务，不能再次进入 Executor。
+        send("确认");
+        verify(executor, times(1)).executeConfirmed(anyString());
     }
 
-    @Test
-    void idleChatIsHandledByChatAgent() {
-        String message = "你好";
-        stubReady(message, decision(message, UserSignal.READY_CHAT));
-        when(chatAgent.chat(message)).thenReturn("你好，需要我帮你看日程吗？");
-        List<String> progress = new ArrayList<>();
-
-        ChatDispatchResult result = service.process(1L, "session-1", message, 10L, progress::add);
-
-        assertEquals("你好，需要我帮你看日程吗？", result.aiResult());
-        assertEquals("CHAT", result.dispatchType());
-        verify(chatAgent).chat(message);
-        verify(executorAgent, never()).execute(anyString());
-        assertTrue(progress.stream().anyMatch(item -> item.contains("调用 Chat Agent 回复闲聊")));
+    @Test void rejectedOrReplacedTasksCanNoLongerBeExecuted() {
+        signal("旧操作", UserSignal.NEW_EXECUTE);
+        send("旧操作");
+        signal("新计划", UserSignal.NEW_PLAN);
+        when(planner.generateDraft("新计划")).thenReturn(new PlannerAgent.GeneratedPlan(19L, "新草稿"));
+        send("新计划");
+        signal("确认", UserSignal.CONFIRM);
+        send("确认");
+        verifyNoInteractions(executor);
+        signal("取消", UserSignal.REJECT);
+        assertEquals("CHAT", send("取消").flowStage());
+        assertNull(state().getPendingDraftId());
     }
 
-    @Test
-    void pendingSupplementIsRoutedBeforeStateMachineConsumesIt() {
-        String message = "补充当前任务的信息";
-        AgentFlowState state = new AgentFlowState();
-        state.setStage(AgentFlowStateService.STAGE_WAIT_CONFIRM);
-        RouteDecision decision = decision(message, UserSignal.MODIFY);
-        ChatDispatchResult handled = new ChatDispatchResult(
-                "已补充", false, "REFINE", AgentFlowStateService.AGENT_PLANNER,
-                AgentFlowStateService.AGENT_PLANNER, AgentFlowStateService.STAGE_WAIT_CONFIRM);
-        when(flowStateService.get(1L, "session-1")).thenReturn(Optional.of(state));
-        when(chatDialogueService.findLatestAssistantReply(1L, "session-1", 10L))
-                .thenReturn("需要同步到日历中吗？");
-        when(routeAgent.route(message, "需要同步到日历中吗？", state)).thenReturn(decision);
-        when(flowStateProcessor.tryHandle(
-                org.mockito.ArgumentMatchers.eq(1L),
-                org.mockito.ArgumentMatchers.eq("session-1"),
-                org.mockito.ArgumentMatchers.eq(message),
-                org.mockito.ArgumentMatchers.same(state),
-                org.mockito.ArgumentMatchers.eq(UserSignal.MODIFY),
-                org.mockito.ArgumentMatchers.any())).thenReturn(Optional.of(handled));
-        List<String> progress = new ArrayList<>();
-
-        ChatDispatchResult result = service.process(
-                1L, "session-1", message, 10L, progress::add);
-
-        assertEquals("REFINE", result.dispatchType());
-        int routeIndex = indexOf(progress, "结合上一轮回复生成结构化路由事件");
-        int stateIndex = indexOf(progress, "状态机消费结构化路由事件");
-        assertTrue(routeIndex >= 0 && stateIndex > routeIndex);
+    @Test void plannerClarificationAndModificationStayInPlan() {
+        signal("做计划", UserSignal.NEW_PLAN);
+        when(clarification.shouldAsk(1L, "s", "做计划", 10L)).thenReturn(true);
+        assertEquals("PLAN_CLARIFICATION", send("做计划").dispatchType());
+        assertNull(state().getPendingDraftId());
+        signal("每天两小时", UserSignal.MODIFY);
+        when(planner.generateDraft(contains("每天两小时"))).thenReturn(new PlannerAgent.GeneratedPlan(20L, "草稿"));
+        assertEquals("PLAN", send("每天两小时").flowStage());
+        assertEquals(20L, state().getPendingDraftId());
     }
 
-    @Test
-    void planningStartsImmediatelyWhenClarificationIsNotNeeded() {
-        String message = "中秋节去杭州旅游，帮我规划时间安排";
-        stubReady(message, decision(message, UserSignal.READY_PLAN));
-        when(planClarificationPolicy.shouldAsk(1L, "session-1", message, 10L)).thenReturn(false);
-        ChatDispatchResult planned = new ChatDispatchResult(
-                "规划草稿", true, "PLAN", AgentFlowStateService.AGENT_PLANNER,
-                AgentFlowStateService.AGENT_EXECUTOR, AgentFlowStateService.STAGE_WAIT_FEEDBACK);
-        when(flowStateProcessor.startPlan(1L, "session-1", message, null)).thenReturn(planned);
-
-        ChatDispatchResult result = service.process(1L, "session-1", message, 10L);
-
-        assertEquals("PLAN", result.dispatchType());
-        assertEquals("规划草稿", result.aiResult());
-        verify(flowStateService, never()).waitPlannerConfirm(1L, "session-1", message);
+    @Test void imageFailureRetainsPlanAndCanBeRetried() {
+        states.seed(1L, "s", "PLAN", new PendingTask("计划", 22L, "正文", null));
+        PlanDraft draft = new PlanDraft();
+        when(drafts.findPending(1L, "s", 22L)).thenReturn(Optional.of(draft));
+        when(image.generate(eq(draft), anyString())).thenThrow(new IllegalStateException("timeout"));
+        signal("画图", UserSignal.GENERATE_PLAN_IMAGE);
+        assertEquals("ERROR", send("画图").dispatchType());
+        assertEquals("PLAN", state().getStage());
+        assertFalse(state().isProcessing());
+        assertEquals(22L, state().getPendingDraftId());
     }
 
-    @Test
-    void sparsePlanningRequestCanOfferClarificationChoices() {
-        String message = "帮我做个计划";
-        stubReady(message, decision(message, UserSignal.READY_PLAN));
-        when(planClarificationPolicy.shouldAsk(1L, "session-1", message, 10L)).thenReturn(true);
-        when(flowStateService.waitPlannerConfirm(1L, "session-1", message)).thenReturn(new AgentFlowState());
-
-        ChatDispatchResult result = service.process(1L, "session-1", message, 10L);
-
-        assertEquals("PLAN_CLARIFICATION", result.dispatchType());
-        assertTrue(result.aiResult().contains("可以补充"));
+    @Test void missingDraftCannotClearStateOrCallExecutor() {
+        states.seed(1L, "s", "IMAGE", new PendingTask("计划", 23L, "正文", "蓝色"));
+        when(drafts.findPending(1L, "s", 23L)).thenReturn(Optional.empty());
+        signal("同步", UserSignal.SYNC_PLAN);
+        assertEquals("IMAGE", send("同步").flowStage());
+        verifyNoInteractions(executor);
     }
 
-    private void stubReady(String message, RouteDecision decision) {
-        when(flowStateService.get(1L, "session-1")).thenReturn(Optional.empty());
-        when(chatDialogueService.findLatestAssistantReply(1L, "session-1", 10L)).thenReturn(null);
-        when(routeAgent.route(message, null, null)).thenReturn(decision);
-        when(flowStateProcessor.tryHandle(
-                org.mockito.ArgumentMatchers.eq(1L),
-                org.mockito.ArgumentMatchers.eq("session-1"),
-                org.mockito.ArgumentMatchers.eq(message),
-                org.mockito.ArgumentMatchers.isNull(),
-                org.mockito.ArgumentMatchers.eq(decision.getUserSignal()),
-                org.mockito.ArgumentMatchers.any())).thenReturn(Optional.empty());
+    @Test void uncertainWriteRetainsClaimAndBlocksRepeat() {
+        states.seed(1L, "s", "EXECUTE", PendingTask.instruction("删除任务"));
+        signal("确认", UserSignal.CONFIRM);
+        when(executor.executeConfirmed("删除任务")).thenThrow(new IllegalStateException("connection lost"));
+        assertEquals("ERROR", send("确认").dispatchType());
+        assertTrue(state().isProcessing());
+        assertEquals("PROCESSING", send("确认").dispatchType());
+        verify(executor, times(1)).executeConfirmed("删除任务");
     }
 
-    private RouteDecision decision(String task, UserSignal signal) {
-        RouteDecision decision = new RouteDecision();
-        decision.setTask(task);
-        decision.setUserSignal(signal);
-        return decision;
+    @Test void modelClarificationWithoutAWrittenToolKeepsConfirmation() {
+        states.seed(1L, "s", "EXECUTE", PendingTask.instruction("删除任务"));
+        signal("确认", UserSignal.CONFIRM);
+        when(executor.executeConfirmed("删除任务")).thenReturn(new ExecutorAgent.ExecutionResult("请说明哪一项", false));
+        assertEquals("EXECUTE", send("确认").flowStage());
+        assertFalse(state().isProcessing());
     }
 
-    private int indexOf(List<String> progress, String text) {
-        for (int index = 0; index < progress.size(); index++) {
-            if (progress.get(index).contains(text)) return index;
+    @Test void parallelConfirmationOnlyCallsExecutorOnce() throws Exception {
+        states.seed(1L, "s", "EXECUTE", PendingTask.instruction("删除任务"));
+        signal("确认", UserSignal.CONFIRM);
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        when(executor.executeConfirmed("删除任务")).thenAnswer(invocation -> {
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("test timeout");
+            return new ExecutorAgent.ExecutionResult("完成", true);
+        });
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<ChatDispatchResult> first = pool.submit(() -> send("确认"));
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            assertEquals("PROCESSING", send("确认").dispatchType());
+            release.countDown();
+            assertEquals("CHAT", first.get(5, TimeUnit.SECONDS).flowStage());
+            verify(executor, times(1)).executeConfirmed("删除任务");
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
         }
-        return -1;
+    }
+
+    @Test void sameSessionIdIsIsolatedByUser() {
+        states.seed(1L, "s", "EXECUTE", PendingTask.instruction("用户一操作"));
+        signal("确认", UserSignal.CONFIRM);
+        assertEquals("CHAT", service.process(2L, "s", "确认", 10L).flowStage());
+        assertEquals("EXECUTE", state().getStage());
+        verifyNoInteractions(executor);
+    }
+
+    private void signal(String message, UserSignal signal) {
+        RouteDecision decision = new RouteDecision();
+        decision.setTask(message);
+        decision.setUserSignal(signal);
+        when(route.route(eq(message), nullable(String.class), any(AgentFlowState.class))).thenReturn(decision);
+    }
+    private ChatDispatchResult send(String message) { return service.process(1L, "s", message, 10L); }
+    private AgentFlowState state() { return states.getOrCreate(1L, "s"); }
+
+    private static class MemoryStates extends AgentFlowStateService {
+        private record Key(Long user, String session) {}
+        private final Map<Key, AgentFlowState> rows = new HashMap<>();
+        MemoryStates() { super(null); }
+        synchronized void seed(Long user, String session, String stage, PendingTask pending) {
+            AgentFlowState row = new AgentFlowState();
+            row.setStateId((long) rows.size() + 1);
+            row.setUserId(user);
+            row.setSessionId(session);
+            row.setStage(stage);
+            apply(row, pending);
+            rows.put(new Key(user, session), row);
+        }
+        @Override public synchronized AgentFlowState getOrCreate(Long user, String session) {
+            if (!rows.containsKey(new Key(user, session))) seed(user, session, "CHAT", PendingTask.empty());
+            AgentFlowState copy = new AgentFlowState();
+            BeanUtils.copyProperties(rows.get(new Key(user, session)), copy);
+            return copy;
+        }
+        @Override public synchronized boolean claim(AgentFlowState snapshot) {
+            AgentFlowState row = row(snapshot);
+            if (row.isProcessing() || row.getVersion() != snapshot.getVersion()) return false;
+            row.setProcessing(true);
+            row.setVersion(row.getVersion() + 1);
+            snapshot.setVersion(row.getVersion());
+            return true;
+        }
+        @Override public synchronized void complete(AgentFlowState snapshot, ConversationStage next,
+                                                    PendingTask pending, AgentType agent) {
+            AgentFlowState row = row(snapshot);
+            assertTrue(row.isProcessing());
+            assertEquals(snapshot.getVersion(), row.getVersion());
+            row.setStage(next.name());
+            apply(row, pending);
+            row.setProcessing(false);
+            row.setVersion(row.getVersion() + 1);
+        }
+        @Override public synchronized void releaseClaim(AgentFlowState snapshot) {
+            AgentFlowState row = row(snapshot);
+            assertEquals(snapshot.getVersion(), row.getVersion());
+            row.setProcessing(false);
+            row.setVersion(row.getVersion() + 1);
+        }
+        private AgentFlowState row(AgentFlowState snapshot) { return rows.get(new Key(snapshot.getUserId(), snapshot.getSessionId())); }
+        private void apply(AgentFlowState row, PendingTask pending) {
+            row.setPendingTask(pending.task());
+            row.setPendingDraftId(pending.draftId());
+            row.setPendingPayload(pending.planPreview());
+            row.setImageInstruction(pending.imageInstruction());
+        }
     }
 }

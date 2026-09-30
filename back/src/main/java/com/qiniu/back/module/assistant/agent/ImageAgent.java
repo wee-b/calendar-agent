@@ -36,9 +36,14 @@ public class ImageAgent {
     }
 
     public String generate(PlanDraft draft) {
+        return generate(draft, null);
+    }
+
+    /** 按累计的图片反馈重新生成；规划数据不被图片修改覆盖。 */
+    public String generate(PlanDraft draft, String instruction) {
         ResolvedImageModel resolved = resolve();
         ImageGenerationRequest request = new ImageGenerationRequest(
-                resolved.model(), buildPrompt(draft), resolved.size(),
+                resolved.model(), buildPrompt(draft) + (isBlank(instruction) ? "" : "\n\n图片要求：\n" + instruction), resolved.size(),
                 "jpeg", "url", false, resolved.watermark());
         try {
             ImageGenerationResponse response = restClientBuilder

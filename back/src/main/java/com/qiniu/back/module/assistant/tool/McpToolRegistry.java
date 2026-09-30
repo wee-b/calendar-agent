@@ -77,6 +77,19 @@ public class McpToolRegistry {
         return executeWithRetry(tool, args);
     }
 
+    /** 已确认的 Executor 调用使用此入口：异常原样上抛，不重试或伪装成成功文本。 */
+    public String executeOnce(String name, String argumentsJson) {
+        McpToolDefinition tool = tools.get(name);
+        if (tool == null) throw new IllegalArgumentException("未知的工具: " + name);
+        try {
+            Map<String, Object> args = mapper.readValue(argumentsJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            return tool.getExecutor().apply(args);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("工具参数格式错误", exception);
+        }
+    }
+
     private String executeWithRetry(McpToolDefinition tool, Map<String, Object> args) {
         int maxAttempts = tool.getRetryCount() + 1;
         long delayMs = tool.getRetryDelayMs();
