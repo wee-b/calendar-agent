@@ -16,3 +16,7 @@ class ChatResult(BaseModel):
     sessionId: str
     aiResult: str
     responseTimeMs: int
+
+
+class NewSessionResult(BaseModel):
+    sessionId: str

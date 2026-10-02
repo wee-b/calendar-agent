@@ -1,10 +1,13 @@
 <template>
   <div class="chat-history" :class="{ 'has-messages': messages.length > 0 }" ref="chatHistoryRef">
+    <button v-if="hasMoreHistory" class="load-history" :disabled="isLoadingHistory || isSending" @click="$emit('load-earlier')">
+      {{ isLoadingHistory ? '加载中…' : '加载更早的消息' }}
+    </button>
     <EmptyChat v-if="messages.length === 0" @select-prompt="$emit('select-prompt', $event)" />
 
     <article
       v-for="(msg, index) in messages"
-      :key="index"
+      :key="msg.dialogueId ?? `local-${index}`"
       class="msg-item"
       :class="isUserRole(msg.role) ? 'is-user' : 'is-ai'"
     >
@@ -103,7 +106,7 @@
             :class="{ active: readingMsgIndex === index && !isPaused, paused: readingMsgIndex === index && isPaused }"
             @click="$emit('read', msg.content, index)"
           >{{ readingMsgIndex === index ? (isPaused ? '继续' : '暂停') : '朗读' }}</button>
-          <button type="button" class="action-icon danger" @click="$emit('delete-last-round')">撤回</button>
+          <button v-if="index === messages.length - 1" type="button" class="action-icon danger" :disabled="isSending" @click="$emit('delete-last-round')">撤回</button>
         </div>
       </div>
     </article>
@@ -141,6 +144,9 @@ import TypingIndicator from './TypingIndicator.vue';
 import type { ChatMessage } from './types';
 
 defineProps<{
+  hasMoreHistory: boolean;
+  isLoadingHistory: boolean;
+  isSending: boolean;
   messages: ChatMessage[];
   readingMsgIndex: number | null;
   isPaused: boolean;
@@ -196,6 +202,7 @@ const openChoiceInput = async (index: number, kind: string) => {
 };
 
 const emit = defineEmits<{
+  (e: 'load-earlier'): void;
   (e: 'select-prompt', prompt: string): void;
   (e: 'toggle-thinking', index: number): void;
   (e: 'copy', content: string): void;
@@ -219,10 +226,21 @@ const scrollToBottom = async () => {
   }
 };
 
-defineExpose({ scrollToBottom });
+const prependKeepingPosition = async (prepend: () => void) => {
+  const element = chatHistoryRef.value;
+  const height = element?.scrollHeight || 0;
+  const top = element?.scrollTop || 0;
+  prepend();
+  await nextTick();
+  if (element) element.scrollTop = top + element.scrollHeight - height;
+};
+
+defineExpose({ scrollToBottom, prependKeepingPosition });
 </script>
 
 <style scoped>
+.load-history { align-self: center; padding: 8px 16px; border: 0; border-radius: 8px; background: #f3efe7; color: #756650; cursor: pointer; }
+.load-history:disabled { cursor: wait; opacity: 0.6; }
 .chat-history {
   flex: 1 1 0;
   min-width: 0;

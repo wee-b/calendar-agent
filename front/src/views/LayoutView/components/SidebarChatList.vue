@@ -59,7 +59,7 @@ const visibleSessions = computed(() => {
 });
 
 const sortSessionsByRecent = (list: ChatSessionVO[]) => {
-  return [...list].sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime());
+  return [...list].sort((a, b) => new Date(b.lastMessageTime || b.createTime).getTime() - new Date(a.lastMessageTime || a.createTime).getTime());
 };
 
 const fetchSessions = async () => {

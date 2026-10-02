@@ -1,8 +1,6 @@
 package com.qiniu.back.module.assistant.service.impl;
 
-import com.qiniu.back.module.assistant.domain.vo.ChatHistoryItemVO;
 import com.qiniu.back.module.assistant.domain.vo.ChatResponseVO;
-import com.qiniu.back.module.assistant.domain.vo.ChatSessionVO;
 import com.qiniu.back.module.assistant.service.ChatDialogueService;
 import com.qiniu.back.module.assistant.domain.result.ChatDispatchResult;
 import com.qiniu.back.module.assistant.service.ChatFacade;
@@ -15,7 +13,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -73,36 +70,6 @@ public class ChatFacadeImpl implements ChatFacade {
         emitter.onTimeout(() -> log.warn("SSE connection timeout"));
         emitter.onError(e -> log.error("SSE connection error", e));
         return emitter;
-    }
-
-    @Override
-    public String newSession() {
-        return UUID.randomUUID().toString();
-    }
-
-    @Override
-    public List<ChatHistoryItemVO> getHistory(String sessionId) {
-        return chatDialogueService.getHistory(LoginUserContext.getUserId(), sessionId);
-    }
-
-    @Override
-    public void deleteSession(String sessionId) {
-        chatDialogueService.deleteSession(LoginUserContext.getUserId(), sessionId);
-    }
-
-    @Override
-    public void deleteLastRound(String sessionId) {
-        chatDialogueService.deleteLastRound(LoginUserContext.getUserId(), sessionId);
-    }
-
-    @Override
-    public List<ChatSessionVO> listSessions() {
-        return chatDialogueService.listSessions(LoginUserContext.getUserId());
-    }
-
-    @Override
-    public List<ChatHistoryItemVO> getLatestSession() {
-        return chatDialogueService.getLatestSession(LoginUserContext.getUserId());
     }
 
     private void handleStreamChatTask(SseEmitter emitter, Long userId, String sid,

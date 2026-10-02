@@ -91,27 +91,46 @@ INSERT INTO `yl_daily_note` (`user_id`, `note_date`, `content`) VALUES
 -- ============================================================
 -- AI 对话记录（yl_ai_dialogue）
 -- ============================================================
-INSERT INTO `yl_ai_dialogue` (`user_id`, `session_id`, `role`, `user_text`, `ai_result`, `intent`, `execute_result`) VALUES
+INSERT INTO `yl_ai_dialogue` (`user_id`, `session_id`, `role`, `content`) VALUES
 -- 会话1：创建背单词待办
-(36, 'sess-20260601-001', 'user', '帮我创建一个待办，每个工作日背50个英语单词，从6月1号到6月30号', NULL, 'add_todo', '已创建待办'),
-(36, 'sess-20260601-001', 'assistant', NULL, '好的，已为您创建目标"每日背单词"：6月1日至30日，每周一至周五，共22天。颜色为绿色，高优先级。每天我会提醒你完成当天的背诵任务。', 'add_todo', 'success'),
+(36, 'sess-20260601-001', 'user', '帮我创建一个待办，每个工作日背50个英语单词，从6月1号到6月30号'),
+(36, 'sess-20260601-001', 'assistant', '好的，已为您创建目标"每日背单词"：6月1日至30日，每周一至周五，共22天。颜色为绿色，高优先级。每天我会提醒你完成当天的背诵任务。'),
 
 -- 会话2：查询某天安排
-(36, 'sess-20260603-001', 'user', '今天有什么安排', NULL, 'query_todo', '查询6月3日待办'),
-(36, 'sess-20260603-001', 'assistant', NULL, '6月3日您有4个待办：1）背诵Unit 3单词 2）背部训练 3）完成实体类编写 4）早起打卡。其中早起打卡和实体类编写已完成，单词和健身还没完成哦，加油！', 'query_todo', 'success'),
+(36, 'sess-20260603-001', 'user', '今天有什么安排'),
+(36, 'sess-20260603-001', 'assistant', '6月3日您有4个待办：1）背诵Unit 3单词 2）背部训练 3）完成实体类编写 4）早起打卡。其中早起打卡和实体类编写已完成，单词和健身还没完成哦，加油！'),
 
 -- 会话3：完成每日任务
-(36, 'sess-20260603-002', 'user', '帮我把今天的健身标记为已完成', NULL, 'update_todo', '完成健身打卡'),
-(36, 'sess-20260603-002', 'assistant', NULL, '已将6月3日的"健身计划——背部训练"标记为已完成。今天还有背单词任务哦，记得完成！', 'update_todo', 'success'),
+(36, 'sess-20260603-002', 'user', '帮我把今天的健身标记为已完成'),
+(36, 'sess-20260603-002', 'assistant', '已将6月3日的"健身计划——背部训练"标记为已完成。今天还有背单词任务哦，记得完成！'),
 
 -- 会话4：创建健身计划
-(36, 'sess-20260601-002', 'user', '再加一个健身计划，每周一三五去健身房，从这个月开始', NULL, 'add_todo', '已创建待办'),
-(36, 'sess-20260601-002', 'assistant', NULL, '好的，已创建"健身计划"：6月1日至30日，每周一三五，共13次。颜色为蓝色。周一练胸、周三练背、周五练腿，加油！', 'add_todo', 'success'),
+(36, 'sess-20260601-002', 'user', '再加一个健身计划，每周一三五去健身房，从这个月开始'),
+(36, 'sess-20260601-002', 'assistant', '好的，已创建"健身计划"：6月1日至30日，每周一三五，共13次。颜色为蓝色。周一练胸、周三练背、周五练腿，加油！'),
 
 -- 会话5：闲聊
-(36, 'sess-20260605-001', 'user', '我最近表现怎么样', NULL, 'chat', '查询统计数据'),
-(36, 'sess-20260605-001', 'assistant', NULL, '您最近表现不错！6月1日到5日，早起打卡完成率 100%，项目开发任务全部按时完成，健身完成了 2/3 次。不过背单词和阅读计划的完成率还不太理想，继续加油哦！', 'chat', 'success');
+(36, 'sess-20260605-001', 'user', '我最近表现怎么样'),
+(36, 'sess-20260605-001', 'assistant', '您最近表现不错！6月1日到5日，早起打卡完成率 100%，项目开发任务全部按时完成，健身完成了 2/3 次。不过背单词和阅读计划的完成率还不太理想，继续加油哦！');
 
 
 
 
+
+-- 示例会话与消息同步初始化；只用于全新数据库的样例数据。
+INSERT INTO yl_ai_session (
+    user_id, session_id, title, last_message_id, last_message_time,
+    message_count, create_time, update_time
+)
+SELECT g.user_id, g.session_id,
+       CASE WHEN CHAR_LENGTH(first_user.content) > 30 THEN CONCAT(LEFT(first_user.content, 30), '...')
+            ELSE first_user.content END,
+       latest.dialogue_id, latest.create_time, g.message_count, g.create_time, g.update_time
+FROM (
+    SELECT user_id, session_id,
+           MIN(CASE WHEN role = 'user' THEN dialogue_id END) AS first_user_id,
+           MAX(dialogue_id) AS last_message_id, COUNT(*) AS message_count,
+           MIN(create_time) AS create_time, MAX(update_time) AS update_time
+    FROM yl_ai_dialogue WHERE deleted_flag = 0 GROUP BY user_id, session_id
+) g
+LEFT JOIN yl_ai_dialogue first_user ON first_user.dialogue_id = g.first_user_id
+JOIN yl_ai_dialogue latest ON latest.dialogue_id = g.last_message_id;

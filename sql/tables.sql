@@ -223,7 +223,26 @@ CREATE TABLE `yl_chat_context_summary`
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='聊天上下文摘要表';
 
 
--- yl_ai_dialogue（对话记录表）
+-- yl_ai_session（会话元数据，首次写入消息时创建）
+DROP TABLE IF EXISTS `yl_ai_session`;
+CREATE TABLE `yl_ai_session`
+(
+    `id`                BIGINT       NOT NULL AUTO_INCREMENT,
+    `user_id`           BIGINT       NOT NULL COMMENT '用户ID',
+    `session_id`        VARCHAR(64)  NOT NULL COMMENT '会话ID',
+    `title`             VARCHAR(128) NULL COMMENT '会话标题，NULL表示尚未生成',
+    `last_message_id`   BIGINT       NULL COMMENT '最近有效消息ID',
+    `last_message_time` DATETIME     NULL COMMENT '最近有效消息时间',
+    `message_count`     INT          NOT NULL DEFAULT 0 COMMENT '有效消息条数，非轮数',
+    `deleted_flag`      TINYINT(1)   NOT NULL DEFAULT 0,
+    `create_time`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_session` (`user_id`, `session_id`),
+    KEY `idx_user_recent` (`user_id`, `deleted_flag`, `last_message_time`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI会话表';
+
+-- yl_ai_dialogue（一行一条消息，不要求用户与助手交替）
 DROP TABLE IF EXISTS `yl_ai_dialogue`;
 
 CREATE TABLE `yl_ai_dialogue`
@@ -231,24 +250,18 @@ CREATE TABLE `yl_ai_dialogue`
     `dialogue_id`   BIGINT       NOT NULL AUTO_INCREMENT COMMENT '对话记录ID',
     `user_id`       BIGINT       NOT NULL COMMENT '用户ID',
 
-    `session_id`    VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '会话ID，分组多轮对话',
-    `role`          VARCHAR(16)  NOT NULL DEFAULT 'user' COMMENT '角色：user-用户 assistant-助手',
-
-    `user_text`     TEXT         NULL DEFAULT NULL COMMENT '用户输入文本（语音转文字）',
-    `ai_result`     TEXT         NULL DEFAULT NULL COMMENT 'AI返回文本',
+    `session_id`    VARCHAR(64)  NOT NULL COMMENT '会话ID',
+    `role`          VARCHAR(16)  NOT NULL COMMENT '角色：user-用户 assistant-助手',
+    `content`       TEXT         NOT NULL COMMENT '消息正文',
     `ai_audio_url`  VARCHAR(500) NULL DEFAULT NULL COMMENT 'AI回复TTS音频URL',
     `response_time_ms` BIGINT    NULL DEFAULT NULL COMMENT 'AI完整响应耗时，单位毫秒',
-
-    `intent`         VARCHAR(50)  NULL DEFAULT NULL COMMENT '识别意图：add_todo/delete_todo/query_todo/update_todo/chat',
-    `execute_result` VARCHAR(255) NULL DEFAULT NULL COMMENT '执行结果摘要',
 
     `deleted_flag`  TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '删除状态：0-未删除 1-已删除',
     `create_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 
     PRIMARY KEY (`dialogue_id`),
-    KEY `idx_user_session` (`user_id`, `session_id`),
-    KEY `idx_user_create_time` (`user_id`, `create_time`)
+    KEY `idx_history` (`user_id`, `session_id`, `deleted_flag`, `dialogue_id`)
 )ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'AI对话记录表';
 
 

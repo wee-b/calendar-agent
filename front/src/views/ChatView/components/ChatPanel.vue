@@ -21,6 +21,10 @@
       <ChatMessageList
         ref="chatHistoryRef"
         :messages="messages"
+        :has-more-history="hasMoreHistory"
+        :is-loading-history="isLoadingHistory"
+        :is-sending="isSending"
+        @load-earlier="loadEarlierHistory"
         :reading-msg-index="readingMsgIndex"
         :is-paused="isPaused"
         :is-user-role="isUserRole"
@@ -96,13 +100,19 @@ const isUserLoggedIn = computed(() => !!tokenRef.value);
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
 const messages = ref<ChatMessage[]>([]);
+const hasMoreHistory = ref(false);
+const nextBeforeId = ref<number | null>(null);
+const isLoadingHistory = ref(false);
 const inputText = ref('');
 const isSending = ref(false);
 
 const isDropdownOpen = ref(false);
 const showDeleteConfirm = ref(false);
 const pendingDeleteId = ref<string | null>(null);
-const chatHistoryRef = ref<{ scrollToBottom: () => Promise<void> } | null>(null);
+const chatHistoryRef = ref<{
+  scrollToBottom: () => Promise<void>;
+  prependKeepingPosition: (prepend: () => void) => Promise<void>;
+} | null>(null);
 
 const isRecording = ref(false);
 const isExpanded = ref(false);
@@ -333,7 +343,7 @@ const handleQuickReply = (content: string) => {
 
 // ================= 浼氳瘽绠＄悊 =================
 const sortSessionsByRecent = (list: ChatSessionVO[]) => {
-  return [...list].sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime());
+  return [...list].sort((a, b) => new Date(b.lastMessageTime || b.createTime).getTime() - new Date(a.lastMessageTime || a.createTime).getTime());
 };
 
 const fetchSessions = async () => {
@@ -353,10 +363,16 @@ const loadSessionById = async (sessionId: string) => {
   const loadToken = ++historyLoadToken;
   currentSessionId.value = sessionId;
   messages.value = [];
+  hasMoreHistory.value = false;
+  nextBeforeId.value = null;
+  isLoadingHistory.value = false;
   try {
     const history = await getHistoryAPI(sessionId);
     if (loadToken !== historyLoadToken || sessionId !== currentSessionId.value) return;
-    messages.value = history.map(h => ({
+    hasMoreHistory.value = history.hasMore;
+    nextBeforeId.value = history.nextBeforeId;
+    messages.value = history.items.map(h => ({
+      dialogueId: h.dialogueId,
       role: h.role,
       content: h.content,
       responseTimeMs: h.responseTimeMs,
@@ -367,20 +383,33 @@ const loadSessionById = async (sessionId: string) => {
 };
 
 const selectSession = async (session: ChatSessionVO) => {
-  currentSessionId.value = session.sessionId;
   isDropdownOpen.value = false;
-  messages.value = [];
-  router.replace({ path: '/conversation', query: { sessionId: session.sessionId } });
+  if (getRouteSessionId() === session.sessionId) await loadSessionById(session.sessionId);
+  else await router.replace({ path: '/conversation', query: { sessionId: session.sessionId } });
+};
+
+const loadEarlierHistory = async () => {
+  const sessionId = currentSessionId.value;
+  const beforeId = nextBeforeId.value;
+  const loadToken = historyLoadToken;
+  if (!sessionId || !beforeId || !hasMoreHistory.value || isLoadingHistory.value || isSending.value) return;
+  isLoadingHistory.value = true;
   try {
-    const history = await getHistoryAPI(session.sessionId);
-    messages.value = history.map(h => ({
-      role: h.role,
-      content: h.content,
-      responseTimeMs: h.responseTimeMs,
-      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
-    }));
-    scrollToBottom();
-  } catch (error) {}
+    const page = await getHistoryAPI(sessionId, beforeId);
+    if (loadToken !== historyLoadToken || sessionId !== currentSessionId.value) return;
+    const existing = new Set(messages.value.map(m => m.dialogueId));
+    const earlier = page.items.filter(m => !existing.has(m.dialogueId));
+    hasMoreHistory.value = page.hasMore;
+    nextBeforeId.value = page.nextBeforeId;
+    await chatHistoryRef.value?.prependKeepingPosition(() => {
+      messages.value = [...earlier, ...messages.value];
+      if (readingMsgIndex.value !== null) readingMsgIndex.value += earlier.length;
+    });
+  } catch (error) {
+    // request 拦截器展示错误，保留原游标以便重试。
+  } finally {
+    if (loadToken === historyLoadToken) isLoadingHistory.value = false;
+  }
 };
 
 const createNewSession = async () => {
@@ -389,6 +418,8 @@ const createNewSession = async () => {
   currentSessionId.value = null;
   messages.value = [];
   historyLoadToken++;
+  hasMoreHistory.value = false;
+  nextBeforeId.value = null;
   await router.replace({ path: '/conversation' });
 };
 
@@ -476,18 +507,13 @@ const handleRead = (text: string, msgIndex?: number) => {
 };
 
 const handleDeleteLastRound = async () => {
-  if (!currentSessionId.value) return;
+  if (!currentSessionId.value || isSending.value) return;
   try {
     await deleteLastRoundAPI(currentSessionId.value);
     ElMessage.success('已撤回上一轮对话');
-    const history = await getHistoryAPI(currentSessionId.value);
-    messages.value = history.map(h => ({
-      role: h.role,
-      content: h.content,
-      responseTimeMs: h.responseTimeMs,
-      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
-    }));
-    scrollToBottom();
+    await loadSessionById(currentSessionId.value);
+    await fetchSessions();
+    emit('refresh');
   } catch (error) {}
 };
 
@@ -763,10 +789,11 @@ const handleSend = async () => {
       (error) => {
         clearTimeout(slowTimer);
         const lastMsg = messages.value[messages.value.length - 1];
-        if (lastMsg && lastMsg.loading) {
+        if (lastMsg && lastMsg.role === 'ai') {
           finishThinkingWithFailure(lastMsg);
           lastMsg.thinkingCollapsed = false;
           lastMsg.loading = false;
+          lastMsg.pendingContent = '';
           lastMsg.content = error || '抱歉，网络开小差了，请重试。';
         }
       },

@@ -1,13 +1,26 @@
+import logging
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from scalar_fastapi import get_scalar_api_reference
 
 from app.api.endpoints import api_router
 from app.core.config.common.logging_config import configure_logging
+from app.core.config.common.settings import get_settings
 from app.core.exception.handlers import register_exception_handlers
 from app.core.middleware.access_log import access_log
 from app.core.middleware.auth import authenticate_request
 from app.core.middleware.cors import configure_cors
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("接口文档地址：%s/docs", get_settings().public_base_url.rstrip("/"))
+    yield
+
 
 app = FastAPI(
     title="Calendar AI Service",
@@ -15,6 +28,7 @@ app = FastAPI(
     version="0.1.0",
     docs_url=None,   # 关闭默认 Swagger UI
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 configure_logging()
@@ -42,4 +56,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8001,
         reload=True,
+        log_config=None,
     )

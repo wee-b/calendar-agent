@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     """从公开配置文件和进程环境变量读取连接与模型选择参数。"""
 
     java_base_url: str = "http://127.0.0.1:8080"
+    public_base_url: str = "http://127.0.0.1:8001"
     cors_origins: list[str] = Field(default_factory=list)
     token_header_name: str = "yvli-token"
     java_request_timeout: float = 5.0

@@ -64,6 +64,13 @@ class ChatGraph:
         self.model = model or ModelClient()
         self.mcp_factory = mcp_factory or JavaMcpClient
 
+    @property
+    def agent_label(self) -> str:
+        # 自定义模型替身可能没有厂商配置，不以默认厂商冒充实际调用厂商。
+        config = getattr(self.model, "config", None)
+        provider = config.model.provider if config is not None else "unknown"
+        return f"chatAgent({provider})"
+
     async def run(self, messages: list[ChatMessage], token: str) -> str:
         """非流式入口，返回可落库的完整回答。"""
 

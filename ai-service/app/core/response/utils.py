@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from app.core.response.models import FailResponse, SuccessResponse
 
 
-def success(data: BaseModel | Sequence[BaseModel]) -> dict[str, object]:
+def success(data: BaseModel | Sequence[BaseModel] | None = None) -> dict[str, object]:
     return SuccessResponse(data=data).model_dump()
 
 

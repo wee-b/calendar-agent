@@ -1,6 +1,10 @@
 // src/api/chat.ts
 import request from '../utils/request';
 import { getToken, clearAuth } from '../utils/auth';
+import { consumeChatStream } from './chatStream';
+
+// 独立于 Java 的 API 地址；开发环境留空，通过 Vite /chat 代理访问 Python。
+const AI_BASE_URL = (import.meta.env.VITE_AI_API_BASE_URL || '').replace(/\/$/, '');
 
 export interface ChatRequestDTO {
     sessionId: string;
@@ -33,17 +37,24 @@ export interface ChatSessionVO {
     sessionId: string;
     title: string;
     createTime: string;
+    lastMessageTime?: string | null;
     messageCount: number;
+}
+
+export interface ChatHistoryPage {
+    items: ChatHistoryItemVO[];
+    hasMore: boolean;
+    nextBeforeId: number | null;
 }
 
 // 1. 开启新对话
 export const newSessionAPI = (): Promise<Record<string, string>> => {
-    return request.post('/chat/new-session');
+    return request.post('/chat/new-session', undefined, { baseURL: AI_BASE_URL });
 };
 
 // 2. 发送对话消息（非流式，保留兼容）
 export const sendChatAPI = (data: ChatRequestDTO): Promise<ChatResponseVO> => {
-    return request.post('/chat', data);
+    return request.post('/chat', data, { baseURL: AI_BASE_URL });
 };
 
 // 2b. 流式发送对话消息（SSE）
@@ -55,14 +66,13 @@ export const streamChatAPI = async (
     onOpen?: () => void,
     onProgress?: (message: string) => void,
     onResponseTime?: (responseTimeMs: number) => void,
-    onDispatchType?: (dispatchType: string) => void
+    _onDispatchType?: (dispatchType: string) => void
 ): Promise<void> => {
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
     const token = getToken();
     const tokenName = import.meta.env.VITE_TOKEN_KEY || 'yvli-token';
 
     try {
-        const response = await fetch(`${baseUrl}/chat/stream`, {
+        const response = await fetch(`${AI_BASE_URL}/chat/stream`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -84,44 +94,8 @@ export const streamChatAPI = async (
 
         onOpen?.();
 
-        const reader = response.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const parts = buffer.split('\n\n');
-            buffer = parts.pop() || '';
-
-            for (const part of parts) {
-                const lines = part.split('\n');
-                let eventName = 'message';
-                const dataLines: string[] = [];
-                for (const line of lines) {
-                    if (line.startsWith('event:')) eventName = line.substring(6).trim();
-                    if (line.startsWith('data:')) dataLines.push(line.substring(5).trim());
-                }
-
-                const content = dataLines.join('\n');
-                if (!content) continue;
-
-                if (eventName === 'progress') {
-                    onProgress?.(content);
-                } else if (eventName === 'dispatchType') {
-                    onDispatchType?.(content);
-                } else if (eventName === 'responseTime') {
-                    const responseTimeMs = Number(content);
-                    if (Number.isFinite(responseTimeMs)) onResponseTime?.(responseTimeMs);
-                } else {
-                    onToken(content);
-                }
-            }
-        }
-
-        onDone();
+        if (!response.body) throw new Error('未收到回复数据流');
+        await consumeChatStream(response.body, { onToken, onDone, onProgress, onResponseTime });
     } catch (error: any) {
         onError(error.message || '网络连接异常');
     }
@@ -129,20 +103,22 @@ export const streamChatAPI = async (
 
 // 3. 获取历史会话列表
 export const getSessionsAPI = (): Promise<ChatSessionVO[]> => {
-    return request.get('/chat/sessions');
+    return request.get('/chat/sessions', { baseURL: AI_BASE_URL });
 };
 
 // 4. 获取某次会话的具体聊天记录
-export const getHistoryAPI = (sessionId: string): Promise<ChatHistoryItemVO[]> => {
-    return request.get('/chat/history', { params: { sessionId } });
+export const getHistoryAPI = (
+    sessionId: string, beforeId?: number, limit = 20,
+): Promise<ChatHistoryPage> => {
+    return request.get('/chat/history', { baseURL: AI_BASE_URL, params: { sessionId, beforeId, limit } });
 };
 
 // 5. 删除整个对话
 export const deleteSessionAPI = (sessionId: string): Promise<void> => {
-    return request.delete('/chat/session', { params: { sessionId } });
+    return request.delete('/chat/session', { baseURL: AI_BASE_URL, params: { sessionId } });
 };
 
 // 6. 撤回上一轮对话
 export const deleteLastRoundAPI = (sessionId: string): Promise<void> => {
-    return request.delete('/chat/last-round', { params: { sessionId } });
+    return request.delete('/chat/last-round', { baseURL: AI_BASE_URL, params: { sessionId } });
 };

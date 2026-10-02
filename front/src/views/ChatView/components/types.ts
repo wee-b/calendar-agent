@@ -1,4 +1,5 @@
 export interface ChatMessage {
+  dialogueId?: number;
   role: string;
   content: string;
   pendingContent?: string;

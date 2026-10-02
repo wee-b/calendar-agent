@@ -39,6 +39,7 @@ PR_SUMMARY_DAY3.md
 
 docs/*
 !docs/08-chat-state-transition-table.md
+!docs/10-java-chat-history-migration.md
 
 # 用于存放密钥
 application-unknown.yml

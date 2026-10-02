@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -11,11 +11,35 @@ from app.core.exception.error_code import StreamErrorCode
 from app.core.response.utils import success
 from app.service.chat import ChatService
 from app.schemas.chat import ChatRequest
+from app.schemas.chat.history import DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT
 from app.schemas.chat.model_stream import ErrorData, ErrorEvent
 
 
 router = APIRouter(prefix="/chat", tags=["对话"])
 logger = logging.getLogger(__name__)
+
+
+@router.post("/new-session")
+async def new_session():
+    return success(ChatService.new_session())
+
+
+@router.delete("/session")
+async def delete_session(
+    request: Request,
+    session_id: str = Query(..., alias="sessionId", min_length=1, max_length=64, pattern=r"\S"),
+):
+    await ChatService().delete_session(request.state.user_id, session_id)
+    return success()
+
+
+@router.delete("/last-round")
+async def delete_last_round(
+    request: Request,
+    session_id: str = Query(..., alias="sessionId", min_length=1, max_length=64, pattern=r"\S"),
+):
+    await ChatService().delete_last_round(request.state.user_id, session_id)
+    return success()
 
 
 @router.post("")
@@ -67,3 +91,45 @@ async def chat_stream(body: ChatRequest, request: Request):
         generate(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/history")
+async def history(
+    request: Request,
+    session_id: str = Query(
+        ...,
+        alias="sessionId",
+        min_length=1,
+        max_length=64,
+        pattern=r"\S",
+    ),
+    before_id: int | None = Query(None, alias="beforeId", gt=0),
+    limit: int = Query(DEFAULT_HISTORY_LIMIT, ge=1, le=MAX_HISTORY_LIMIT),
+):
+    result = await ChatService().get_history(
+        user_id=request.state.user_id,
+        session_id=session_id,
+        before_id=before_id,
+        limit=limit,
+    )
+    return success(result)
+
+
+@router.get("/sessions")
+async def sessions(request: Request):
+    result = await ChatService().list_sessions(
+        user_id=request.state.user_id,
+    )
+    return success(result)
+
+
+@router.get("/latest", summary="获取当前会话的 RouteAgent 意图判断上下文")
+async def latest(
+    request: Request,
+    session_id: str = Query(..., alias="sessionId", min_length=1, max_length=64, pattern=r"\S"),
+    through_id: int | None = Query(None, alias="throughId", gt=0),
+):
+    result = await ChatService().get_route_context(
+        request.state.user_id, session_id, through_id=through_id
+    )
+    return success(result)

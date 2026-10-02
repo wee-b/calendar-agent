@@ -7,6 +7,8 @@ class ErrorCode(Enum):
     """前三项是公开错误信息；legacy_http 保留旧接口的 detail 响应结构。"""
 
     BUSINESS_ERROR = (4000, "业务错误", 400)
+    CHAT_SESSION_DELETED = (40901, "会话已删除，请开启新对话", 409)
+    CHAT_SESSION_PROCESSING = (40902, "会话正在执行操作，请完成后重试", 409)
     MODEL_TEXT_DELTA_INVALID = (50201, "模型文本增量格式异常", 502)
     MODEL_TOOL_DELTA_INVALID = (50202, "模型工具增量格式异常", 502)
     MODEL_MESSAGE_INVALID = (50203, "模型消息格式异常", 502)

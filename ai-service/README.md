@@ -1,10 +1,35 @@
 # Calendar AI Service（最小对话版）
 
-当前提供 `GET /health`、`GET /auth/me`、`POST /chat`、流式 `POST /chat/stream` 和独立的 `POST /rag/search`。对话由 LangGraph 编排模型和 Java `/mcp` 的只读 `queryDayDetail` 工具，最多三轮模型调用；RAG 暂不参与对话。持久化 checkpoint 和写操作确认仍属 09 文档后续阶段。
+当前提供 `GET /health`、`GET /auth/me`、`POST /chat`、流式 `POST /chat/stream`、`GET /chat/history`、`GET /chat/sessions`、`GET /chat/latest`、`POST /chat/new-session`、`DELETE /chat/session`、`DELETE /chat/last-round` 和独立的 `POST /rag/search`。对话由 LangGraph 编排模型和 Java `/mcp` 的只读 `queryDayDetail` 工具，最多三轮模型调用；RAG 暂不参与对话。持久化 checkpoint 和写操作确认仍属 09 文档后续阶段。
 
 只读 MCP 工具的瞬态错误由 Python 最多尝试 `MCP_READ_RETRY_ATTEMPTS` 次，间隔 `MCP_READ_RETRY_DELAY_MS` 毫秒。Java MCP 每次请求只执行一次并返回 `retryable` 标记；写工具不自动重试。
 
 代码按职责分层：`app/api/routers` 处理 HTTP，`app/core` 管理配置、中间件、异常和响应，`app/cache` 校验 Redis token 与缓存 Embedding，`app/service` 编排对话和 RAG，`app/repository` 访问 MySQL 与 Qdrant，`app/helper` 封装模型与 Java 客户端，`app/db` 提供连接，`app/schemas` 定义请求与响应。接口入口统一在 `app/api/endpoints.py` 注册。
+
+## 历史消息与会话列表
+
+- `GET /chat/history?sessionId=xxx&limit=20` 获取最新一页，默认 20 条消息（user 与 assistant 合计，不是轮数），`limit` 范围为 1–100。
+- `GET /chat/history?sessionId=xxx&beforeId=81&limit=20` 获取 ID 小于 81 的更早消息。返回 `data: {items, hasMore, nextBeforeId}`，页内按 ID 升序；后续使用 `nextBeforeId`。空页或最后一页的游标为 NULL。
+- `GET /chat/sessions` 读取 `yl_ai_session`，按最近活动倒序，返回 `sessionId/title/createTime/lastMessageTime/messageCount`。`createTime` 是会话创建时间，排序应使用 `lastMessageTime`。
+- `GET /chat/latest?sessionId=xxx` 返回供 RouteAgent 使用的上下文：`{sessionId, previousReply, userMessages}`。取最后一条有效助手回复及其后全部用户输入，没有助手回复时取全部用户输入，不按 20 条截断。可用 `throughId` 固定本次读取上界。
+- RouteAgent 在进程内直接调用 `ChatService.get_route_context()`；尚未入库的当前输入用 `current_message` 追加，已入库的当前输入用 `through_id` 定位。当前只提供上下文读取，尚未接入意图识别节点。
+- `POST /chat/new-session` 返回 UUID；`DELETE /chat/session?sessionId=xxx` 删除会话；`DELETE /chat/last-round?sessionId=xxx` 按助手回复边界撤回，支持连续多条用户输入。
+- 所有接口沿用 token 鉴权；用户与会话隔离，已删除会话不可读取或重新追加消息。
+
+前端已适配分页与 Python SSE，开发环境 `/chat`、`/rag` 指向 Python 8001。生产环境可用 `VITE_AI_API_BASE_URL` 配置独立 Python 地址。已删除的 Java 查询及会话管理入口与剩余配套改动见 [10 文档](../docs/10-java-chat-history-migration.md)。
+
+仓储支持 `append_messages()` 保存连续同角色消息；首次写入创建会话，消息与标题、计数、最近消息在同一事务更新。现有聊天入口仍通过 `save_round()` 在完整回答产生后提交，流式失败与断连不保存不完整回复。
+
+测试命令（在 `ai-service` 下运行）：
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
+# 可选：指向隔离 MySQL，账号需能创建和删除测试数据库；不会读取业务 DATABASE_URL。
+$env:CHAT_TEST_MYSQL_URL = 'mysql+aiomysql://test_user:test_password@127.0.0.1:3306/'
+.\.venv\Scripts\python.exe -m unittest tests.test_chat_history -v
+```
+
+MySQL 集成测试创建随机 `chat_history_test_*` 数据库并在结束时清理，覆盖游标分页、同角色消息、并发写入、事务回滚及迁移脚本。未设置测试 URL 时仅跳过这些数据库用例。
 
 ## 本地运行（PowerShell）
 
@@ -17,6 +42,10 @@ py -3.13 -m venv .venv
 
 配置分开加载：提交到仓库的 `.env` 保存完整运行配置，包括 Redis、数据库和 Qdrant 连接地址；被 Git 忽略的 `.env.prod` 保存模型 API Key。普通配置类只读取 `.env`，厂商文件中的 `SecretSettings` 只读取 `.env.prod`（也支持进程环境变量），因此 `.env` 中的同名密钥不会被读取。
 
+启动日志打印接口文档地址，默认 `http://127.0.0.1:8001/docs`。修改监听端口或通过网关访问时，可在环境变量或 `.env` 中设置 `PUBLIC_BASE_URL`（例如 `http://127.0.0.1:9001`），用于生成日志中的文档链接，不改变 Uvicorn 监听配置。
+
+普通和流式对话完成并保存后，各打印一条日志，汇总用户输入（前 20 个字符）、命中的 Agent 及实际模型厂商（如 `chatAgent(deepseek)`）、完整模型回复的前 50 个字符。超长内容追加省略号，空白字符转为空格；流式回复仅在完整生成后打印一次。
+
 `.env` 中配置连接 URL；`.env.prod` 配置以下密钥（生图接入前可暂不填写 `ARK_API_KEY`）：
 
 ```dotenv
@@ -26,7 +55,7 @@ RAG_EMBEDDING_API_KEY=真实百炼 API Key
 ARK_API_KEY=真实火山方舟 API Key
 ```
 
-Redis 必须连接到 Java Sa-Token 使用的同一数据库（当前开发配置是 DB 15）；MySQL 必须已有 `yl_ai_dialogue` 表。连接 URL 中用户名或密码的特殊字符需要 URL 编码。
+Redis 必须连接到 Java Sa-Token 使用的同一数据库（当前开发配置是 DB 15）；MySQL 必须已有新结构的 `yl_ai_dialogue`（`role + content`）和 `yl_ai_session` 表；删除/撤回还需现有 `yl_agent_flow_state`、`yl_chat_context_summary` 表，以清理待确认状态和摘要。旧库使用 `sql/migrations/20261002_chat_session_content.sql` 迁移；Java 配套改动与部署约束见 [10 文档](../docs/10-java-chat-history-migration.md)。连接 URL 中用户名或密码的特殊字符需要 URL 编码。
 
 聊天默认使用 Spring Boot 中 `chat` agent 的 DeepSeek 配置。切换到阿里云时，在 `.env` 写入 `CHAT_PROVIDER=aliyun`，在 `.env.prod` 写入 `ALIYUN_API_KEY`。阿里云 OpenAI-compatible 接口使用 API Key。
 
