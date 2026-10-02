@@ -3,7 +3,7 @@
 import httpx
 from pydantic import ValidationError
 
-from app.core.config.qdrant import get_qdrant_settings
+from app.core.config.common.qdrant import get_qdrant_settings
 from app.core.exception.exceptions import QdrantError
 from app.schemas.rag import QdrantCollectionInfo, QdrantPoint, QdrantUpsertPoint
 

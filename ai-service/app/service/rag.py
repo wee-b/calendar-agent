@@ -11,8 +11,8 @@ from time import monotonic
 
 import jieba
 
-from app.core.config.qdrant import get_qdrant_settings
-from app.core.config.rag import get_rag_settings
+from app.core.config.common.qdrant import get_qdrant_settings
+from app.core.config.common.rag import get_rag_settings
 from app.cache.embedding_cache import CachedEmbedding
 from app.db.redis_client import get_redis
 from app.helper.embedding_client import EmbeddingClient, EmbeddingError

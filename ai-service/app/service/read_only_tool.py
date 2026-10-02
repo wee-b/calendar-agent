@@ -3,7 +3,7 @@
 import asyncio
 from pydantic import ValidationError
 
-from app.core.config.mcp import McpSettings, get_mcp_settings
+from app.core.config.common.mcp import McpSettings, get_mcp_settings
 from app.helper.mcp_client import JavaMcpClient, McpClientError
 from app.schemas.chat.tools import DAY_DETAIL_TOOL_NAME, DayDetailArguments, DayDetailResult
 

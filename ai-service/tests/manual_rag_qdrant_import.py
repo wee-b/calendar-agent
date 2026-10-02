@@ -8,7 +8,7 @@ import os
 import unittest
 
 from app.cache.embedding_cache import CachedEmbedding
-from app.core.config.qdrant import get_qdrant_settings
+from app.core.config.common.qdrant import get_qdrant_settings
 from app.repository.qdrant import QdrantRepository
 from app.service.rag_corpus import (
     DEFAULT_CORPUS_DIR, _java_name_uuid, deduplicate, import_corpus, load_corpus,

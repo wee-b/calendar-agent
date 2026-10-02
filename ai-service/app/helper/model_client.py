@@ -8,8 +8,7 @@ from typing import Any, AsyncIterator
 import httpx
 from pydantic import ValidationError
 
-from app.core.config import get_settings
-from app.core.config.secret import get_secret_settings
+from app.core.config.agent.agents import AgentConfig, chat_config
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException
 from app.schemas.chat.model_stream import AssistantMessage, ModelDelta
@@ -18,30 +17,28 @@ from app.schemas.chat.model_stream import AssistantMessage, ModelDelta
 class ModelClient:
     """根据提供商配置选择模型；对话图只接触已校验的模型输出。"""
 
+    def __init__(self, config: AgentConfig | None = None):
+        self.config = config if config is not None else chat_config
+
     def _request_options(self) -> tuple[str, str, str, float]:
         """选择 URL、密钥、模型名和超时；密钥只从 SecretSettings 读取。"""
 
-        settings = get_settings()
-        secrets = get_secret_settings()
-        if settings.chat_provider == "aliyun":
-            base_url, api_key, model_name = (
-                settings.aliyun_base_url, secrets.aliyun_api_key, settings.aliyun_model_name)
-        elif settings.chat_provider == "deepseek":
-            base_url, api_key, model_name = (
-                settings.deepseek_base_url, secrets.deepseek_api_key, settings.deepseek_model_name)
-        else:
+        model = self.config.model
+        if model.api_type != "openai-compatible":
             raise BusinessException(ErrorCode.MODEL_PROVIDER_UNSUPPORTED)
+        base_url, api_key, model_name = model.base_url, model.api_key, model.name
         if not base_url or not api_key or not model_name:
             raise BusinessException(ErrorCode.MODEL_CONFIG_INCOMPLETE)
-        return f"{base_url.rstrip('/')}/chat/completions", api_key, model_name, settings.model_request_timeout
+        return f"{base_url.rstrip('/')}/chat/completions", api_key, model_name, self.config.timeout_seconds
 
-    @staticmethod
-    def _payload(model_name: str, messages: list[dict[str, Any]],
+    def _payload(self, model_name: str, messages: list[dict[str, Any]],
                  tools: list[dict[str, Any]] | None, streaming: bool) -> dict[str, Any]:
         """在 HTTP 边界把消息和工具声明组装成模型协议请求体。"""
 
         payload: dict[str, Any] = {"model": model_name, "messages": messages,
                                    "stream": streaming}
+        if self.config.temperature is not None:
+            payload["temperature"] = self.config.temperature
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

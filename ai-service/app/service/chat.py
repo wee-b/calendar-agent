@@ -9,7 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.repository.chat import ChatRepository
-from app.core.config.chat_stream import get_chat_stream_settings
+from app.core.config.common.chat_stream import get_chat_stream_settings
 from app.service.chat_graph import ChatGraph
 from app.schemas.chat import ChatRequest, ChatResult
 from app.schemas.chat.messages import TextMessage

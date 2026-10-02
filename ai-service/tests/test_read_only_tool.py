@@ -1,6 +1,6 @@
 import unittest
 
-from app.core.config.mcp import McpSettings
+from app.core.config.common.mcp import McpSettings
 from app.helper.mcp_client import McpClientError
 from app.service.read_only_tool import call_read_only_tool
 from app.schemas.chat.tools import DayDetailArguments, DayDetailResult

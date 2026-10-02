@@ -4,7 +4,7 @@ from hashlib import md5
 import json
 import logging
 
-from app.core.config.rag import get_rag_settings
+from app.core.config.common.rag import get_rag_settings
 from app.db.redis_client import get_redis
 from app.helper.embedding_client import EmbeddingClient
 from app.schemas.rag import EmbeddingItem

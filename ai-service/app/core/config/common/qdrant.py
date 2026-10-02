@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.config.settings import PUBLIC_ENV_FILE
+from app.core.config.common.settings import PUBLIC_ENV_FILE
 
 
 class QdrantSettings(BaseSettings):

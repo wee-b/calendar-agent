@@ -7,7 +7,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-AI_SERVICE_DIR = Path(__file__).resolve().parents[3]
+AI_SERVICE_DIR = Path(__file__).resolve().parents[4]
 PUBLIC_ENV_FILE = AI_SERVICE_DIR / ".env"
 SECRET_ENV_FILE = AI_SERVICE_DIR / ".env.prod"
 
@@ -21,12 +21,6 @@ class Settings(BaseSettings):
     java_request_timeout: float = 5.0
     redis_url: str | None = None
     database_url: str | None = None
-    chat_provider: str = "deepseek"
-    aliyun_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    aliyun_model_name: str = "qwen3.7-plus"
-    deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model_name: str = "deepseek-flash"
-    model_request_timeout: float = 60.0
 
     model_config = SettingsConfigDict(
         env_file=PUBLIC_ENV_FILE,

@@ -1,7 +1,6 @@
 import asyncio
 import json
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -9,6 +8,8 @@ from fastapi import HTTPException
 
 from app.helper.mcp_client import McpClientError
 from app.helper.model_client import ModelClient
+from app.core.config.agent.agents import AgentConfig
+from app.core.config.agent.providers import ModelConfig
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException
 from app.main import app
@@ -45,13 +46,11 @@ class ModelStreamTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, text=body,
                                   headers={"content-type": "text/event-stream"})
 
-        settings = SimpleNamespace(
-            chat_provider="deepseek", deepseek_base_url="https://api.deepseek.com",
-            deepseek_model_name="deepseek-flash", model_request_timeout=5,
+        config = AgentConfig(
+            model=ModelConfig("deepseek", "deepseek-flash", "https://api.deepseek.com", "secret"),
+            timeout_seconds=5,
         )
-        secrets = SimpleNamespace(deepseek_api_key="secret")
-        with patch("app.helper.model_client.get_settings", return_value=settings), \
-             patch("app.helper.model_client.get_secret_settings", return_value=secrets), \
+        with patch("app.helper.model_client.chat_config", config), \
              patch("app.helper.model_client.httpx.AsyncClient",
                    side_effect=lambda **kwargs: real_client(
                        transport=httpx.MockTransport(handle), **kwargs)):

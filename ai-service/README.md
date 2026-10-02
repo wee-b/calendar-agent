@@ -15,19 +15,59 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8001
 ```
 
-配置分开加载：提交到仓库的 `.env` 保存完整运行配置，包括 Redis、数据库和 Qdrant 连接地址；被 Git 忽略的 `.env.prod` 只保存三个模型 API Key。普通配置类只读取 `.env`，`SecretSettings` 只读取 `.env.prod`（也支持进程环境变量），因此 `.env` 中的同名密钥不会被读取。
+配置分开加载：提交到仓库的 `.env` 保存完整运行配置，包括 Redis、数据库和 Qdrant 连接地址；被 Git 忽略的 `.env.prod` 保存模型 API Key。普通配置类只读取 `.env`，厂商文件中的 `SecretSettings` 只读取 `.env.prod`（也支持进程环境变量），因此 `.env` 中的同名密钥不会被读取。
 
-`.env` 中配置连接 URL；`.env.prod` 只保留以下三项密钥：
+`.env` 中配置连接 URL；`.env.prod` 配置以下密钥（生图接入前可暂不填写 `ARK_API_KEY`）：
 
 ```dotenv
 ALIYUN_API_KEY=真实百炼 API Key
 DEEPSEEK_API_KEY=真实 DeepSeek 密钥
 RAG_EMBEDDING_API_KEY=真实百炼 API Key
+ARK_API_KEY=真实火山方舟 API Key
 ```
 
 Redis 必须连接到 Java Sa-Token 使用的同一数据库（当前开发配置是 DB 15）；MySQL 必须已有 `yl_ai_dialogue` 表。连接 URL 中用户名或密码的特殊字符需要 URL 编码。
 
 聊天默认使用 Spring Boot 中 `chat` agent 的 DeepSeek 配置。切换到阿里云时，在 `.env` 写入 `CHAT_PROVIDER=aliyun`，在 `.env.prod` 写入 `ALIYUN_API_KEY`。阿里云 OpenAI-compatible 接口使用 API Key。
+
+模型配置分为两层：`app/core/config/agent/providers.py` 的 `Deepseek`、`Aliyun`、`Ark` 读取厂商地址与密钥；`app/core/config/agent/agents.py` 的 Agent 配置选择模型及参数。默认配置对齐 Java `application-dev.yml`：
+
+| Agent | 厂商 | 模型 | 温度 |
+|---|---|---|---|
+| Chat | DeepSeek | deepseek-flash | 0.3 |
+| Route | 阿里云 | qwen3.7-plus | 0.1 |
+| Planner | DeepSeek | deepseek-flash | 0.1 |
+| Executor | 阿里云 | qwen3.7-plus | 0.3 |
+| Summary | 阿里云 | qwen3.7-plus | 0.1 |
+| Image | 火山方舟 | doubao-seedream-5-0-flash-260915 | 不适用 |
+
+Image 另有 `size=2K`、`watermark=true`，当前仅提供配置，生图客户端后续接入。Embedding 保持阿里云 `text-embedding-v4`。每个 Agent 的厂商、模型、温度和请求超时均可在 `.env` 覆盖；Planner 沿用 `PLAN_` 前缀。超时为 Python 独立配置。若 Java 运行环境覆盖了模型 ID，需同步修改 Python 的 Agent 模型名。
+
+配置目录按用途分组，模型相关配置只保留两个文件：
+
+```text
+app/core/config/
+├── common/          # settings、qdrant、logging_config、rag、mcp、chat_stream
+└── agent/
+    ├── providers.py # 厂商连接、密钥、模型声明
+    └── agents.py    # 每个 Agent 的配置类与共享实例，包含 Embedding
+```
+
+各 Agent 分别读取自己的环境变量前缀，不再使用统一的 `AgentSettings` 和 getter。配置在进程启动时加载，修改 `.env` 后重启服务。客户端默认使用 `chat_config`，其他 Agent 直接导入实例，或显式声明模型：
+
+```python
+from app.core.config.agent.agents import PlanAgentConfig, EmbeddingConfig, route_config
+from app.core.config.agent.providers import Deepseek, Aliyun
+from app.helper.model_client import ModelClient
+
+# name 使用厂商实际提供的模型 ID；下面省略 name 时读取厂商默认聊天模型。
+plan_config = PlanAgentConfig(model=Deepseek())
+plan_client = ModelClient(config=plan_config)
+route_client = ModelClient(config=route_config)
+embedding_config = EmbeddingConfig(model=Aliyun(name="text-embedding-v4"))
+```
+
+默认 Embedding 客户端仍使用 `embedding_config` 读取独立的 `RAG_EMBEDDING_BASE_URL`、模型名和超时；密钥优先使用 `RAG_EMBEDDING_API_KEY`，未配置时使用 `ALIYUN_API_KEY`。密钥仅从 `.env.prod` 或进程环境变量读取。
 
 请求示例：
 

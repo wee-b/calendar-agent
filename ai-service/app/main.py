@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from scalar_fastapi import get_scalar_api_reference
 
 from app.api.endpoints import api_router
-from app.core.config.logging_config import configure_logging
+from app.core.config.common.logging_config import configure_logging
 from app.core.exception.handlers import register_exception_handlers
 from app.core.middleware.access_log import access_log
 from app.core.middleware.auth import authenticate_request

@@ -11,6 +11,8 @@ from app.api.routers.rag_router import get_rag_service
 from app.main import app
 from app.schemas.rag import QdrantPayload, QdrantPoint, RagHit
 from app.helper.embedding_client import EmbeddingClient
+from app.core.config.agent.agents import EmbeddingConfig
+from app.core.config.agent.providers import ModelConfig
 from app.repository.qdrant import QdrantError, QdrantRepository
 from app.service.rag import RagService
 from app.service.rag_corpus import (
@@ -71,11 +73,11 @@ class RagTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json={"data": [{"embedding": [0.1, 0.2]}]})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-            embedding = EmbeddingClient(client)
-            with patch("app.helper.embedding_client.get_secret_settings",
-                       return_value=type("Secrets", (), {"rag_embedding_api_key": "test-key",
-                                                          "aliyun_api_key": None})()):
-                self.assertEqual([0.1, 0.2], await embedding.embed("备考"))
+            config = EmbeddingConfig(model=ModelConfig(
+                "aliyun", "text-embedding-v4",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1", "test-key"))
+            embedding = EmbeddingClient(client, config=config)
+            self.assertEqual([0.1, 0.2], await embedding.embed("备考"))
         self.assertEqual("https://dashscope.aliyuncs.com/compatible-mode/v1:text-embedding-v4", embedding.namespace)
         self.assertEqual("Bearer test-key", requests[0].headers["authorization"])
         self.assertEqual("备考", json.loads(requests[0].content)["input"])
