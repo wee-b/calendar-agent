@@ -16,7 +16,7 @@ class ChatSessionRepository:
         return (
             select(AiSession)
             .where(AiSession.user_id == user_id, AiSession.deleted_flag == 0,
-                   AiSession.message_count > 0)
+                   AiSession.last_message_id.is_not(None))
             .order_by(AiSession.last_message_time.desc(), AiSession.id.desc())
         )
 

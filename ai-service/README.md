@@ -1,6 +1,6 @@
 # Calendar AI Service
 
-当前提供 `GET /health`、`GET /auth/me`、`POST /chat`、流式 `POST /chat/stream`、`GET /chat/history`、`GET /chat/sessions`、`GET /chat/latest`、`POST /chat/new-session`、`DELETE /chat/session`、`DELETE /chat/last-round` 和独立的 `POST /rag/search`。普通与流式对话统一经过 LangGraph 主图：Route → 状态转换表 → Chat / Planner / Executor / Image → 提交。Chat 和 Executor 的工具循环最多三轮模型调用；RAG 暂不参与对话。
+当前提供 `GET /health`、`GET /auth/me`、`POST /chat`、流式 `POST /chat/stream`、`GET /chat/history`、`GET /chat/sessions`、`GET /chat/latest`、`POST /chat/new-session`、`DELETE /chat/session`、`DELETE /chat/last-round` 和独立的 `POST /rag/search`。普通与流式对话统一经过 LangGraph 主图：Summary（达到阈值时压缩并提取偏好）→ Route → 状态转换表 → Chat / Planner / Executor / Image → 提交。Chat 和 Executor 的工具循环最多三轮模型调用；RAG 暂不参与对话。
 
 ## 状态机与节点迁移
 
@@ -11,11 +11,34 @@
 - 跨轮状态沿用 `yl_agent_flow_state` 的 `CHAT / PLAN / EXECUTE / IMAGE` 和版本认领；LangGraph 当前不启用 checkpointer。临时闲聊/查询保留待处理任务；拒绝清空任务。
 - 完整回复、会话统计、下一阶段和待处理任务在一个 MySQL 事务提交。写工具开始后的失败或断连保留 `processing=1`，防止重复确认触发重复写入。需人工核实日历结果后修复状态；尚无自动恢复或幂等账本。
 
-Java 业务写入与 Python 草稿/状态提交不能组成同一个本地事务；批量创建保证 Java 端整批成功或回滚，跨服务响应丢失仍按结果待核实处理。Java 旧 AI 和记忆模块已删除，保留 `module/mcp` 与业务模块；长期记忆抽取、行为记忆刷新和上下文摘要仍待 Python 实现。
+Java 业务写入与 Python 草稿/状态提交不能组成同一个本地事务；批量创建保证 Java 端整批成功或回滚，跨服务响应丢失仍按结果待核实处理。Java 旧 AI 和记忆模块已删除，保留 `module/mcp` 与业务模块；偏好模型抽取和上下文摘要由 Python 实现。
+
+## 记忆写入与摘要
+
+升级前暂停对话写入，执行 `sql/migrations/20261003_context_message_count.sql`，继续复用已有 `yl_user_memory`、`yl_chat_context_summary`。
+
+- `ConversationGraph` 在 Route 前执行 `SummaryNode`：检查 `yl_ai_session.message_count`，达到50条时压缩较早消息，保留最近20条原文。消息按 user/assistant 各算一条，不按问答轮数。检查发生在本轮输入落库之前；压缩成功计数为20，本轮问答提交后为22。
+- SummaryAgent 使用 `summary_config`，一次模型调用同时生成结构化摘要和用户偏好；没有每轮偏好抽取，也没有独立后台图或队列。摘要合并旧摘要与较早消息，偏好可引用本次历史中的用户原文（包括保留的20条），不采用助手建议、临时要求或假设。相同键覆盖旧值，明确忘记请求写删除标记。
+- 摘要、偏好与计数在同一事务保存，提交时核对旧摘要、消息快照和会话计数。失败不修改数据，下次输入重试。模型上下文读取“摘要 + 最近未压缩原文”；原消息不删除，历史分页仍可查询全部记录。
+- Planner 按用户隔离读取记忆，本轮要求优先，长期目标默认90天过期。当前仅保留聊天偏好与目标，不生成或使用行为统计记忆。
+- 撤回/删除继续清理摘要及流程状态；撤回后按剩余有效原文重算计数，下一轮重新检查压缩。长期记忆独立于会话保留，可通过记忆接口删除。
+- Service 仅封装数据读写；模型声明、提示词、偏好提取和节点顺序归 LangGraph 节点及主图负责，相关 Service 已补充职责注释。
+- `GET /memory` 查看自己的有效记忆（最多200条），`DELETE /memory/{memory_id}` 删除自己的记忆，沿用 `yvli-token` 鉴权。
+
+可选配置（未配置时使用以下默认值）：
+
+```dotenv
+MEMORY_ENABLED=true
+MEMORY_SUMMARY_TRIGGER_MESSAGES=50
+MEMORY_SUMMARY_RETAIN_MESSAGES=20
+MEMORY_SUMMARY_MAX_CHARS=1200
+MEMORY_MESSAGE_MAX_CHARS=1000
+MEMORY_SUMMARY_TIMEOUT_SECONDS=120
+```
 
 只读 MCP 工具的瞬态错误由 Python 最多尝试 `MCP_READ_RETRY_ATTEMPTS` 次，间隔 `MCP_READ_RETRY_DELAY_MS` 毫秒。Java MCP 每次请求只执行一次并返回 `retryable` 标记；写工具不自动重试。
 
-代码按职责分层：`app/api/routers` 处理 HTTP，`app/core` 管理配置、中间件、异常和响应，`app/cache` 校验 Redis token 与缓存 Embedding，`app/service` 编排对话和 RAG，`app/repository` 访问 MySQL 与 Qdrant，`app/helper` 封装模型与 Java 客户端，`app/db` 提供连接，`app/schemas` 定义请求与响应。接口入口统一在 `app/api/endpoints.py` 注册。
+代码按职责分层：`app/api/routers` 处理 HTTP，`app/core` 管理配置、中间件、异常和响应，`app/cache` 校验 Redis token 与缓存 Embedding，`app/all_graph` 编排对话与模型节点，`app/api/conversation_transport.py` 适配 HTTP/SSE，`app/service` 封装数据操作，`app/repository` 访问 MySQL 与 Qdrant，`app/helper` 封装模型与 Java 客户端，`app/db` 提供连接，`app/schemas` 定义请求与响应。接口入口统一在 `app/api/endpoints.py` 注册。
 
 ## 历史消息与会话列表
 

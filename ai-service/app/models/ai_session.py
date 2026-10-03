@@ -21,6 +21,7 @@ class AiSession(Base):
     title: Mapped[str | None] = mapped_column(String(128))
     last_message_id: Mapped[int | None] = mapped_column(BigInteger)
     last_message_time: Mapped[datetime | None] = mapped_column(DateTime)
+    # 未压缩的有效上下文消息数；不含历史摘要，用户/助手消息分别计数。
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     deleted_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
     create_time: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp())

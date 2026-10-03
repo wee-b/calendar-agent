@@ -53,7 +53,8 @@ def http_conversation_fakes():
                                              round_data["message"], round_data["reply"], round_data["elapsed_ms"])
             await super().complete(state, stage, pending, agent, **round_data)
 
-    with patch("app.service.chat.FlowStateRepository", return_value=Flow()), \
+    with patch("app.service.context_summary.ContextSummaryService.snapshot", new=AsyncMock(return_value=None)), \
+         patch("app.service.chat.FlowStateRepository", return_value=Flow()), \
          patch("app.all_graph.nodes.route_node.RouteAgent.route",
                new=AsyncMock(return_value=RouteDecision(signal=UserSignal.NEW_QUERY))):
         yield

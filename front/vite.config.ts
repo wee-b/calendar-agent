@@ -11,6 +11,7 @@ export default defineConfig({
       '/user': { target: 'http://localhost:8080', changeOrigin: true },
       '/todo': { target: 'http://localhost:8080', changeOrigin: true },
       '/chat': { target: 'http://localhost:8001', changeOrigin: true },
+      '/memory': { target: 'http://localhost:8001', changeOrigin: true },
       '/rag': { target: 'http://localhost:8001', changeOrigin: true },
       '/calendar': { target: 'http://localhost:8080', changeOrigin: true },
       '/almanac': { target: 'http://localhost:8080', changeOrigin: true },

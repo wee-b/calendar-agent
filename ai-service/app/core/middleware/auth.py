@@ -10,7 +10,8 @@ async def authenticate_request(request: Request, call_next):
     """从请求头校验 Redis token，并把可信用户 ID 留给业务路由。"""
 
     if request.url.path == "/auth/me" or request.url.path == "/chat" \
-            or request.url.path.startswith("/chat/") or request.url.path == "/rag/search":
+            or request.url.path.startswith("/chat/") or request.url.path == "/rag/search" \
+            or request.url.path == "/memory" or request.url.path.startswith("/memory/"):
         token = request.headers.get(get_settings().token_header_name)
         try:
             user_id = await RedisTokenVerifier().verify(token or "")

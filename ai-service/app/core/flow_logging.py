@@ -153,7 +153,15 @@ def _turn_label(steps: list[str]) -> str:
                     "PLAN_VALIDATED", "CHAT_RESULT", "PLANNER_RESULT", "EXECUTOR_RESULT",
                     "IMAGE_RESULT", "MARK_DRAFT_SYNCED"}:
             continue
-        if name == "TRANSITION":
+        if name == "SUMMARY_CHECK":
+            parts.append("检查上下文")
+        elif name == "SUMMARY":
+            parts.append("摘要及偏好提取")
+        elif name == "SUMMARY_SAVED":
+            parts.append(f"压缩{info.get('压缩条数', '?')}条/保留{info.get('保留条数', '?')}条/偏好{info.get('偏好数', '?')}项")
+        elif name in {"SUMMARY_FAILED", "SUMMARY_STALE"}:
+            parts.append("压缩失败" if name == "SUMMARY_FAILED" else "压缩快照过期")
+        elif name == "TRANSITION":
             parts.append(f"路由 {info.get('信号', '?')}")
         elif name in {"CHAT", "PLANNER", "EXECUTOR", "IMAGE"}:
             parts.append(name)

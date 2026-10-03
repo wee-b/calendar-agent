@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from app.core.exception.exceptions import BusinessException
 from app.core.exception.error_code import StreamErrorCode
 from app.core.response.utils import success
-from app.service.conversation import ConversationService
+from app.api.conversation_transport import ConversationTransport
 from app.service.chat import ChatService
 from app.schemas.chat import ChatRequest
 from app.schemas.chat.history import DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT
@@ -45,7 +45,7 @@ async def delete_last_round(
 
 @router.post("")
 async def chat(body: ChatRequest, request: Request):
-    result = await ConversationService().reply(request.state.user_id, body, request.state.user_token)
+    result = await ConversationTransport().reply(request.state.user_id, body, request.state.user_token)
     return success(result)
 
 
@@ -65,7 +65,7 @@ async def chat_stream(body: ChatRequest, request: Request):
 
     async def generate():
         try:
-            async for item in ConversationService().stream_reply(
+            async for item in ConversationTransport().stream_reply(
                 user_id, body, token, request.is_disconnected
             ):
                 yield _sse(item)

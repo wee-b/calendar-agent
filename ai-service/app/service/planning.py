@@ -7,6 +7,10 @@ from app.schemas.plan import Plan
 
 
 class PlanningService:
+    """只提供规划草稿和既有记忆的数据库读写。
+
+    模型声明、提示词、记忆抽取及后台维护调度属于 LangGraph 节点。
+    """
     def __init__(self, drafts=None, memory=None):
         self._drafts = drafts
         self.memory = memory if memory is not None else PlanningMemoryRepository()

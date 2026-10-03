@@ -16,7 +16,11 @@ from app.schemas.chat.chat import NewSessionResult
 
 
 class ChatService:
-    """供 HTTP 接口及 Agent 节点共用的会话、消息和流程状态读写。"""
+    """只封装会话、消息和流程状态的增删改查。
+
+    模型、记忆抽取、摘要及后台任务调度必须留在 LangGraph 节点；
+    此处只接收节点已生成的数据，并交给仓储执行事务写入。
+    """
 
     def __init__(self, flow_state_repository: FlowStateRepository | None = None) -> None:
         # 延迟创建仓储，历史接口无需为了读取消息而初始化流程状态数据库连接。

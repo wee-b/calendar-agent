@@ -1,4 +1,4 @@
-"""HTTP 对话入口：运行主图，将进度流与已提交的最终结果传给 SSE。"""
+"""HTTP 对话适配层：运行主图并传输进度流。"""
 
 import asyncio
 from collections.abc import AsyncIterator
@@ -10,7 +10,8 @@ from app.schemas.chat import ChatRequest, ChatResult
 from app.schemas.chat.model_stream import ClientEvent, DoneData, DoneEvent, PingEvent, ResultEvent
 
 
-class ConversationService:
+class ConversationTransport:
+    """仅处理请求/响应与 SSE；AI 流程和后台调度由 LangGraph 编排。"""
     def __init__(self, graph_factory=None):
         self.graph_factory = graph_factory if graph_factory is not None else ConversationGraph
 

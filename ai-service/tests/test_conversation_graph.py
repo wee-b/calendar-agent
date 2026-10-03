@@ -1,3 +1,4 @@
+from app.all_graph.nodes.summary_node import SummaryNode
 """Route 信号解析及跨轮状态提交测试，不连接模型或数据库。"""
 
 import unittest
@@ -125,7 +126,7 @@ class ConversationGraphTests(unittest.IsolatedAsyncioTestCase):
         return ConversationGraph(
             handlers if handlers is not None else self.handlers,
             user_id=1, session_id="s",
-            chat_service=ChatService(self.repository), route_agent=self.route,
+            chat_service=ChatService(self.repository), summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))), route_agent=self.route,
         )
 
     async def test_multiple_turns_use_persisted_stage_and_preserve_pending_on_query(self):

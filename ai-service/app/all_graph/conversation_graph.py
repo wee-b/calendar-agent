@@ -25,6 +25,7 @@ from app.schemas.statemachine.flow import (
 )
 from app.schemas.statemachine.transitions import AgentType, ChatTransitionTable
 from app.all_graph.nodes.route_node import RouteAgent, RouteNode
+from app.all_graph.nodes.summary_node import SummaryNode
 from app.schemas.chat.model_stream import AgentStatusData, AgentStatusEvent, AssistantDeltaData, AssistantDeltaEvent
 
 
@@ -45,6 +46,8 @@ class ConversationState(TypedDict):
     agent: NotRequired[AgentType]
     target_stage: NotRequired[ConversationStage]
     result: NotRequired[AgentTurnResult]
+    context_compressed: NotRequired[bool]
+    summary_error: NotRequired[str]
     next_stage: NotRequired[ConversationStage]
 
 
@@ -116,6 +119,7 @@ class ConversationGraph:
         chat_service: ChatService | None = None,
         route_agent: RouteAgent | None = None,
         transitions: ChatTransitionTable | None = None,
+        summary_node=None,
     ) -> None:
         if user_id <= 0 or not session_id or not session_id.strip():
             raise ValueError("用户和会话不能为空")
@@ -137,12 +141,20 @@ class ConversationGraph:
         # 新增 Agent 类型时，先扩展 AgentType 与 ChatTransitionTable，
         # 再提供对应 AgentHandler；下方循环会自动注册同名处理节点。
         builder = StateGraph(ConversationState, context_schema=TurnContext)
-        builder.add_node("route", route_node)
+
+        async def route(state: ConversationState, runtime: Runtime[TurnContext]):
+            log_turn_step("ROUTE")
+            await runtime.context.send(AgentStatusEvent(data=AgentStatusData(agent="route", round=1, stage="model")))
+            return await route_node(state)
+
+        builder.add_node("summary", summary_node if summary_node is not None else SummaryNode())
+        builder.add_node("route", route)
         builder.add_node("transition", self._transition)
         for agent in AgentType:
             builder.add_node(agent.name.lower(), self._handler_node(agent))
         builder.add_node("commit", self._commit)
-        builder.add_edge(START, "route")
+        builder.add_edge(START, "summary")
+        builder.add_edge("summary", "route")
         builder.add_edge("route", "transition")
         # 条件边由 LangGraph 根据 transition 节点写入的 agent 选择分支；
         # “哪个信号去哪个 Agent”仍由自有转换表决定，不交给模型或框架。
@@ -242,9 +254,7 @@ class ConversationGraph:
         context = TurnContext(token=token, flow_state=flow_state, emit=emit,
                               is_disconnected=is_disconnected, started=started)
         try:
-            log_turn_step("ROUTE")
-            await context.send(AgentStatusEvent(data=AgentStatusData(agent="route", round=1, stage="model")))
-            # ainvoke 执行 START -> route -> transition -> Agent -> commit -> END。
+            # 主图先检查压缩，再 route -> transition -> Agent -> commit。
             # context 参数通过 Runtime 注入节点，不混入可持久化的图状态。
             state = await self.graph.ainvoke({
                 "user_id": self.user_id,

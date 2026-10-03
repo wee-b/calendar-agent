@@ -1,3 +1,4 @@
+from app.all_graph.nodes.summary_node import SummaryNode
 """迁移节点的行为回归：确认范围、草稿隔离、失败保留及跨轮状态。"""
 
 import asyncio
@@ -25,7 +26,7 @@ from app.schemas.plan import parse_plan, today
 from app.schemas.statemachine.flow import ConversationStage as Stage, PendingTask, UserSignal as Signal
 from app.schemas.statemachine.transitions import AgentType
 from app.service.chat import ChatService
-from app.service.conversation import ConversationService
+from app.api.conversation_transport import ConversationTransport
 from app.service.planning import PlanningService
 from tests.conversation_fakes import MemoryFlowRepository
 
@@ -295,7 +296,7 @@ class NodeGraphTests(unittest.IsolatedAsyncioTestCase):
         drafts = SimpleNamespace(find_pending=AsyncMock(return_value=SimpleNamespace(draft_id=8, plan_json=plan_json())),
                                  mark_synced=AsyncMock())
         mcp = Mcp(["batchCreateTodos"], result={"createdCount": 1, "createdTodos": [{"todoId": 9, "title": "英语"}]})
-        graph = ConversationGraph(user_id=7, session_id="s", chat_service=ChatService(repo), route_agent=route)
+        graph = ConversationGraph(user_id=7, session_id="s", chat_service=ChatService(repo), summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))), route_agent=route)
         graph.handlers[AgentType.PLANNER] = PlanNode(planning, SimpleNamespace(complete=AsyncMock(return_value=plan_json())))
         graph.handlers[AgentType.IMAGE] = ImageNode(SimpleNamespace(generate=AsyncMock(return_value="https://example.com/x.jpg")), drafts)
         graph.handlers[AgentType.EXECUTOR] = ExecuteNode(mcp_factory=lambda: mcp, drafts=drafts)
@@ -324,7 +325,7 @@ class NodeGraphTests(unittest.IsolatedAsyncioTestCase):
         route = SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=Signal.CONFIRM)))
         mcp = Mcp(["deleteTodo"], failure=McpClientError("JAVA_TIMEOUT", "unknown"))
         graph = ConversationGraph({AgentType.EXECUTOR: ExecuteNode(SimpleNamespace(chat=model_call), lambda: mcp)},
-                                  user_id=7, session_id="s", chat_service=ChatService(repo), route_agent=route)
+                                  user_id=7, session_id="s", chat_service=ChatService(repo), summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))), route_agent=route)
         first = asyncio.create_task(graph.run_turn("确认", "user-token"))
         await entered.wait()
         with self.assertRaises(BusinessException):
@@ -347,8 +348,8 @@ class NodeGraphTests(unittest.IsolatedAsyncioTestCase):
                 closed.set()
         def factory(**kwargs):
             return ConversationGraph({AgentType.PLANNER: slow_node}, **kwargs, chat_service=ChatService(repo),
-                route_agent=SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=Signal.NEW_PLAN))))
-        stream = ConversationService(factory).stream_reply(7, ChatRequest(sessionId="s", message="学习"), "user-token",
+                summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))), route_agent=SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=Signal.NEW_PLAN))))
+        stream = ConversationTransport(factory).stream_reply(7, ChatRequest(sessionId="s", message="学习"), "user-token",
                                                          AsyncMock(return_value=False))
         await anext(stream)  # route 状态
         await anext(stream)  # planner 状态

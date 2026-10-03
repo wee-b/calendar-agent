@@ -15,12 +15,13 @@ class PlanningMemoryRepository:
             rows = [dict(row) for row in (await session.execute(text(
                 "SELECT memory_type, content, confidence, update_time FROM yl_user_memory "
                 "WHERE user_id=:user_id AND status='active' "
+                "AND source <> 'behavior' AND memory_type <> 'BEHAVIOR_PATTERN' "
                 "AND (expire_time IS NULL OR expire_time > CURRENT_TIMESTAMP) "
                 "ORDER BY confidence DESC, update_time DESC"
             ), {"user_id": user_id})).mappings()]
         words = ("刷题", "学习", "复习", "考试", "hot100", "英语", "四级", "六级", "考研", "驾照", "周末", "晚上", "早上")
         priorities = {"AVOIDANCE": 30, "PREFERENCE_LOAD": 30, "PREFERENCE_TIME": 30,
-                      "LONG_TERM_GOAL": 20, "BEHAVIOR_PATTERN": 12}
+                      "LONG_TERM_GOAL": 20}
         def score(row):
             return priorities.get(row["memory_type"], 10) + 20 * sum(
                 word in requirement.lower() and word in row["content"].lower() for word in words)

@@ -1,3 +1,4 @@
+from app.all_graph.nodes.summary_node import SummaryNode
 import asyncio
 import unittest
 from types import SimpleNamespace
@@ -20,7 +21,7 @@ class FlowLoggingTests(unittest.IsolatedAsyncioTestCase):
         return ConversationGraph(
             {AgentType.PLANNER: node, AgentType.CHAT: node}, user_id=7, session_id=session,
             chat_service=ChatService(repo or MemoryFlowRepository()),
-            route_agent=SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=signal))),
+            summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))), route_agent=SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=signal))),
         )
 
     async def test_committed_session_changes_and_turn_ids_across_inputs(self):
@@ -43,7 +44,7 @@ class FlowLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret-token", "\n".join(logs.output))
         first = next(r for r in logs.records if getattr(r, "flow_scope", None) == "单轮流转")
         self.assertEqual("END", first.to_state)
-        self.assertEqual(["RECEIVED", "LOAD_STATE", "CLAIM", "ROUTE",
+        self.assertEqual(["RECEIVED", "LOAD_STATE", "CLAIM", "SUMMARY_CHECK", "ROUTE",
                           "TRANSITION(信号=NEW_PLAN,节点=PLANNER)", "PLANNER",
                           "PLANNER_RESULT(完成=True,分发类型=PLAN)", "COMMIT",
                           "END(分发类型=PLAN,最终阶段=PLAN)"],

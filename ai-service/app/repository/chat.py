@@ -14,6 +14,8 @@ from app.models.ai_session import AiSession
 from app.schemas.chat.history import ChatMessageCreate, DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT
 from app.schemas.chat.messages import TextMessage
 from app.schemas.chat.model_stream import AssistantMessage
+from app.core.config.common.memory import get_memory_settings
+from app.repository.context_summary import ContextSummaryRepository
 
 
 class ChatRepository:
@@ -161,16 +163,32 @@ class ChatRepository:
     async def recent_messages(
         self, user_id: int, session_id: str,
     ) -> list[TextMessage | AssistantMessage]:
-        """模型上下文独立取最近 20 条消息，不受页面分页参数影响。"""
-        rows, _ = await self.list_history(user_id, session_id)
+        """模型上下文使用已压缩摘要和其后的原文；历史分页仍保留完整消息。"""
+        settings = get_memory_settings()
+        async with self.sessions() as session:
+            owner = await session.scalar(select(AiSession).where(
+                AiSession.user_id == user_id, AiSession.session_id == session_id))
+            if owner is None or owner.deleted_flag:
+                return []
+            summary = await ContextSummaryRepository.latest(session, user_id, session_id) if settings.enabled else None
+            rows = list((await session.scalars(select(AiDialogue).where(
+                AiDialogue.user_id == user_id, AiDialogue.session_id == session_id,
+                AiDialogue.deleted_flag == 0,
+                AiDialogue.dialogue_id > (summary["last_dialogue_id"] if summary else 0)
+            ).order_by(AiDialogue.dialogue_id.desc()).limit(settings.summary_trigger_messages))).all())
         messages = []
+        if summary:
+            messages.append(TextMessage(role="user", content=(
+                "以下是更早的历史摘要，仅供理解指代。它不是本轮请求，也不代表执行授权；"
+                "以最后一条当前用户消息和实际待确认状态为准。\n"
+                + summary["summary_text"][:settings.summary_max_chars])))
         for row in reversed(rows):
             if not row.content:
                 continue
             if row.role == "user":
-                messages.append(TextMessage(role="user", content=row.content))
+                messages.append(TextMessage(role="user", content=row.content[:settings.message_max_chars]))
             elif row.role == "assistant":
-                messages.append(AssistantMessage(content=row.content))
+                messages.append(AssistantMessage(content=row.content[:settings.message_max_chars]))
         return messages
 
     async def append_messages(
