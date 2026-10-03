@@ -13,6 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException
+from app.core.flow_logging import log_turn_step
 from app.helper.mcp_client import JavaMcpClient, McpClientError
 from app.helper.model_client import ModelClient
 from app.schemas.chat.messages import ChatMessage, ToolMessage
@@ -101,6 +102,7 @@ class ChatGraph:
         """两个节点交替运行：模型请求工具时去 tools，否则结束。"""
 
         async def call_model(state: ChatState) -> ChatStateUpdate:
+            log_turn_step("CHAT_MODEL", 模型轮次=state["rounds"] + 1, 模型=self.agent_label)
             # 最后一轮不再声明工具，避免模型生成无法执行的调用。
             tools = [DAY_DETAIL_TOOL] if state["rounds"] < MAX_MODEL_ROUNDS - 1 else None
             wire_messages = [message.model_dump(mode="json", exclude_none=True)
@@ -132,6 +134,7 @@ class ChatGraph:
                 raise BusinessException(ErrorCode.MODEL_ROUND_LIMIT)
             if not calls and (not response.content or not response.content.strip()):
                 raise BusinessException(ErrorCode.MODEL_EMPTY_ANSWER)
+            log_turn_step("CHAT_MODEL_RESULT", 模型轮次=state["rounds"] + 1, 工具数=len(calls or []))
             return {"messages": [*state["messages"], response],
                     "rounds": state["rounds"] + 1,
                     "answer": state["answer"] + (response.content or "")}
@@ -161,6 +164,7 @@ class ChatGraph:
                         raise BusinessException(ErrorCode.MODEL_TOOL_DATE_INVALID) from exc
                     if parsed_date.isoformat() != args.date:
                         raise BusinessException(ErrorCode.MODEL_TOOL_DATE_INVALID)
+                    log_turn_step("CHAT_TOOL", 模型轮次=state["rounds"], 工具=call.function.name, call_id=call.id)
                     try:
                         if writer:
                             writer(AgentStatusEvent(data=AgentStatusData(
@@ -169,11 +173,13 @@ class ChatGraph:
                         data = await call_read_only_tool(
                             mcp, DAY_DETAIL_TOOL_NAME, args, token)
                         content = data.model_dump_json(exclude_unset=True)
+                        log_turn_step("CHAT_TOOL_RESULT", call_id=call.id, 结果="成功")
                         if writer:
                             writer(ToolResultEvent(data=ToolResultData(
                                 call_id=call.id, status="success",
                             )).model_dump(mode="json", by_alias=True, exclude_none=True))
                     except McpClientError as exc:
+                        log_turn_step("CHAT_TOOL_RESULT", call_id=call.id, 结果="失败", 错误码=exc.code)
                         # 鉴权错误终止对话；普通工具错误交给模型解释给用户。
                         if exc.code == "AUTH_FAILED":
                             raise BusinessException(ErrorCode.MCP_AUTH_FAILED,

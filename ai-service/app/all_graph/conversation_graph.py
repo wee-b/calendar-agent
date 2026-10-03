@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 import asyncio
+import logging
 from dataclasses import dataclass
 from time import perf_counter
 from typing import NotRequired, TypedDict
@@ -13,6 +14,10 @@ from langgraph.runtime import Runtime
 
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException
+from app.core.flow_logging import (
+    bind_flow_trace, log_session_transition, log_turn_step, pending_summary, record_chat_input,
+    record_completed_chat, text_preview,
+)
 from app.models.agent_flow_state import YlAgentFlowState
 from app.service.chat import ChatService
 from app.schemas.statemachine.flow import (
@@ -68,6 +73,7 @@ class TurnContext:
     def mark_write_started(self) -> None:
         """写节点在第一次外部写调用前标记；异常时保留认领待核实。"""
         self.write_started = True
+        log_turn_step("WRITE_STARTED", 写入已开始=True)
 
     async def ensure_connected(self):
         if self.is_disconnected is not None and await self.is_disconnected():
@@ -152,12 +158,16 @@ class ConversationGraph:
     def _transition(self, state: ConversationState) -> dict:
         """普通图节点：查业务转换表，返回值并入 ConversationState。"""
         rule = self.transitions.resolve(state["stage"], state["signal"])
+        log_turn_step("TRANSITION", 信号=state["signal"].name, 节点=rule.agent.name)
+        log_session_transition(state["stage"].name, rule.next_stage.name, "待执行",
+                               信号=state["signal"].name, 节点=rule.agent.name)
         return {"agent": rule.agent, "target_stage": rule.next_stage}
 
     def _handler_node(self, agent: AgentType):
         # 将统一的 AgentHandler 适配为 LangGraph 节点。
         # 后续实现 chat/plan/execute/image 时，在构造图时传入 handlers 映射即可。
         async def run(state: ConversationState, runtime: Runtime[TurnContext]) -> dict:
+            log_turn_step(agent.name)
             handler = self.handlers.get(agent)
             if handler is None:
                 raise RuntimeError(f"{agent.name} Agent 节点尚未接入")
@@ -166,6 +176,8 @@ class ConversationGraph:
             result = await handler(state, runtime.context)
             if not isinstance(result, AgentTurnResult):
                 raise TypeError(f"{agent.name} Agent 未返回 AgentTurnResult")
+            log_turn_step(f"{agent.name}_RESULT", 完成=result.completed, 分发类型=result.dispatch_type,
+                          产物=pending_summary(result.pending))
             if not runtime.context.text_emitted:
                 await runtime.context.send(AssistantDeltaEvent(data=AssistantDeltaData(round=1, delta=result.reply)))
             return {"result": result}
@@ -178,27 +190,59 @@ class ConversationGraph:
         next_stage = state["target_stage"] if result.completed else state["stage"]
         # 临时查询不能覆盖尚待确认的规划、执行或图片任务。
         pending = state["pending"] if state["signal"] in {UserSignal.NEW_QUERY, UserSignal.NEW_CHAT} else result.pending
+        log_turn_step("COMMIT", 目标阶段=next_stage.name)
         await runtime.context.ensure_connected()
         await self.chat_service.complete_flow_state(
             runtime.context.flow_state, next_stage, pending, state["agent"],
             message=state["message"], reply=result.reply,
             elapsed_ms=int((perf_counter() - runtime.context.started) * 1000),
         )
+        log_session_transition(state["stage"].name, next_stage.name, "已提交",
+                               信号=state["signal"].name, 节点=state["agent"].name,
+                               原任务=pending_summary(state["pending"]), 新任务=pending_summary(pending),
+                               version=getattr(runtime.context.flow_state, "version", None))
         return {"next_stage": next_stage, "pending": pending}
 
     async def run_turn(
+        self, message: str, token: str, *, emit=None, is_disconnected=None,
+    ) -> ConversationResult:
+        """为一次用户输入绑定追踪 ID，普通和流式请求使用同一日志链路。"""
+        with bind_flow_trace(self.user_id, self.session_id) as trace:
+            record_chat_input(message)
+            log_turn_step("RECEIVED", 用户输入=text_preview(message), 输入长度=len(message), 流式=emit is not None)
+            try:
+                result = await self._run_turn(message, token, emit=emit, is_disconnected=is_disconnected)
+            except BaseException as exc:
+                if trace.step != "BLOCKED":
+                    log_turn_step("CANCELLED" if isinstance(exc, asyncio.CancelledError) else "FAILED",
+                                  level=logging.WARNING, 异常类型=type(exc).__name__,
+                                  错误码=getattr(exc, "code", None))
+                raise
+            log_turn_step("END", 最终阶段=result.stage.name, 分发类型=result.dispatch_type)
+            return result
+
+    async def _run_turn(
         self, message: str, token: str, *, emit=None, is_disconnected=None,
     ) -> ConversationResult:
         """身份和会话在构造时绑定；每轮仅接收新消息与 token。"""
         if not message.strip():
             raise ValueError("本轮消息不能为空")
         started = perf_counter()
+        log_turn_step("LOAD_STATE")
         flow_state = await self.chat_service.get_or_create_flow_state(self.user_id, self.session_id)
+        initial_stage = self.chat_service.resolve_flow_stage(flow_state).name
+        log_session_transition(initial_stage, initial_stage, "已读取",
+                               任务=pending_summary(self.chat_service.flow_pending(flow_state)),
+                               processing=bool(flow_state.processing), version=getattr(flow_state, "version", None))
+        log_turn_step("CLAIM")
         if not await self.chat_service.claim_flow_state(flow_state):
+            log_session_transition(initial_stage, initial_stage, "认领冲突", level=logging.WARNING)
+            log_turn_step("BLOCKED", level=logging.WARNING, 原因="会话正在处理或版本已变化")
             raise BusinessException(ErrorCode.CHAT_SESSION_PROCESSING)
         context = TurnContext(token=token, flow_state=flow_state, emit=emit,
                               is_disconnected=is_disconnected, started=started)
         try:
+            log_turn_step("ROUTE")
             await context.send(AgentStatusEvent(data=AgentStatusData(agent="route", round=1, stage="model")))
             # ainvoke 执行 START -> route -> transition -> Agent -> commit -> END。
             # context 参数通过 Runtime 注入节点，不混入可持久化的图状态。
@@ -210,8 +254,7 @@ class ConversationGraph:
                 "pending": self.chat_service.flow_pending(flow_state),
             }, context=context)
             result = state["result"]
-            from app.all_graph.nodes.chat_node import _log_completed_chat
-            _log_completed_chat(message, context.agent_label or state["agent"].name.lower(), result.reply)
+            record_completed_chat(context.agent_label or state["agent"].name.lower(), result.reply)
             return ConversationResult(
                 reply=result.reply,
                 signal=state["signal"],
@@ -225,7 +268,15 @@ class ConversationGraph:
         except BaseException as exc:
             # 未开始外部写入时可安全释放认领；已开始写入则保留待人工核实。
             if not context.write_started and flow_state.processing:
-                await self.chat_service.release_flow_state_claim(flow_state)
+                try:
+                    await self.chat_service.release_flow_state_claim(flow_state)
+                except BaseException:
+                    log_session_transition(initial_stage, initial_stage, "释放认领失败", level=logging.ERROR)
+                    raise
+            log_session_transition(initial_stage, initial_stage,
+                                   "写结果待核实" if context.write_started else "未提交",
+                                   level=logging.WARNING, 异常类型=type(exc).__name__,
+                                   写入已开始=context.write_started, processing=bool(flow_state.processing))
             if context.write_started and isinstance(exc, Exception):
                 raise BusinessException(ErrorCode.WRITE_RESULT_UNCERTAIN) from exc
             raise

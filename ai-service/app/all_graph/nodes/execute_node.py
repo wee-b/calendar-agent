@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from app.core.config.agent.agents import executor_config
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException, McpClientError
+from app.core.flow_logging import log_turn_step
 from app.helper.mcp_client import JavaMcpClient
 from app.helper.model_client import ModelClient
 from app.repository.plan_draft import PlanDraftRepository
@@ -62,12 +63,14 @@ class ExecuteNode:
                                dispatch_type="EXECUTE" if writes else "EXECUTE_CONFIRM")
 
     async def _sync_plan(self, state, context):
+        log_turn_step("LOAD_DRAFT", 草稿ID=state["pending"].draft_id)
         draft = await self.drafts.find_pending(state["user_id"], state["session_id"], state["pending"].draft_id)
         if draft is None:
             return AgentTurnResult(reply="当前没有可用的规划草稿，请先生成或重新制定规划。", completed=False,
                                    pending=state["pending"], dispatch_type="PENDING_UNKNOWN")
         plan = parse_plan(draft.plan_json)
         async with self.mcp_factory() as mcp:
+            log_turn_step("MCP_CATALOG")
             tools = {tool.name: tool for tool in await mcp.list_tools(context.token)}
             tool = tools.get("batchCreateTodos")
             if tool is None or tool.metadata.readOnly:
@@ -82,6 +85,7 @@ class ExecuteNode:
         result = BatchCreateResult.model_validate(raw)
         if result.createdCount != len(plan.todos) or len(result.createdTodos) != len(plan.todos):
             raise BusinessException(ErrorCode.MCP_RESULT_INVALID)
+        log_turn_step("MARK_DRAFT_SYNCED", 草稿ID=draft.draft_id)
         await self.drafts.mark_synced(state["user_id"], state["session_id"], draft.draft_id)
         return AgentTurnResult(reply=f"已同步到日历，共创建 {result.createdCount} 个待办：{plan.goal or '规划'}。",
                                completed=True, pending=PendingTask(), dispatch_type="EXECUTE")
@@ -92,6 +96,7 @@ class ExecuteNode:
                     {"role": "user", "content": instruction}]
         writes, answer, performed = 0, "", set()
         async with self.mcp_factory() as mcp:
+            log_turn_step("MCP_CATALOG")
             catalog = {t.name: t for t in await mcp.list_tools(context.token)
                        if t.name in ARGUMENTS and t.metadata.readOnly == (t.name in READ_TOOLS)}
             if not catalog:
@@ -100,6 +105,7 @@ class ExecuteNode:
                 "name": t.name, "description": t.description, "parameters": t.inputSchema,
             }} for t in catalog.values()]
             for round_number in range(1, 4):
+                log_turn_step("EXECUTOR_MODEL", 模型轮次=round_number, 模型=context.agent_label)
                 tools = definitions if round_number < 3 else None
                 await context.send(AgentStatusEvent(data=AgentStatusData(agent="executor", round=round_number, stage="model")))
                 if context.emit is None:
@@ -116,6 +122,8 @@ class ExecuteNode:
                     for event in events:
                         await context.send(event)
                 context.rounds = max(context.rounds, round_number)
+                log_turn_step("EXECUTOR_MODEL_RESULT", 模型轮次=round_number,
+                              工具数=len(response.tool_calls or []), 已成功写入数=writes)
                 answer += response.content or ""
                 if not response.tool_calls:
                     if not response.content or not response.content.strip():
@@ -153,6 +161,8 @@ class ExecuteNode:
 
     async def _call(self, mcp, tool, arguments, context, call_id, round_number):
         await context.send(AgentStatusEvent(data=AgentStatusData(agent="executor", round=round_number, stage="tool")))
+        log_turn_step("EXECUTOR_TOOL", 模型轮次=round_number, 工具=tool.name, call_id=call_id,
+                      只读=tool.metadata.readOnly)
         # 位于所有参数检查之后、真实写调用之前。模型只追问/只读时不会设置标记。
         if not tool.metadata.readOnly:
             context.mark_write_started()
@@ -164,14 +174,18 @@ class ExecuteNode:
                 try:
                     validate_write_result(tool.name, arguments, data)
                 except ValueError as exc:
+                    log_turn_step("EXECUTOR_TOOL_RESULT", call_id=call_id, 结果="返回结果无效")
                     await context.send(ToolResultEvent(data=ToolResultData(
                         call_id=call_id, status="error", code=ErrorCode.MCP_RESULT_INVALID.name)))
                     raise BusinessException(ErrorCode.MCP_RESULT_INVALID) from exc
         except (McpClientError, TimeoutError) as exc:
+            log_turn_step("EXECUTOR_TOOL_RESULT", call_id=call_id, 结果="失败",
+                          错误码=getattr(exc, "code", "TOOL_TIMEOUT"))
             await context.send(ToolResultEvent(data=ToolResultData(call_id=call_id, status="error",
                                                                   code=getattr(exc, "code", "TOOL_TIMEOUT"))))
             if isinstance(exc, McpClientError) and exc.code == "AUTH_FAILED":
                 raise BusinessException(ErrorCode.MCP_AUTH_FAILED) from exc
             raise
+        log_turn_step("EXECUTOR_TOOL_RESULT", call_id=call_id, 结果="成功")
         await context.send(ToolResultEvent(data=ToolResultData(call_id=call_id, status="success")))
         return data

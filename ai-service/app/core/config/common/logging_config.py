@@ -31,3 +31,5 @@ def configure_logging() -> None:
 
     # The application middleware already writes one access log per response.
     logging.getLogger("uvicorn.access").disabled = True
+    # httpx logs every upstream HTTP 200 separately; the flow trace summarizes those calls.
+    logging.getLogger("httpx").setLevel(logging.WARNING)

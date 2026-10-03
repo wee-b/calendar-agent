@@ -4,6 +4,7 @@ import asyncio
 from pydantic import ValidationError
 
 from app.core.config.common.mcp import McpSettings, get_mcp_settings
+from app.core.flow_logging import log_turn_step
 from app.helper.mcp_client import JavaMcpClient, McpClientError
 from app.schemas.chat.tools import DAY_DETAIL_TOOL_NAME, DayDetailArguments, DayDetailResult
 
@@ -30,5 +31,6 @@ async def call_read_only_tool(
         except McpClientError as exc:
             if not exc.retryable or attempt == policy.read_retry_attempts - 1:
                 raise
+            log_turn_step("READ_TOOL_RETRY", 工具=name, 下一次尝试=attempt + 2, 错误码=exc.code)
             await asyncio.sleep(policy.read_retry_delay_ms / 1000)
     raise AssertionError("重试循环应已返回或抛出异常")

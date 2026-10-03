@@ -6,6 +6,7 @@ import re
 from app.core.config.agent.agents import plan_config
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException
+from app.core.flow_logging import log_turn_step
 from app.helper.model_client import ModelClient
 from app.repository.planning_memory import PREFERENCE_TYPES
 from app.schemas.plan import parse_plan, preview, today
@@ -68,9 +69,11 @@ class PlanNode:
         if not requirement or not requirement.strip():
             return AgentTurnResult(reply="请先说明希望制定什么规划。", completed=False,
                                    pending=pending, dispatch_type="PENDING_UNKNOWN")
+        log_turn_step("LOAD_PLANNING_MEMORY")
         try:
             memories = await self.planning.memories(state["user_id"], requirement)
         except Exception:
+            log_turn_step("PLANNING_MEMORY_FALLBACK", 原因="读取失败，按本轮需求生成")
             logger.warning("规划记忆读取失败，本轮按用户需求生成", exc_info=True)
             memories = []
         if signal == UserSignal.NEW_PLAN and should_clarify(requirement, state["session_id"], memories):
@@ -79,6 +82,7 @@ class PlanNode:
                 completed=True, pending=PendingTask(task=requirement), dispatch_type="PLAN_CLARIFICATION")
         context.use_model("planner", self.model)
         plan = await self._generate(requirement, memories)
+        log_turn_step("SAVE_DRAFT", 待办数=len(plan.todos))
         draft = await self.planning.save_draft(state["user_id"], state["session_id"], requirement, plan)
         plan_preview = preview(plan)
         return AgentTurnResult(
@@ -95,10 +99,14 @@ class PlanNode:
         ]
         # 只重试一次结构/日期校验错误；保存草稿在此循环之外执行。
         for attempt in range(2):
+            log_turn_step("PLANNER_MODEL", 尝试次数=attempt + 1)
             raw = await self.model.complete(messages)
             try:
-                return parse_plan(raw, generating=True)
+                plan = parse_plan(raw, generating=True)
+                log_turn_step("PLAN_VALIDATED", 待办数=len(plan.todos))
+                return plan
             except ValueError as exc:
+                log_turn_step("PLAN_INVALID", 尝试次数=attempt + 1, 允许修正=not bool(attempt))
                 if attempt:
                     raise BusinessException(ErrorCode.PLAN_INVALID) from exc
                 messages += [{"role": "assistant", "content": raw},
