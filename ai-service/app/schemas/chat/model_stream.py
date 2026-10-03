@@ -97,7 +97,7 @@ class ToolCallLifecycleEvent(BaseModel):
 
 
 class AgentStatusData(BaseModel):
-    agent: Literal["chat"] = "chat"
+    agent: Literal["chat", "route", "planner", "executor", "image"] = "chat"
     round: int
     stage: Literal["model", "tool"]
 
@@ -126,7 +126,7 @@ class FinalData(BaseModel):
 
 
 class FinalEvent(BaseModel):
-    """图内部的完成信号，由 ChatService 消费，不直接发给前端。"""
+    """图内部的完成信号，由 ChatNode 消费，不直接发给前端。"""
 
     event: Literal["_final"] = "_final"
     data: FinalData

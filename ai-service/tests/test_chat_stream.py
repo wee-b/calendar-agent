@@ -17,7 +17,7 @@ from app.schemas.chat import ChatRequest
 from app.schemas.chat.model_stream import (
     AssistantDeltaData, AssistantDeltaEvent, FinalData, FinalEvent, ModelDelta,
 )
-from app.service.chat import ChatService, _events_with_ping
+from app.all_graph.nodes.chat_node import ChatNode, _events_with_ping
 from app.service.model_stream import StreamResponseAccumulator
 
 
@@ -96,6 +96,10 @@ class ModelStreamTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ChatStreamEndpointTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from tests.conversation_fakes import http_conversation_fakes
+        self.enterContext(http_conversation_fakes())
+
     async def test_streams_read_tool_and_saves_complete_round_once(self):
         class Verifier:
             async def verify(self, token):
@@ -142,8 +146,8 @@ class ChatStreamEndpointTests(unittest.IsolatedAsyncioTestCase):
         Repository.saved = []
         with patch("app.core.middleware.auth.RedisTokenVerifier", return_value=Verifier()), \
              patch("app.service.chat.ChatRepository", return_value=Repository()), \
-             patch("app.service.chat_graph.ModelClient", return_value=Model()), \
-             patch("app.service.chat_graph.JavaMcpClient", Mcp):
+             patch("app.all_graph.chat_graph.ModelClient", return_value=Model()), \
+             patch("app.all_graph.chat_graph.JavaMcpClient", Mcp):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:
@@ -197,8 +201,8 @@ class ChatStreamEndpointTests(unittest.IsolatedAsyncioTestCase):
             return True
 
         with patch("app.service.chat.ChatRepository", return_value=repository), \
-             patch("app.service.chat.ChatGraph", return_value=graph):
-            events = [event async for event in ChatService().stream_reply(
+             patch("app.all_graph.nodes.chat_node.ChatGraph", return_value=graph):
+            events = [event async for event in ChatNode().stream_reply(
                 23, ChatRequest(sessionId="s1", message="你好"), "token", disconnected)]
         self.assertEqual([], events)
         self.assertTrue(graph.closed)
@@ -246,8 +250,8 @@ class ChatStreamEndpointTests(unittest.IsolatedAsyncioTestCase):
         Repository.saved = []
         with patch("app.core.middleware.auth.RedisTokenVerifier", return_value=Verifier()), \
              patch("app.service.chat.ChatRepository", return_value=Repository()), \
-             patch("app.service.chat_graph.ModelClient", return_value=Model()), \
-             patch("app.service.chat_graph.JavaMcpClient", Mcp), \
+             patch("app.all_graph.chat_graph.ModelClient", return_value=Model()), \
+             patch("app.all_graph.chat_graph.JavaMcpClient", Mcp), \
              patch("app.service.read_only_tool.asyncio.sleep", return_value=None):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -283,7 +287,7 @@ class ChatStreamEndpointTests(unittest.IsolatedAsyncioTestCase):
         Repository.saved = 0
         with patch("app.core.middleware.auth.RedisTokenVerifier", return_value=Verifier()), \
              patch("app.service.chat.ChatRepository", return_value=Repository()), \
-             patch("app.service.chat_graph.ModelClient", return_value=Model()):
+             patch("app.all_graph.chat_graph.ModelClient", return_value=Model()):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:

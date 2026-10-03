@@ -1,6 +1,17 @@
-# Calendar AI Service（最小对话版）
+# Calendar AI Service
 
-当前提供 `GET /health`、`GET /auth/me`、`POST /chat`、流式 `POST /chat/stream`、`GET /chat/history`、`GET /chat/sessions`、`GET /chat/latest`、`POST /chat/new-session`、`DELETE /chat/session`、`DELETE /chat/last-round` 和独立的 `POST /rag/search`。对话由 LangGraph 编排模型和 Java `/mcp` 的只读 `queryDayDetail` 工具，最多三轮模型调用；RAG 暂不参与对话。持久化 checkpoint 和写操作确认仍属 09 文档后续阶段。
+当前提供 `GET /health`、`GET /auth/me`、`POST /chat`、流式 `POST /chat/stream`、`GET /chat/history`、`GET /chat/sessions`、`GET /chat/latest`、`POST /chat/new-session`、`DELETE /chat/session`、`DELETE /chat/last-round` 和独立的 `POST /rag/search`。普通与流式对话统一经过 LangGraph 主图：Route → 状态转换表 → Chat / Planner / Executor / Image → 提交。Chat 和 Executor 的工具循环最多三轮模型调用；RAG 暂不参与对话。
+
+## 状态机与节点迁移
+
+- Planner：读取已有用户偏好、必要时澄清、生成或修改结构化草稿；校验失败允许模型修正一次。草稿由 Python 写入 `yl_plan_draft`。
+- Executor：新操作先展示任务，确认后才调用 Java MCP。确认使用已保存任务；工具参数由本地白名单校验，写结果核对操作与目标，不自动重试写入。
+- 同步规划：仅接受当前用户、当前会话绑定的待同步草稿，通过新增的 `batchCreateTodos` MCP 工具调用 Java 的事务批量创建，再标记草稿已同步。部署时需同时更新 Java MCP。
+- Image：调用配置的图片模型生成示意图，修改时累计外观要求，始终保留对应的规划草稿。
+- 跨轮状态沿用 `yl_agent_flow_state` 的 `CHAT / PLAN / EXECUTE / IMAGE` 和版本认领；LangGraph 当前不启用 checkpointer。临时闲聊/查询保留待处理任务；拒绝清空任务。
+- 完整回复、会话统计、下一阶段和待处理任务在一个 MySQL 事务提交。写工具开始后的失败或断连保留 `processing=1`，防止重复确认触发重复写入。需人工核实日历结果后修复状态；尚无自动恢复或幂等账本。
+
+Java 业务写入与 Python 草稿/状态提交不能组成同一个本地事务；批量创建保证 Java 端整批成功或回滚，跨服务响应丢失仍按结果待核实处理。Java 旧 AI 和记忆模块已删除，保留 `module/mcp` 与业务模块；长期记忆抽取、行为记忆刷新和上下文摘要仍待 Python 实现。
 
 只读 MCP 工具的瞬态错误由 Python 最多尝试 `MCP_READ_RETRY_ATTEMPTS` 次，间隔 `MCP_READ_RETRY_DELAY_MS` 毫秒。Java MCP 每次请求只执行一次并返回 `retryable` 标记；写工具不自动重试。
 
@@ -12,13 +23,13 @@
 - `GET /chat/history?sessionId=xxx&beforeId=81&limit=20` 获取 ID 小于 81 的更早消息。返回 `data: {items, hasMore, nextBeforeId}`，页内按 ID 升序；后续使用 `nextBeforeId`。空页或最后一页的游标为 NULL。
 - `GET /chat/sessions` 读取 `yl_ai_session`，按最近活动倒序，返回 `sessionId/title/createTime/lastMessageTime/messageCount`。`createTime` 是会话创建时间，排序应使用 `lastMessageTime`。
 - `GET /chat/latest?sessionId=xxx` 返回供 RouteAgent 使用的上下文：`{sessionId, previousReply, userMessages}`。取最后一条有效助手回复及其后全部用户输入，没有助手回复时取全部用户输入，不按 20 条截断。可用 `throughId` 固定本次读取上界。
-- RouteAgent 在进程内直接调用 `ChatService.get_route_context()`；尚未入库的当前输入用 `current_message` 追加，已入库的当前输入用 `through_id` 定位。当前只提供上下文读取，尚未接入意图识别节点。
+- RouteAgent 在进程内直接调用 `ChatService.get_route_context()`；尚未入库的当前输入用 `current_message` 追加，已入库的当前输入用 `through_id` 定位，并结合阶段与待处理任务识别信号。
 - `POST /chat/new-session` 返回 UUID；`DELETE /chat/session?sessionId=xxx` 删除会话；`DELETE /chat/last-round?sessionId=xxx` 按助手回复边界撤回，支持连续多条用户输入。
 - 所有接口沿用 token 鉴权；用户与会话隔离，已删除会话不可读取或重新追加消息。
 
 前端已适配分页与 Python SSE，开发环境 `/chat`、`/rag` 指向 Python 8001。生产环境可用 `VITE_AI_API_BASE_URL` 配置独立 Python 地址。已删除的 Java 查询及会话管理入口与剩余配套改动见 [10 文档](../docs/10-java-chat-history-migration.md)。
 
-仓储支持 `append_messages()` 保存连续同角色消息；首次写入创建会话，消息与标题、计数、最近消息在同一事务更新。现有聊天入口仍通过 `save_round()` 在完整回答产生后提交，流式失败与断连不保存不完整回复。
+仓储支持 `append_messages()` 保存连续同角色消息。聊天入口由主图 `commit` 在完整回答产生后原子保存消息、会话统计及流程状态；流式失败与断连不保存不完整回复。
 
 测试命令（在 `ai-service` 下运行）：
 
@@ -27,9 +38,10 @@
 # 可选：指向隔离 MySQL，账号需能创建和删除测试数据库；不会读取业务 DATABASE_URL。
 $env:CHAT_TEST_MYSQL_URL = 'mysql+aiomysql://test_user:test_password@127.0.0.1:3306/'
 .\.venv\Scripts\python.exe -m unittest tests.test_chat_history -v
+.\.venv\Scripts\python.exe -m unittest tests.test_flow_persistence -v
 ```
 
-MySQL 集成测试创建随机 `chat_history_test_*` 数据库并在结束时清理，覆盖游标分页、同角色消息、并发写入、事务回滚及迁移脚本。未设置测试 URL 时仅跳过这些数据库用例。
+MySQL 集成测试创建随机 `chat_history_test_*` 数据库并在结束时清理，覆盖游标分页、同角色消息、并发写入、事务回滚、版本认领、草稿隔离及迁移脚本。未设置测试 URL 时仅跳过这些数据库用例。使用 `caching_sha2_password` 且未启用 TLS 的 MySQL 测试连接需要在虚拟环境安装 `cryptography`。
 
 ## 本地运行（PowerShell）
 
@@ -46,7 +58,7 @@ py -3.13 -m venv .venv
 
 普通和流式对话完成并保存后，各打印一条日志，汇总用户输入（前 20 个字符）、命中的 Agent 及实际模型厂商（如 `chatAgent(deepseek)`）、完整模型回复的前 50 个字符。超长内容追加省略号，空白字符转为空格；流式回复仅在完整生成后打印一次。
 
-`.env` 中配置连接 URL；`.env.prod` 配置以下密钥（生图接入前可暂不填写 `ARK_API_KEY`）：
+`.env` 中配置连接 URL；`.env.prod` 配置以下密钥（使用图片节点需要 `ARK_API_KEY`）：
 
 ```dotenv
 ALIYUN_API_KEY=真实百炼 API Key
@@ -57,9 +69,9 @@ ARK_API_KEY=真实火山方舟 API Key
 
 Redis 必须连接到 Java Sa-Token 使用的同一数据库（当前开发配置是 DB 15）；MySQL 必须已有新结构的 `yl_ai_dialogue`（`role + content`）和 `yl_ai_session` 表；删除/撤回还需现有 `yl_agent_flow_state`、`yl_chat_context_summary` 表，以清理待确认状态和摘要。旧库使用 `sql/migrations/20261002_chat_session_content.sql` 迁移；Java 配套改动与部署约束见 [10 文档](../docs/10-java-chat-history-migration.md)。连接 URL 中用户名或密码的特殊字符需要 URL 编码。
 
-聊天默认使用 Spring Boot 中 `chat` agent 的 DeepSeek 配置。切换到阿里云时，在 `.env` 写入 `CHAT_PROVIDER=aliyun`，在 `.env.prod` 写入 `ALIYUN_API_KEY`。阿里云 OpenAI-compatible 接口使用 API Key。
+聊天默认使用 Python `chat_config` 的 DeepSeek 配置。切换到阿里云时，在 `.env` 写入 `CHAT_PROVIDER=aliyun`，在 `.env.prod` 写入 `ALIYUN_API_KEY`。阿里云 OpenAI-compatible 接口使用 API Key。
 
-模型配置分为两层：`app/core/config/agent/providers.py` 的 `Deepseek`、`Aliyun`、`Ark` 读取厂商地址与密钥；`app/core/config/agent/agents.py` 的 Agent 配置选择模型及参数。默认配置对齐 Java `application-dev.yml`：
+模型配置分为两层：`app/core/config/agent/providers.py` 的 `Deepseek`、`Aliyun`、`Ark` 读取厂商地址与密钥；`app/core/config/agent/agents.py` 的 Agent 配置选择模型及参数。Java 不再配置模型，Python 默认配置如下：
 
 | Agent | 厂商 | 模型 | 温度 |
 |---|---|---|---|
@@ -70,7 +82,7 @@ Redis 必须连接到 Java Sa-Token 使用的同一数据库（当前开发配�
 | Summary | 阿里云 | qwen3.7-plus | 0.1 |
 | Image | 火山方舟 | doubao-seedream-5-0-flash-260915 | 不适用 |
 
-Image 另有 `size=2K`、`watermark=true`，当前仅提供配置，生图客户端后续接入。Embedding 保持阿里云 `text-embedding-v4`。每个 Agent 的厂商、模型、温度和请求超时均可在 `.env` 覆盖；Planner 沿用 `PLAN_` 前缀。超时为 Python 独立配置。若 Java 运行环境覆盖了模型 ID，需同步修改 Python 的 Agent 模型名。
+Image 另有 `size=2K`、`watermark=true`，客户端通过 `/images/generations` 返回图片 URL。Embedding 保持阿里云 `text-embedding-v4`。每个 Agent 的厂商、模型、温度和请求超时均可在 `.env` 覆盖；Planner 沿用 `PLAN_` 前缀。
 
 配置目录按用途分组，模型相关配置只保留两个文件：
 

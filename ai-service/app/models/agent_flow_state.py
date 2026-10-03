@@ -1,5 +1,5 @@
-from sqlalchemy import BigInteger, String, Text, DateTime, TinyInteger, Index
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy import BigInteger, String, Text, DateTime, Index
+from sqlalchemy.dialects.mysql import MEDIUMTEXT, TINYINT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 from typing import Optional
@@ -62,7 +62,7 @@ class YlAgentFlowState(Base):
         comment="累积的生图反馈指令"
     )
     processing: Mapped[int] = mapped_column(
-        TinyInteger,
+        TINYINT,
         nullable=False,
         default=0,
         comment="是否正在处理：标记请求已抢占，防止结果写入冲突"

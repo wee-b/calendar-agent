@@ -21,8 +21,9 @@ test('Python SSE handles fragmented UTF-8 and emits only reply text', async () =
     await consumeChatStream(stream(
         event('ping', {}) + event('agent_status', { stage: 'model' }) +
         event('assistant_delta', { delta: '你好' }) +
+        event('tool_call_start', { callId: 'query-1', tool: 'queryDayDetail' }) +
         event('tool_call_delta', { receivedChars: 12 }) +
-        event('tool_result', { status: 'success' }) +
+        event('tool_result', { callId: 'query-1', status: 'success' }) +
         event('assistant_delta', { delta: '，日程已查询。' }) +
         event('result', { aiResult: '你好，日程已查询。', responseTimeMs: 123 }) +
         event('done', { rounds: 2, responseTimeMs: 123 }),
@@ -35,7 +36,7 @@ test('Python SSE handles fragmented UTF-8 and emits only reply text', async () =
     assert.equal(reply, '你好，日程已查询。');
     assert.equal(done, 1);
     assert.equal(time, 123);
-    assert.deepEqual(progress, ['开始：生成回复', '完成：查询日程']);
+    assert.deepEqual(progress, ['开始：生成回复', '开始：查询日程', '完成：查询日程']);
 });
 
 test('error and truncated streams never report success', async () => {

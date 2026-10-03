@@ -48,6 +48,10 @@ class RedisTokenTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ChatEndpointTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from tests.conversation_fakes import http_conversation_fakes
+        self.enterContext(http_conversation_fakes())
+
     async def test_chat_uses_authenticated_user_and_saves_one_round(self):
         class Verifier:
             async def verify(self, token):
@@ -72,7 +76,7 @@ class ChatEndpointTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("app.core.middleware.auth.RedisTokenVerifier", return_value=Verifier()), \
              patch("app.service.chat.ChatRepository", return_value=Repository()), \
-             patch("app.service.chat_graph.ModelClient", return_value=Model()):
+             patch("app.all_graph.chat_graph.ModelClient", return_value=Model()):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:

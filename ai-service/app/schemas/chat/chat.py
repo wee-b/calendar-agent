@@ -16,6 +16,9 @@ class ChatResult(BaseModel):
     sessionId: str
     aiResult: str
     responseTimeMs: int
+    dispatchType: str = "CHAT"
+    currentAgent: str = "CHAT"
+    flowStage: str = "CHAT"
 
 
 class NewSessionResult(BaseModel):

@@ -1,6 +1,6 @@
 spring:
   profiles:
-    active: dev,unknown
+    active: dev
 
   datasource:
     driver-class-name: com.p6spy.engine.spy.P6SpyDriver
@@ -42,8 +42,3 @@ app:
   # 设为 true 时打印 SQL 及执行耗时；修改后需要重启应用。
   sql-log:
     enabled: ${SQL_LOG_ENABLED:false}
-  chat:
-    sse-executor:
-      core-size: 4
-      max-size: 12
-      queue-capacity: 50

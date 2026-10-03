@@ -42,7 +42,7 @@ class JavaMcpClient:
         except ValidationError as exc:
             raise McpClientError("INVALID_RESPONSE", "Java 工具列表格式异常") from exc
 
-    async def call_tool(self, name: str, arguments: dict[str, str], token: str) -> object:
+    async def call_tool(self, name: str, arguments: dict[str, object], token: str) -> object:
         """解析 MCP 外壳和文本内容；具体工具结果由调用服务继续校验。"""
 
         result = await self._request(

@@ -2,7 +2,7 @@ import json
 import unittest
 
 from app.schemas.chat.messages import TextMessage
-from app.service.chat_graph import ChatGraph
+from app.all_graph.chat_graph import ChatGraph
 
 
 class ChatGraphTests(unittest.IsolatedAsyncioTestCase):

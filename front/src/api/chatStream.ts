@@ -14,6 +14,16 @@ export async function consumeChatStream(
     let buffer = '';
     let completed = false;
     let receivedResult = false;
+    const toolLabels: Record<string, string> = {
+        queryDayDetail: '查询日程', queryTodoList: '查询待办', queryMonthCount: '查询月历',
+        createTodo: '创建待办', batchCreateTodos: '同步规划', updateTodo: '修改待办',
+        deleteTodo: '删除待办', toggleTodoDate: '更新完成状态', saveDailyNote: '保存日记',
+        removeTodoDay: '移除待办日期', addTodoDay: '添加待办日期',
+    };
+    const agentLabels: Record<string, string> = {
+        route: '识别意图', chat: '生成回复', planner: '制定规划', executor: '处理操作', image: '生成图片',
+    };
+    const calls = new Map<string, string>();
 
     const dispatch = (frame: string) => {
         if (!frame.trim() || frame.trimStart().startsWith(':')) return;
@@ -31,13 +41,17 @@ export async function consumeChatStream(
                 handlers.onToken(payload.delta);
                 break;
             case 'agent_status':
-                handlers.onProgress?.(payload.stage === 'tool' ? '开始：查询日程' : '开始：生成回复');
+                handlers.onProgress?.('开始：' + (payload.stage === 'tool'
+                    ? (payload.agent === 'chat' ? '查询日程' : '处理日历操作')
+                    : agentLabels[payload.agent] || '生成回复'));
                 break;
             case 'tool_call_start':
-                handlers.onProgress?.('开始：准备日程查询');
+                calls.set(payload.callId, toolLabels[payload.tool] || '处理日历操作');
+                handlers.onProgress?.('开始：' + calls.get(payload.callId));
                 break;
             case 'tool_result':
-                handlers.onProgress?.(payload.status === 'success' ? '完成：查询日程' : '失败：查询日程');
+                handlers.onProgress?.((payload.status === 'success' ? '完成：' : '失败：')
+                    + (calls.get(payload.callId) || '处理日历操作'));
                 break;
             case 'result':
                 receivedResult = true;

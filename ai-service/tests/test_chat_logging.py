@@ -8,7 +8,7 @@ from app.helper.model_client import ModelClient
 from app.main import app
 from app.schemas.chat import ChatRequest
 from app.schemas.chat.model_stream import AssistantMessage, ModelDelta, ResultEvent
-from app.service.chat import ChatService
+from app.all_graph.nodes.chat_node import ChatNode
 
 
 class ChatLoggingTests(unittest.IsolatedAsyncioTestCase):
@@ -48,16 +48,16 @@ class ChatLoggingTests(unittest.IsolatedAsyncioTestCase):
                     model.stream_chat = stream_chat
                     request = ChatRequest(sessionId="logging-test", message=user_text)
                     with patch("app.service.chat.ChatRepository", return_value=repository), \
-                         patch("app.service.chat_graph.ModelClient", return_value=model), \
-                         self.assertLogs("app.service", level="INFO") as logs:
+                         patch("app.all_graph.chat_graph.ModelClient", return_value=model), \
+                         self.assertLogs("app.all_graph.nodes.chat_node", level="INFO") as logs:
                         if streaming:
-                            events = [event async for event in ChatService().stream_reply(
+                            events = [event async for event in ChatNode().stream_reply(
                                 23, request, "secret-token", AsyncMock(return_value=False),
                             )]
                             result = next(event.data for event in events
                                           if isinstance(event, ResultEvent))
                         else:
-                            result = await ChatService().reply(23, request, "secret-token")
+                            result = await ChatNode().reply(23, request, "secret-token")
 
                     suffix = "…" if truncated else ""
                     self.assertEqual([
@@ -85,16 +85,16 @@ class ChatLoggingTests(unittest.IsolatedAsyncioTestCase):
 
                 model.stream_chat = broken_stream
                 with patch("app.service.chat.ChatRepository", return_value=repository), \
-                     patch("app.service.chat_graph.ModelClient", return_value=model), \
-                     patch("app.service.chat.logger.info") as log_info, \
+                     patch("app.all_graph.chat_graph.ModelClient", return_value=model), \
+                     patch("app.all_graph.nodes.chat_node.logger.info") as log_info, \
                      self.assertRaisesRegex(RuntimeError, "model unavailable"):
                     request = ChatRequest(message="你好")
                     if streaming:
-                        async for _ in ChatService().stream_reply(
+                        async for _ in ChatNode().stream_reply(
                             23, request, "", AsyncMock(return_value=False),
                         ):
                             pass
                     else:
-                        await ChatService().reply(23, request)
+                        await ChatNode().reply(23, request)
                 log_info.assert_not_called()
                 repository.save_round.assert_not_awaited()

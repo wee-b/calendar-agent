@@ -1,70 +1,32 @@
-"""组装用户上下文、运行对话图，并在完整回答产生后保存对话。"""
+"""会话与消息的读写服务；模型对话由 ChatNode 负责。"""
 
-import asyncio
-import logging
-from contextlib import aclosing
-from typing import AsyncIterator, Awaitable, Callable
-from time import perf_counter
 from uuid import uuid4
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from app.repository.chat import ChatRepository
 from app.repository.chat_session import ChatSessionRepository
-from app.core.config.common.chat_stream import get_chat_stream_settings
+from app.repository.flow_state import FlowStateRepository
+from app.models.agent_flow_state import YlAgentFlowState
 from app.schemas.chat.history import (
     ChatHistoryItem, ChatHistoryPage, ChatSessionItem, DEFAULT_HISTORY_LIMIT,
 )
 from app.schemas.statemachine.route_context import RouteContext, RouteContextMessage
-from app.service.chat_graph import ChatGraph
-from app.schemas.chat import ChatRequest, ChatResult
+from app.schemas.statemachine.flow import ConversationStage, PendingTask
+from app.schemas.statemachine.transitions import AgentType
 from app.schemas.chat.chat import NewSessionResult
-from app.schemas.chat.messages import TextMessage
-from app.schemas.chat.model_stream import (
-    ClientEvent, DoneData, DoneEvent, FinalEvent, GraphEvent, PingEvent, ResultEvent,
-)
-from pydantic import TypeAdapter
-
-
-_graph_event_adapter = TypeAdapter(GraphEvent)
-logger = logging.getLogger(__name__)
-
-
-def _log_preview(text: str, limit: int) -> str:
-    """日志正文限制字符数并保持单行；省略号表示还有未打印的内容。"""
-    preview = "".join(" " if char.isspace() else char for char in text[:limit])
-    return preview + ("…" if len(text) > limit else "")
-
-
-def _log_completed_chat(user_text: str, agent_label: str, answer: str) -> None:
-    logger.info("对话完成 | 用户输入：%s | 命中agent：%s | 模型回复：%s",
-                _log_preview(user_text, 20), agent_label, _log_preview(answer, 50))
-
-
-async def _events_with_ping(source: AsyncIterator[GraphEvent], interval: float) -> AsyncIterator[GraphEvent | PingEvent]:
-    """等待下一条图事件时定期发 ping；同一个待完成任务不能因 ping 被取消。"""
-
-    iterator = source.__aiter__()
-    while True:
-        pending = asyncio.create_task(anext(iterator))
-        try:
-            while not pending.done():
-                done, _ = await asyncio.wait({pending}, timeout=interval)
-                if not done:
-                    yield PingEvent()
-            try:
-                event = pending.result()
-            except StopAsyncIteration:
-                return
-            yield _graph_event_adapter.validate_python(event)
-        finally:
-            if not pending.done():
-                pending.cancel()
-                await asyncio.gather(pending, return_exceptions=True)
 
 
 class ChatService:
-    """普通与流式聊天共用同一段历史和持久化规则。"""
+    """供 HTTP 接口及 Agent 节点共用的会话、消息和流程状态读写。"""
+
+    def __init__(self, flow_state_repository: FlowStateRepository | None = None) -> None:
+        # 延迟创建仓储，历史接口无需为了读取消息而初始化流程状态数据库连接。
+        self._flow_state_repository = flow_state_repository
+
+    @property
+    def flow_states(self) -> FlowStateRepository:
+        if self._flow_state_repository is None:
+            self._flow_state_repository = FlowStateRepository()
+        return self._flow_state_repository
 
     @staticmethod
     def new_session() -> NewSessionResult:
@@ -134,65 +96,50 @@ class ChatService:
             context.userMessages.append(RouteContextMessage(role="user", content=current_message))
         return context
 
-    @staticmethod
-    async def _context(user_id: int, request: ChatRequest):
-        """从用户 ID 和会话 ID 读取历史，再追加当天系统提示与本轮输入。"""
+    async def recent_messages(self, user_id: int, session_id: str):
+        """读取模型可用的近期消息；提示词由调用方组装。"""
+        return await ChatRepository().recent_messages(user_id, session_id)
 
-        session_id = request.sessionId or str(uuid4())
-        repository = ChatRepository()
-        history = await repository.recent_messages(user_id, session_id)
-        today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
-        messages = [TextMessage(role="system", content=
-                    f"你是日历助手。今天是北京时间 {today}。"
-                    "需要查询某一天的日程时调用 queryDayDetail。"
-                    "目前只能读取日期详情，不能创建、修改或删除日程。"
-                    "不要编造用户的待办或日记。"),
-                    *history, TextMessage(role="user", content=request.message)]
-        return session_id, repository, messages
+    async def save_round(
+        self, user_id: int, session_id: str, message: str,
+        answer: str, elapsed_ms: int,
+    ) -> None:
+        """一次事务保存本轮用户输入与完整助手回复。"""
+        await ChatRepository().save_round(
+            user_id, session_id, message, answer, elapsed_ms,
+        )
 
-    async def reply(self, user_id: int, request: ChatRequest, token: str = "") -> ChatResult:
-        """等待模型完整回答后保存一轮用户消息和助手消息。"""
+    async def get_flow_state(self, user_id: int, session_id: str) -> YlAgentFlowState | None:
+        """读取已存在的流程状态，不创建新记录。"""
+        return await self.flow_states.get(user_id, session_id)
 
-        started = perf_counter()
-        session_id, repository, messages = await self._context(user_id, request)
-        graph = ChatGraph()
-        answer = await graph.run(messages, token)
-        elapsed_ms = int((perf_counter() - started) * 1000)
-        await repository.save_round(user_id, session_id, request.message, answer, elapsed_ms)
-        _log_completed_chat(request.message, graph.agent_label, answer)
-        return ChatResult(sessionId=session_id, aiResult=answer, responseTimeMs=elapsed_ms)
+    async def get_or_create_flow_state(self, user_id: int, session_id: str) -> YlAgentFlowState:
+        """首次对话时建立流程状态，并检查所属会话未删除。"""
+        return await self.flow_states.get_or_create(user_id, session_id)
 
-    async def stream_reply(
-        self, user_id: int, request: ChatRequest, token: str,
-        is_disconnected: Callable[[], Awaitable[bool]],
-    ) -> AsyncIterator[ClientEvent]:
-        """断连或失败时结束流；仅在收到图的 _final 后保存并发送 result/done。"""
+    async def claim_flow_state(self, state: YlAgentFlowState) -> bool:
+        """以版本号原子认领本轮处理；失败表示已有请求在处理。"""
+        return await self.flow_states.claim(state)
 
-        started = perf_counter()
-        settings = get_chat_stream_settings()
-        async with asyncio.timeout(settings.request_timeout_seconds):
-            session_id, repository, messages = await self._context(user_id, request)
-            graph = ChatGraph()
-            async with aclosing(graph.stream(messages, token)) as graph_events:
-                async with aclosing(_events_with_ping(
-                    graph_events, settings.ping_interval_seconds,
-                )) as events:
-                    async for event in events:
-                        if await is_disconnected():
-                            return
-                        if not isinstance(event, FinalEvent):
-                            yield event
-                            continue
-                        answer = event.data.answer
-                        rounds = event.data.rounds
-                        elapsed_ms = int((perf_counter() - started) * 1000)
-                        await repository.save_round(
-                            user_id, session_id, request.message, answer, elapsed_ms)
-                        _log_completed_chat(request.message, graph.agent_label, answer)
-                        yield ResultEvent(data=ChatResult(
-                            sessionId=session_id, aiResult=answer,
-                            responseTimeMs=elapsed_ms,
-                        ))
-                        yield DoneEvent(data=DoneData(
-                            rounds=rounds, response_time_ms=elapsed_ms,
-                        ))
+    async def complete_flow_state(
+        self, state: YlAgentFlowState, next_stage: ConversationStage,
+        pending: PendingTask, agent: AgentType,
+        *, message: str | None = None, reply: str | None = None, elapsed_ms: int = 0,
+    ) -> None:
+        """提交阶段与待处理任务，并释放本轮认领。"""
+        await self.flow_states.complete(state, next_stage, pending, agent,
+                                        message=message, reply=reply, elapsed_ms=elapsed_ms)
+
+    async def release_flow_state_claim(self, state: YlAgentFlowState) -> None:
+        """仅在尚未开始外部写操作的失败路径释放认领。"""
+        await self.flow_states.release_claim(state)
+
+    async def delete_flow_state(self, user_id: int, session_id: str) -> bool:
+        """单独删除空闲流程状态；删除整个会话仍走 delete_session 的事务。"""
+        return await self.flow_states.delete(user_id, session_id)
+
+    def resolve_flow_stage(self, state: YlAgentFlowState) -> ConversationStage:
+        return self.flow_states.resolve_stage(state)
+
+    def flow_pending(self, state: YlAgentFlowState) -> PendingTask:
+        return self.flow_states.pending(state)

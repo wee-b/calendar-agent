@@ -24,9 +24,10 @@ EventWriter = Callable[[StreamEvent], None]
 class StreamResponseAccumulator:
     """同时收集助手正文与多个工具调用，并发送脱敏的前端进度事件。"""
 
-    def __init__(self, round_number: int, writer: EventWriter) -> None:
+    def __init__(self, round_number: int, writer: EventWriter, *, allowed_tools=None) -> None:
         self.round_number = round_number
         self.writer = writer
+        self.allowed_tools = {"queryDayDetail"} if allowed_tools is None else allowed_tools
         self.content: list[str] = []
         self.calls: dict[int, ToolCall] = {}
         self.started: set[int] = set()
@@ -61,7 +62,7 @@ class StreamResponseAccumulator:
         """仅在识别为已开放工具后报告调用开始和参数接收长度。"""
 
         call = self.calls[index]
-        if not call.id or call.function.name != "queryDayDetail":
+        if not call.id or call.function.name not in self.allowed_tools:
             return
         if index not in self.started:
             self.writer(ToolCallLifecycleEvent(

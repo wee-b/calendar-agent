@@ -188,26 +188,31 @@ class ChatRepository:
                 if chat_session.deleted_flag:
                     raise BusinessException(ErrorCode.CHAT_SESSION_DELETED)
 
-                # 持有会话行锁后再分配消息 ID，保持同一会话的提交顺序。
-                # 与已有 MySQL DATETIME 使用同一数据库时钟，避免应用/数据库时区混用。
-                now = await session.scalar(select(func.current_timestamp()))
-                rows = [AiDialogue(
-                    user_id=user_id, session_id=session_id, role=message.role,
-                    content=message.content, response_time_ms=message.response_time_ms,
-                    create_time=now,
-                ) for message in messages]
-                session.add_all(rows)
-                await session.flush()
+                return await self.append_locked(session, chat_session, messages)
 
-                if chat_session.title is None:
-                    first_user = next((row for row in rows if row.role == "user"), None)
-                    if first_user is not None:
-                        content = first_user.content
-                        chat_session.title = content[:30] + ("..." if len(content) > 30 else "")
-                chat_session.message_count += len(rows)
-                chat_session.last_message_id = rows[-1].dialogue_id
-                chat_session.last_message_time = rows[-1].create_time
-                return [row.dialogue_id for row in rows]
+    @staticmethod
+    async def append_locked(session: AsyncSession, chat_session: AiSession,
+                            messages: list[ChatMessageCreate]) -> list[int]:
+        """调用者已锁定会话且持有事务；流程状态提交复用此方法保证原子性。"""
+        if chat_session.deleted_flag:
+            raise BusinessException(ErrorCode.CHAT_SESSION_DELETED)
+        now = await session.scalar(select(func.current_timestamp()))
+        rows = [AiDialogue(
+            user_id=chat_session.user_id, session_id=chat_session.session_id,
+            role=message.role, content=message.content,
+            response_time_ms=message.response_time_ms, create_time=now,
+        ) for message in messages]
+        session.add_all(rows)
+        await session.flush()
+        if chat_session.title is None:
+            first_user = next((row for row in rows if row.role == "user"), None)
+            if first_user is not None:
+                content = first_user.content
+                chat_session.title = content[:30] + ("..." if len(content) > 30 else "")
+        chat_session.message_count += len(rows)
+        chat_session.last_message_id = rows[-1].dialogue_id
+        chat_session.last_message_time = rows[-1].create_time
+        return [row.dialogue_id for row in rows]
 
     async def save_round(
         self, user_id: int, session_id: str, message: str, answer: str, elapsed_ms: int,

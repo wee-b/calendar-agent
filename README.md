@@ -13,8 +13,8 @@
 | 后端 | Spring Boot 3.5.4 + Java 17 + MyBatis-Plus + Sa-Token |
 | 数据库 | MySQL 8 + Druid + P6Spy |
 | 缓存 | Redis |
-| AI 框架 | LangChain4j 1.3，OpenAI 兼容 Chat/Streaming API |
-| 默认模型配置 | 百炼：路由/执行/摘要用 `qwen3.7-plus`；DeepSeek：对话 `deepseek-flash`、规划 `deepseek-v4-pro`。各厂家使用各自的 `api-key` 和 `base-url` |
+| AI 框架 | Python FastAPI + LangGraph，OpenAI 兼容 Chat/Streaming API |
+| 默认模型配置 | Python 配置管理：百炼用于路由/执行，DeepSeek 用于对话/规划，火山方舟用于生图；详见 `ai-service/README.md` |
 | RAG | Python 中文 BM25 + Qdrant Dense Vector + RRF 融合 + 可选 LLM Rerank |
 | Embedding | 阿里云 `text-embedding-v4` 等远程 OpenAI 兼容模型 |
 | 文档 | Knife4j OpenAPI |
@@ -32,11 +32,9 @@ calendar-agent/
 │       │   ├── module/user/       # 用户模块
 │       │   ├── module/todo/       # 待办与每日任务
 │       │   ├── module/dailyNote/  # 日历统计、日详情、日记
-│       │   ├── module/assistant/  # AI 对话、状态机、Agent、MCP
+│       │   ├── module/mcp/        # MCP 控制器、工具注册及业务调用
 │       │   └── module/almanac/    # 现代黄历
 │       └── resources/
-│           ├── prompt/            # Route / Chat / Planner / Query / Executor 提示词
-│           ├── output/            # 语料处理历史输出
 │           ├── application.yml
 │           └── application-dev.yml
 ├── front/                   # Vue 前端
@@ -60,19 +58,21 @@ calendar-agent/
 | `user` | 注册、登录、当前用户信息、登出 |
 | `todo` | 目标待办 CRUD、按日期展开、每日完成状态、增删单日任务 |
 | `dailyNote` | 月待办数量、日详情、每日笔记 upsert |
-| `assistant` | 多会话对话、SSE 流式响应、状态转换、Agent 调度、草稿确认、MCP 工具 |
+| `mcp` | JSON-RPC 工具列表与执行，复用业务服务的用户隔离和事务 |
 | `almanac` | 现代黄历计算与查询 |
 
-核心 Agent 类：
+AI 与 MCP 的职责：
 
-- `ChatFacadeImpl`：HTTP 对话外层流程，负责消息落库、SSE 和会话历史。
-- `ChatServiceImpl`：Assistant 核心入口，按已有状态和新请求路由的顺序处理消息。
-- `ChatTransitionTable`：集中声明状态、用户事件、动作节点和下一状态。
-- `RouteAgent` / `ChatAgent` / `PlannerAgent` / `ExecutorAgent`：分别负责结构化路由、闲聊与只读查询、规划生成和全部写操作。
-- `AgentRunner`：各 Agent 复用的模型及工具调用循环。
-- `PlanDraftService`：保存规划草稿，并在确认后批量创建待办。
+- Python `ConversationGraph`：编排 Route、Chat、Plan、Execute、Image 节点，统一提交对话和流程状态。
+- Python `ChatTransitionTable`：按阶段与用户信号选择处理节点和下一阶段。
+- Python `PlanNode`：模型调用、规划校验；`PlanningService` 封装记忆查询及草稿保存。
+- Python `ExecuteNode`：确认后调用 MCP，规划同步使用 `batchCreateTodos`。
 - Python `ai-service/app/service/rag.py`：BM25 + Qdrant 混合检索、RRF 融合、可选 Rerank、缓存。
-- `McpToolRegistry`：注册 AI/MCP 可调用的日程工具。
+- Java `McpController` / `McpToolRegistry` / `McpToolService`：提供业务工具，复用日历业务权限与事务；不持有模型或会话状态。
+
+Java 已删除旧对话入口、Agent、状态机、草稿/摘要/记忆管理、提示词和模型配置，移除 LangChain4j 依赖。AI 数据表继续供 Python 使用，清理代码不删除数据库数据。长期记忆抽取、行为刷新和上下文摘要尚待 Python 补齐。
+
+Java 默认仅启用 `dev` profile，遗留本地 `application-unknown.yml` 不再加载或打包。模型与密钥由 Python 配置管理。
 
 ---
 
@@ -122,12 +122,12 @@ calendar-agent/
 | GET | `/calendar/day?date=2026-08-24` | 查询某天待办和日记 | 是 |
 | PUT | `/daily-note` | 保存或修改某天日记 | 是 |
 
-### AI 对话 `/chat`
+### AI 对话 `/chat`（Python 服务）
 
 | 方法 | 路径 | 说明 | 认证 |
 | --- | --- | --- | --- |
 | POST | `/chat` | 非流式对话 | 是 |
-| POST | `/chat/stream` | SSE 流式对话，包含 `progress` 和 `responseTime` 事件 | 是 |
+| POST | `/chat/stream` | SSE 流式对话，包含 `assistant_delta`、状态/工具事件、`result`、`done` | 是 |
 | POST | `/chat/new-session` | 创建新会话 ID | 是 |
 | GET | `/chat/history` | 查询指定会话历史 | 是 |
 | DELETE | `/chat/session` | 删除指定会话 | 是 |
@@ -147,13 +147,7 @@ calendar-agent/
 | --- | --- | --- | --- |
 | POST | `/mcp` | JSON-RPC 端点，支持 `tools/list` 与 `tools/call` | 是 |
 
-### 记忆 `/memory`
-
-| 方法 | 路径 | 说明 | 认证 |
-| --- | --- | --- | --- |
-| GET | `/memory` | 查询当前用户 active 长期记忆，可用 `type` 过滤 | 是 |
-| DELETE | `/memory/{memoryId}` | 删除一条长期记忆 | 是 |
-| POST | `/memory/refresh-behaviors` | 根据最近 30 天待办完成情况刷新行为习惯记忆 | 是 |
+Java `/memory` 入口已移除，Python 当前仅在规划时读取已有有效记忆。
 
 ---
 
@@ -161,7 +155,6 @@ calendar-agent/
 
 ```text
 用户输入
-  ├─ 异步抽取长期偏好/目标记忆
   ├─ 读取 AgentFlowState 和上一轮助手回复
   ├─ RouteAgent 结合主流程、当前任务、上一轮回复和本轮消息输出 UserSignal
   └─ 唯一转换表按 ConversationStage + UserSignal 选择 Agent 和成功后阶段
@@ -173,10 +166,10 @@ calendar-agent/
        └─ SYNC_PLAN：Executor 同步当前草稿，成功后回到 CHAT
 ```
 
-规划类任务会先输出草稿预览。用户明确要求同步后，`PlanDraftService` 将 Planner 的结构化 JSON 转换为多个 `TodoCreateDTO`，批量写入日历；普通“好的”不会触发同步。生图后仍可同步同一草稿。
+规划类任务会先输出草稿预览。用户明确要求同步后，Python `ExecuteNode` 将当前草稿转换为业务参数，通过 Java `batchCreateTodos` MCP 工具在一个事务中批量创建待办；普通“好的”不会触发同步。生图后仍可同步同一草稿。
 完整流转表和发布步骤见 [08 设计文档](docs/08-chat-state-transition-table.md)。已有数据库启动此版本前需执行一次 `sql/migrations/20260930_agent_conversation_stage.sql`。
 Planner 生成计划前会读取 active 用户记忆；公共 RAG 当前仅能通过 Python 独立检索接口调用，尚未注入规划对话。
-助手回复落库后会异步检查是否需要刷新会话摘要。未摘要对话满 40 轮（用户+助手各一条算一轮）时，把最早 20 轮压进 `yl_chat_context_summary`；之后要再积累 20 轮才进行下一次压缩。原始 `yl_ai_dialogue` 不删除，历史页仍可查看。RouteAgent 不读压缩历史，只看上一轮助手回复和本轮用户消息。摘要只保留稳定事实、目标、偏好和重要指代，不把历史请求当作本轮待执行任务。
+跨轮状态保存在 MySQL；当前 LangGraph 未启用 checkpointer。写操作结果不确定时保留会话认领待核实，不自动重试。RouteAgent 读取上一轮助手回复和本轮连续用户消息；上下文摘要自动刷新尚未接入 Python。
 
 ---
 
@@ -213,7 +206,7 @@ mysql -u root -p < sql/insert_data.sql
 - Redis：默认 `localhost:6379`，数据库 `15`
 - Qdrant：Python 默认使用 REST 端口 `6333`，集合 `rag_corpus`
 - Embedding：使用阿里云 `text-embedding-v4` 等远程 OpenAI 兼容模型
-- Chat Model：OpenAI 兼容接口，默认配置在 `back/src/main/resources/application-dev.yml`
+- Chat Model：OpenAI 兼容接口，配置在 Python `ai-service/.env`，密钥在 `.env.prod` 或环境变量
 
 ### 3. 配置后端
 
@@ -240,38 +233,6 @@ app:
   sa-token:
     token-name: yvli-token
     timeout: 604800
-  ai:
-    default-provider: dashscope
-    providers:
-      dashscope:
-        type: openai-compatible
-        api-key: ${unknown.aliyun.api-key}
-        base-url: ${unknown.aliyun.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}
-      deepseek:
-        type: openai-compatible
-        api-key: ${unknown.deepseek.api-key}
-        base-url: ${unknown.deepseek.base-url:https://api.deepseek.com}
-    agents:
-      route:
-        provider: dashscope
-        model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
-        temperature: 0.1
-      chat:
-        provider: deepseek
-        model: ${DEEPSEEK_CHAT_MODEL:deepseek-flash}
-        temperature: 0.3
-      executor:
-        provider: dashscope
-        model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
-        temperature: 0.3
-      planner:
-        provider: deepseek
-        model: ${DEEPSEEK_PLANNER_MODEL:deepseek-v4-pro}
-        temperature: 0.1
-      summary:
-        provider: dashscope
-        model: ${ALIYUN_QWEN_MODEL:qwen3.7-plus}
-        temperature: 0.1
 ```
 
 ### 4. 启动后端
@@ -295,7 +256,7 @@ npm install
 npm run dev
 ```
 
-Vite 会代理 `/user`、`/todo`、`/chat`、`/calendar`、`/almanac`、`/memory`、`/daily-note`、`/test` 到 `http://localhost:8080`。
+Vite 将 `/chat`、`/rag` 代理到 Python `http://localhost:8001`，用户、日历、待办和日记请求代理到 Java `http://localhost:8080`。Python 启动和模型配置见 [AI 服务说明](ai-service/README.md)。
 
 ---
 
