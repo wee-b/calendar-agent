@@ -20,7 +20,10 @@ class ConversationTransport:
         graph = self.graph_factory(user_id=user_id, session_id=session_id)
         settings = get_chat_stream_settings()
         async with asyncio.timeout(settings.request_timeout_seconds):
-            result = await graph.run_turn(request.message, token, emit=emit, is_disconnected=is_disconnected)
+            kwargs = {"emit": emit, "is_disconnected": is_disconnected}
+            if request.documentIds:
+                kwargs["document_ids"] = request.documentIds
+            result = await graph.run_turn(request.message, token, **kwargs)
         return ChatResult(sessionId=session_id, aiResult=result.reply, responseTimeMs=result.elapsed_ms,
                           dispatchType=result.dispatch_type, currentAgent=result.agent.name,
                           flowStage=result.stage.name), result.rounds

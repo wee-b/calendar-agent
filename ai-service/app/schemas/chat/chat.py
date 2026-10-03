@@ -8,6 +8,7 @@ class ChatRequest(BaseModel):
 
     sessionId: str | None = Field(default=None, max_length=64)
     message: str = Field(min_length=1, max_length=10000)
+    documentIds: list[int] = Field(default_factory=list, max_length=5)
 
 
 class ChatResult(BaseModel):

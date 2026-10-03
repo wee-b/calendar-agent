@@ -11,11 +11,11 @@ from app.schemas.rag import QdrantCollectionInfo, QdrantPoint, QdrantUpsertPoint
 class QdrantRepository:
     """检索、滚动读取和导入语料共用的集合访问层。"""
 
-    def __init__(self, client: httpx.AsyncClient | None = None):
+    def __init__(self, client: httpx.AsyncClient | None = None, collection: str | None = None):
         self.settings = get_qdrant_settings()
         self.client = client
         self.base = (self.settings.qdrant_url.rstrip("/") + "/collections/"
-                     + self.settings.qdrant_collection)
+                     + (collection or self.settings.qdrant_collection))
 
     async def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         """检查 HTTP 与 Qdrant 通用 result 外壳，具体结果由各方法再校验。"""
@@ -91,4 +91,25 @@ class QdrantRepository:
     async def upsert(self, points: list[QdrantUpsertPoint]) -> None:
         await self._request("PUT", "/points?wait=true", {
             "points": [point.model_dump() for point in points],
+        })
+
+    async def search_documents(self, vector: list[float], user_id: int,
+                               file_ids: list[int], limit: int) -> list[QdrantPoint]:
+        result = (await self._request("POST", "/points/query", {
+            "query": vector, "limit": limit, "with_payload": True,
+            "filter": {"must": [
+                {"key": "user_id", "match": {"value": user_id}},
+                {"key": "file_id", "match": {"any": file_ids}},
+            ]},
+        }))["result"]
+        if not isinstance(result, dict) or not isinstance(result.get("points"), list):
+            raise QdrantError("Qdrant 文档搜索结果格式异常")
+        return [QdrantPoint.model_validate(point) for point in result["points"]]
+
+    async def delete_file(self, user_id: int, file_id: int) -> None:
+        await self._request("POST", "/points/delete?wait=true", {
+            "filter": {"must": [
+                {"key": "user_id", "match": {"value": user_id}},
+                {"key": "file_id", "match": {"value": file_id}},
+            ]},
         })

@@ -149,13 +149,21 @@ class RagTests(unittest.IsolatedAsyncioTestCase):
 
         repo, embedding, redis = Repo(), Embedding(), FakeRedis()
         service = RagService(repo, embedding, redis)
-        first = await service.search("学习计划")
-        second = await service.search("学习计划")
+        with self.assertLogs("app.service.rag", level="INFO") as captured:
+            first = await service.search("学习计划")
+            second = await service.search("学习计划")
         self.assertEqual("a", first[0].id)
         self.assertEqual(first, second)
         self.assertEqual((1, 1, 1), (repo.scrolls, repo.searches, embedding.calls))
         self.assertTrue(any(key.startswith("rag:emb:") for key in redis.values))
         self.assertTrue(any(key.startswith("rag:result:") for key in redis.values))
+        self.assertIn("查询='学习计划'", captured.output[0])
+        self.assertTrue(any("缓存命中=False" in line and "返回数=1" in line
+                            for line in captured.output))
+        self.assertTrue(any("缓存命中=True" in line and "返回数=1" in line
+                            for line in captured.output))
+        self.assertTrue(any("点ID=a" in line and "内容='制定学习计划'" in line
+                            for line in captured.output))
 
     async def test_import_deduplicates_and_reuses_java_uuid(self):
         class Repo:

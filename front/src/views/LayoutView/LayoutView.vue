@@ -38,6 +38,14 @@
           <AppIcon name="today" />
           <span class="nav-label">本日事项</span>
         </button>
+        <button
+          class="nav-btn"
+          :class="{ active: route.path === '/knowledge' }"
+          @click="router.push('/knowledge')"
+        >
+          <span class="knowledge-nav-icon">▤</span>
+          <span class="nav-label">知识库</span>
+        </button>
       </nav>
 
       <div class="sidebar-bottom">
@@ -134,6 +142,7 @@ const userInitial = computed(() => userName.value.slice(0, 1).toUpperCase());
 const navTitle = computed(() => {
   if (route.path === '/calendar-view') return '日历';
   if (route.path === '/today') return '本日事项';
+  if (route.path === '/knowledge') return '知识库';
   if (!hasToken.value) return '语音助手';
   return route.query.sessionId ? currentChatTitle.value : '新对话';
 });

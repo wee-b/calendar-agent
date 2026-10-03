@@ -13,6 +13,7 @@ import jieba
 
 from app.core.config.common.qdrant import get_qdrant_settings
 from app.core.config.common.rag import get_rag_settings
+from app.core.flow_logging import text_preview
 from app.cache.embedding_cache import CachedEmbedding
 from app.db.redis_client import get_redis
 from app.helper.embedding_client import EmbeddingClient, EmbeddingError
@@ -143,12 +144,20 @@ class RagService:
         query = query.strip()
         if not query:
             return []
+        started = monotonic()
+        logger.info("RAG 查询开始 | 集合=%s top_k=%s BM25候选=%s 向量候选=%s 阈值=%s 重排=%s 查询长度=%s 查询=%r",
+                    self.qdrant_settings.qdrant_collection, self.settings.rag_top_k,
+                    self.settings.rag_bm25_top_k, self.settings.rag_dense_top_k,
+                    self.settings.rag_recall_threshold, self.settings.rag_rerank_enabled,
+                    len(query), text_preview(query, 160))
         cache_key = "rag:result:" + md5((self.qdrant_settings.qdrant_collection + ":" +
             self.embedding.namespace + ":" + query).encode()).hexdigest()
         try:
             cached = await self.redis.get(cache_key)
             if cached is not None:
-                return [RagHit.model_validate(hit) for hit in json.loads(cached)]
+                result = [RagHit.model_validate(hit) for hit in json.loads(cached)]
+                self._log_search_result(result, started, cache_hit=True)
+                return result
         except Exception as exc:
             logger.warning("RAG 结果缓存读取失败: %s", exc)
 
@@ -167,6 +176,9 @@ class RagService:
                      self.settings.rag_recall_threshold)
         ranked = await self._rerank(query, fused)
         result = ranked[:self.settings.rag_top_k]
+        self._log_search_result(result, started, cache_hit=False,
+                                corpus_count=len(points), bm25_count=len(bm25_hits),
+                                dense_count=len(dense_hits), fused_count=len(fused))
         if result:
             try:
                 await self.redis.set(cache_key,
@@ -175,3 +187,19 @@ class RagService:
             except Exception as exc:
                 logger.warning("RAG 结果缓存写入失败: %s", exc)
         return result
+
+    @staticmethod
+    def _log_search_result(hits: list[RagHit], started: float, *, cache_hit: bool,
+                           corpus_count: int | None = None, bm25_count: int | None = None,
+                           dense_count: int | None = None, fused_count: int | None = None) -> None:
+        if cache_hit:
+            logger.info("RAG 查询完成 | 缓存命中=True 返回数=%s 耗时=%.3f秒",
+                        len(hits), monotonic() - started)
+        else:
+            logger.info("RAG 查询完成 | 缓存命中=False 语料数=%s BM25命中=%s 向量命中=%s 融合命中=%s 返回数=%s 耗时=%.3f秒",
+                        corpus_count, bm25_count, dense_count, fused_count,
+                        len(hits), monotonic() - started)
+        for rank, hit in enumerate(hits, 1):
+            logger.info("RAG 命中 | 排名=%s 点ID=%s 分数=%.4f 来源=%r 章节=%r 内容长度=%s 内容=%r",
+                        rank, hit.id, hit.score, hit.source, hit.section,
+                        len(hit.text), text_preview(hit.text, 160))

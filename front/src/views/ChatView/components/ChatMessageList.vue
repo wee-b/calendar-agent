@@ -321,6 +321,8 @@ defineExpose({ scrollToBottom, prependKeepingPosition });
   color: #18181b;
   font-size: 15px;
   line-height: 1.75;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .markdown-body :deep(p),
@@ -483,6 +485,34 @@ defineExpose({ scrollToBottom, prependKeepingPosition });
   width: auto;
   min-width: 280px;
 }
+
+/* 规划表格给“每日内容”留出主要空间，窄屏时在消息内横向滚动。 */
+.msg-item .markdown-body :deep(table:has(th:nth-child(4))) {
+  display: table;
+  width: 100%;
+  min-width: 800px;
+  max-width: none;
+  table-layout: fixed;
+  overflow: visible;
+}
+
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) th),
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) td) {
+  min-width: 0;
+  box-sizing: border-box;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) th:nth-child(1)),
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) td:nth-child(1)) { width: 22%; }
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) th:nth-child(2)),
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) td:nth-child(2)) { width: 18%; }
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) th:nth-child(3)),
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) td:nth-child(3)) { width: 16%; }
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) th:nth-child(4)),
+.msg-item .markdown-body :deep(table:has(th:nth-child(4)) td:nth-child(4)) { width: 44%; }
 
 .msg-actions {
   gap: 8px;

@@ -13,6 +13,7 @@ export default defineConfig({
       '/chat': { target: 'http://localhost:8001', changeOrigin: true },
       '/memory': { target: 'http://localhost:8001', changeOrigin: true },
       '/rag': { target: 'http://localhost:8001', changeOrigin: true },
+      '/documents': { target: 'http://localhost:8001', changeOrigin: true },
       '/calendar': { target: 'http://localhost:8080', changeOrigin: true },
       '/almanac': { target: 'http://localhost:8080', changeOrigin: true },
       '/daily-note': { target: 'http://localhost:8080', changeOrigin: true },

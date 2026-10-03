@@ -11,7 +11,8 @@ async def authenticate_request(request: Request, call_next):
 
     if request.url.path == "/auth/me" or request.url.path == "/chat" \
             or request.url.path.startswith("/chat/") or request.url.path == "/rag/search" \
-            or request.url.path == "/memory" or request.url.path.startswith("/memory/"):
+            or request.url.path == "/memory" or request.url.path.startswith("/memory/") \
+            or request.url.path == "/documents" or request.url.path.startswith("/documents/"):
         token = request.headers.get(get_settings().token_header_name)
         try:
             user_id = await RedisTokenVerifier().verify(token or "")

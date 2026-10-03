@@ -39,6 +39,8 @@ class QdrantPayload(BaseModel):
     section: str = ""
     text: str = ""
     char_count: int = 0  # 原片段字符数，沿用现有 Qdrant payload 键。
+    user_id: int | None = None
+    file_id: int | None = None
 
 
 class QdrantPoint(BaseModel):

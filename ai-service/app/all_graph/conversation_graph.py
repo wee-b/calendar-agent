@@ -39,6 +39,7 @@ class ConversationState(TypedDict):
     user_id: int
     session_id: str
     message: str
+    document_ids: NotRequired[list[int]]
     stage: ConversationStage
     pending: PendingTask
     signal: NotRequired[UserSignal]
@@ -217,13 +218,16 @@ class ConversationGraph:
 
     async def run_turn(
         self, message: str, token: str, *, emit=None, is_disconnected=None,
+        document_ids: list[int] | None = None,
     ) -> ConversationResult:
         """为一次用户输入绑定追踪 ID，普通和流式请求使用同一日志链路。"""
         with bind_flow_trace(self.user_id, self.session_id) as trace:
             record_chat_input(message)
             log_turn_step("RECEIVED", 用户输入=text_preview(message), 输入长度=len(message), 流式=emit is not None)
             try:
-                result = await self._run_turn(message, token, emit=emit, is_disconnected=is_disconnected)
+                result = await self._run_turn(message, token, emit=emit,
+                                              is_disconnected=is_disconnected,
+                                              document_ids=document_ids)
             except BaseException as exc:
                 if trace.step != "BLOCKED":
                     log_turn_step("CANCELLED" if isinstance(exc, asyncio.CancelledError) else "FAILED",
@@ -235,6 +239,7 @@ class ConversationGraph:
 
     async def _run_turn(
         self, message: str, token: str, *, emit=None, is_disconnected=None,
+        document_ids: list[int] | None = None,
     ) -> ConversationResult:
         """身份和会话在构造时绑定；每轮仅接收新消息与 token。"""
         if not message.strip():
@@ -260,6 +265,7 @@ class ConversationGraph:
                 "user_id": self.user_id,
                 "session_id": self.session_id,
                 "message": message,
+                "document_ids": document_ids or [],
                 "stage": self.chat_service.resolve_flow_stage(flow_state),
                 "pending": self.chat_service.flow_pending(flow_state),
             }, context=context)

@@ -9,6 +9,7 @@ const AI_BASE_URL = (import.meta.env.VITE_AI_API_BASE_URL || '').replace(/\/$/, 
 export interface ChatRequestDTO {
     sessionId: string;
     message: string;
+    documentIds?: number[];
 }
 
 export interface ChatResponseVO {

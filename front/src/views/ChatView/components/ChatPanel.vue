@@ -48,6 +48,7 @@
         :is-sending="isSending"
         :is-user-logged-in="isUserLoggedIn"
         :db-bars="dbBars"
+        v-model:document-ids="selectedDocumentIds"
         @send="handleSend"
         @toggle-voice="toggleVoice"
         @toggle-expanded="isExpanded = !isExpanded"
@@ -104,6 +105,7 @@ const hasMoreHistory = ref(false);
 const nextBeforeId = ref<number | null>(null);
 const isLoadingHistory = ref(false);
 const inputText = ref('');
+const selectedDocumentIds = ref<number[]>([]);
 const isSending = ref(false);
 
 const isDropdownOpen = ref(false);
@@ -768,7 +770,7 @@ const handleSend = async () => {
     }, CHAT_TIMEOUT);
 
     await streamChatAPI(
-      { sessionId: activeSessionId, message: text },
+      { sessionId: activeSessionId, message: text, documentIds: [...selectedDocumentIds.value] },
       (token) => {
         clearTimeout(slowTimer);
         const lastMsg = messages.value[messages.value.length - 1];
@@ -827,6 +829,7 @@ const handleSend = async () => {
     );
   } finally {
     isSending.value = false;
+    selectedDocumentIds.value = [];
     scrollToBottom();
     inputText.value = '';
     if (inputMudle.value === 2) {

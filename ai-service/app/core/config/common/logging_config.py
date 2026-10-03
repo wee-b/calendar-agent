@@ -33,3 +33,5 @@ def configure_logging() -> None:
     logging.getLogger("uvicorn.access").disabled = True
     # httpx logs every upstream HTTP 200 separately; the flow trace summarizes those calls.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # jieba's dictionary bootstrap emits multiple DEBUG lines through its own handler.
+    logging.getLogger("jieba").setLevel(logging.WARNING)

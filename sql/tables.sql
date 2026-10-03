@@ -1,6 +1,8 @@
 
 create database if not exists yl_database;
 
+-- 上传文件和文档片段的增量建表脚本见 migrations/20261003_user_documents.sql。
+
 SET NAMES utf8mb4;
 -- yl_user
 DROP TABLE IF EXISTS `yl_user`;
@@ -263,5 +265,41 @@ CREATE TABLE `yl_ai_dialogue`
     PRIMARY KEY (`dialogue_id`),
     KEY `idx_history` (`user_id`, `session_id`, `deleted_flag`, `dialogue_id`)
 )ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'AI对话记录表';
+
+
+DROP TABLE IF EXISTS `yl_document`;
+DROP TABLE IF EXISTS `yl_file`;
+CREATE TABLE `yl_file` (
+    `file_id` BIGINT NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT NOT NULL,
+    `file_name` VARCHAR(255) NOT NULL,
+    `content_type` VARCHAR(100) NOT NULL,
+    `size_bytes` BIGINT NOT NULL,
+    `sha256` CHAR(64) NOT NULL,
+    `object_key` VARCHAR(500) NOT NULL,
+    `status` VARCHAR(20) NOT NULL DEFAULT 'uploading',
+    `error_message` VARCHAR(500) NULL,
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`file_id`),
+    UNIQUE KEY `uk_user_sha256` (`user_id`, `sha256`),
+    KEY `idx_user_status` (`user_id`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户上传文件';
+
+CREATE TABLE `yl_document` (
+    `document_id` BIGINT NOT NULL AUTO_INCREMENT,
+    `file_id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `chunk_index` INT NOT NULL,
+    `section` VARCHAR(500) NOT NULL,
+    `content` TEXT NOT NULL,
+    `content_hash` CHAR(64) NOT NULL,
+    `vector_id` CHAR(36) NOT NULL,
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`document_id`),
+    UNIQUE KEY `uk_file_chunk` (`file_id`, `chunk_index`),
+    UNIQUE KEY `uk_vector_id` (`vector_id`),
+    KEY `idx_user_file` (`user_id`, `file_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='上传文档片段';
 
 

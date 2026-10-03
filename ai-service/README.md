@@ -1,6 +1,6 @@
 # Calendar AI Service
 
-当前提供 `GET /health`、`GET /auth/me`、`POST /chat`、流式 `POST /chat/stream`、`GET /chat/history`、`GET /chat/sessions`、`GET /chat/latest`、`POST /chat/new-session`、`DELETE /chat/session`、`DELETE /chat/last-round` 和独立的 `POST /rag/search`。普通与流式对话统一经过 LangGraph 主图：Summary（达到阈值时压缩并提取偏好）→ Route → 状态转换表 → Chat / Planner / Executor / Image → 提交。Chat 和 Executor 的工具循环最多三轮模型调用；RAG 暂不参与对话。
+当前提供 `GET /health`、`GET /auth/me`、`POST /chat`、流式 `POST /chat/stream`、`GET /chat/history`、`GET /chat/sessions`、`GET /chat/latest`、`POST /chat/new-session`、`DELETE /chat/session`、`DELETE /chat/last-round`、独立的 `POST /rag/search` 和知识库 `GET/POST /documents`、`POST /documents/{file_id}/parse`。普通与流式对话统一经过 LangGraph 主图：Summary（达到阈值时压缩并提取偏好）→ Route → 状态转换表 → Chat / Planner / Executor / Image → 提交。Chat 和 Executor 的工具循环最多三轮模型调用；Planner 仅在本轮请求引用文档时检索用户文档。
 
 ## 状态机与节点迁移
 
@@ -50,7 +50,7 @@ MEMORY_SUMMARY_TIMEOUT_SECONDS=120
 - `POST /chat/new-session` 返回 UUID；`DELETE /chat/session?sessionId=xxx` 删除会话；`DELETE /chat/last-round?sessionId=xxx` 按助手回复边界撤回，支持连续多条用户输入。
 - 所有接口沿用 token 鉴权；用户与会话隔离，已删除会话不可读取或重新追加消息。
 
-前端已适配分页与 Python SSE，开发环境 `/chat`、`/rag` 指向 Python 8001。生产环境可用 `VITE_AI_API_BASE_URL` 配置独立 Python 地址。已删除的 Java 查询及会话管理入口与剩余配套改动见 [10 文档](../docs/10-java-chat-history-migration.md)。
+前端已适配分页与 Python SSE，开发环境 `/chat`、`/rag`、`/documents` 指向 Python 8001。生产环境可用 `VITE_AI_API_BASE_URL` 配置独立 Python 地址。已删除的 Java 查询及会话管理入口与剩余配套改动见 [10 文档](../docs/10-java-chat-history-migration.md)。
 
 仓储支持 `append_messages()` 保存连续同角色消息。聊天入口由主图 `commit` 在完整回答产生后原子保存消息、会话统计及流程状态；流式失败与断连不保存不完整回复。
 
@@ -206,4 +206,10 @@ $body = @{ query = "制定英语备考计划" } | ConvertTo-Json
 Invoke-RestMethod -Uri http://127.0.0.1:8001/rag/search -Method Post -ContentType application/json -Headers @{ 'yvli-token' = '<登录返回的 token>' } -Body $body
 ```
 
-检索流程为中文 BM25 + Qdrant Dense → RRF → 可选模型重排，默认关闭重排。`/chat` 尚未调用 RAG。
+公共语料检索流程为中文 BM25 + Qdrant Dense → RRF → 可选模型重排，默认关闭重排。
+
+## 用户知识库
+
+运行 `sql/migrations/20261003_user_documents.sql` 创建 `yl_file` 和 `yl_document`；完整新库结构也包含在 `sql/tables.sql`。在 `ai-service/.env` 配置 `MINIO_ENDPOINT=localhost:9000`、`MINIO_SECURE=false`、`MINIO_BUCKET=calendar-documents` 和可选的 `QDRANT_DOCUMENT_COLLECTION=user_documents`，在 `ai-service/.env.prod` 配置 `MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`。上传时若 MinIO 桶不存在会自动创建；首次解析时创建独立的 Qdrant 集合。
+
+知识库页支持 TXT、Markdown、可提取文本的 PDF 和 DOCX，单文件上限 10 MB。`POST /documents` 只保存原文件到 MinIO 并登记 `uploaded` 状态，不解析、不请求 Embedding 或 Qdrant；`POST /documents/{file_id}/parse` 从 MinIO 读取原文件，按段落切片、去重、向量化，并写入 `yl_document` 和 Qdrant，完成后变为 `ready`。`POST /documents/{file_id}/reparse` 替换旧解析结果；`DELETE /documents/{file_id}/parse` 只清理向量和片段，保留源文件；`DELETE /documents/{file_id}` 删除源文件以及全部解析结果。删除操作按登录用户校验归属，正在处理的文件不能删除。重复上传同一用户的相同内容会复用已有文件。对话请求可附 `documentIds: [文件ID]`（最多五个），Planner 只接受 `ready` 文件并仅检索这些文件；没有引用时不会查询文档向量库。扫描版 PDF 需要先进行 OCR。
