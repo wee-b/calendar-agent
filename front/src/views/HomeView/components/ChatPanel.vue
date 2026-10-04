@@ -679,6 +679,7 @@ const handleSend = async () => {
         replyMsg.dispatchType = dispatchType;
       },
       (step) => {
+        clearTimeout(slowTimer);
         const steps = replyMsg.agentSteps || (replyMsg.agentSteps = []);
         const index = steps.findIndex(item => item.id === step.id);
         if (index >= 0) steps.splice(index, 1, step);

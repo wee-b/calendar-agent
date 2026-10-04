@@ -145,6 +145,11 @@ class TurnContext:
             await self.add_step("agent", _AGENT_LABELS[event.data.agent],
                                 round_number=event.data.round)
         elif isinstance(event, ToolCallLifecycleEvent) and event.event == "tool_call_start":
+            last = self.agent_steps[-1] if self.agent_steps else None
+            if (last and last.kind == "agent" and last.label == _AGENT_LABELS["chat"]
+                    and last.round == event.data.round):
+                # 这一轮模型选择了查询工具，真正的回复会在工具返回后生成。
+                last.label = "分析查询需求"
             step_id = await self.add_step("tool", _TOOL_LABELS.get(event.data.tool, "调用日历工具"),
                                           round_number=event.data.round)
             if step_id is not None:

@@ -29,7 +29,7 @@ class AgentTimelineTests(unittest.IsolatedAsyncioTestCase):
         await context.send(AgentStatusEvent(data=AgentStatusData(agent="chat", round=2, stage="model")))
         await context.finish_steps()
 
-        self.assertEqual(["识别意图", "生成回复", "查询日程", "生成回复"],
+        self.assertEqual(["识别意图", "分析查询需求", "查询日程", "生成回复"],
                          [step.label for step in context.agent_steps])
         self.assertTrue(all(step.status == "success" for step in context.agent_steps))
         published = [event for event in events if isinstance(event, AgentStepEvent)]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import aclosing
 from datetime import date
@@ -46,6 +47,7 @@ class ChatStateUpdate(TypedDict, total=False):
 
 
 _stream_event_adapter = TypeAdapter(StreamEvent)
+MAX_PARALLEL_READ_TOOLS = 4
 
 
 def _assistant_from_wire(value: object) -> AssistantMessage:
@@ -141,58 +143,73 @@ class ChatGraph:
                     "answer": state["answer"] + (response.content or "")}
 
         async def call_tools(state: ChatState) -> ChatStateUpdate:
-            """先校验模型参数，再逐个调用允许的 Java 工具并生成 tool 消息。"""
+            """先校验全部参数，再并发查询；tool 消息保持模型调用顺序。"""
 
             writer = get_stream_writer() if streaming else None
             last = state["messages"][-1]
             calls = last.tool_calls if isinstance(last, AssistantMessage) else None
             if not calls:
                 raise BusinessException(ErrorCode.MODEL_TOOL_CALL_INVALID)
-            results: list[ToolMessage] = []
+            validated: list[tuple[str, DayDetailArguments]] = []
+            for call in calls:
+                if not call.id:
+                    raise BusinessException(ErrorCode.MODEL_TOOL_CALL_INVALID)
+                if call.function.name != DAY_DETAIL_TOOL_NAME:
+                    raise BusinessException(ErrorCode.MODEL_TOOL_UNAPPROVED)
+                try:
+                    args = DayDetailArguments.model_validate_json(call.function.arguments)
+                except ValidationError as exc:
+                    raise BusinessException(ErrorCode.MODEL_TOOL_ARGUMENT_INVALID) from exc
+                try:
+                    parsed_date = date.fromisoformat(args.date)
+                except ValueError as exc:
+                    raise BusinessException(ErrorCode.MODEL_TOOL_DATE_INVALID) from exc
+                if parsed_date.isoformat() != args.date:
+                    raise BusinessException(ErrorCode.MODEL_TOOL_DATE_INVALID)
+                validated.append((call.id, args))
+
+            for call_id, _ in validated:
+                log_turn_step("CHAT_TOOL", 模型轮次=state["rounds"], 工具=DAY_DETAIL_TOOL_NAME,
+                              call_id=call_id)
+            if writer:
+                writer(AgentStatusEvent(data=AgentStatusData(
+                    round=state["rounds"], stage="tool",
+                )).model_dump(mode="json", by_alias=True))
+            limiter = asyncio.Semaphore(MAX_PARALLEL_READ_TOOLS)
             async with self.mcp_factory() as mcp:
-                for call in calls:
-                    if not call.id:
-                        raise BusinessException(ErrorCode.MODEL_TOOL_CALL_INVALID)
-                    if call.function.name != DAY_DETAIL_TOOL_NAME:
-                        raise BusinessException(ErrorCode.MODEL_TOOL_UNAPPROVED)
-                    try:
-                        args = DayDetailArguments.model_validate_json(call.function.arguments)
-                    except ValidationError as exc:
-                        raise BusinessException(ErrorCode.MODEL_TOOL_ARGUMENT_INVALID) from exc
-                    try:
-                        parsed_date = date.fromisoformat(args.date)
-                    except ValueError as exc:
-                        raise BusinessException(ErrorCode.MODEL_TOOL_DATE_INVALID) from exc
-                    if parsed_date.isoformat() != args.date:
-                        raise BusinessException(ErrorCode.MODEL_TOOL_DATE_INVALID)
-                    log_turn_step("CHAT_TOOL", 模型轮次=state["rounds"], 工具=call.function.name, call_id=call.id)
-                    try:
-                        if writer:
-                            writer(AgentStatusEvent(data=AgentStatusData(
-                                round=state["rounds"], stage="tool",
-                            )).model_dump(mode="json", by_alias=True))
-                        data = await call_read_only_tool(
-                            mcp, DAY_DETAIL_TOOL_NAME, args, token)
-                        content = data.model_dump_json(exclude_unset=True)
-                        log_turn_step("CHAT_TOOL_RESULT", call_id=call.id, 结果="成功")
-                        if writer:
-                            writer(ToolResultEvent(data=ToolResultData(
-                                call_id=call.id, status="success",
-                                summary=summarize_tool_result(DAY_DETAIL_TOOL_NAME, data.model_dump()),
-                            )).model_dump(mode="json", by_alias=True, exclude_none=True))
-                    except McpClientError as exc:
-                        log_turn_step("CHAT_TOOL_RESULT", call_id=call.id, 结果="失败", 错误码=exc.code)
-                        # 鉴权错误终止对话；普通工具错误交给模型解释给用户。
-                        if exc.code == "AUTH_FAILED":
-                            raise BusinessException(ErrorCode.MCP_AUTH_FAILED,
-                                                    message=str(exc)) from exc
-                        content = json.dumps({"error": exc.code, "message": str(exc)},
-                                             ensure_ascii=False)
-                        if writer:
-                            writer(ToolResultEvent(data=ToolResultData(
-                                call_id=call.id, status="error", code=exc.code,
-                            )).model_dump(mode="json", by_alias=True, exclude_none=True))
-                    results.append(ToolMessage(tool_call_id=call.id, content=content))
+                async def query(args: DayDetailArguments):
+                    async with limiter:
+                        return await call_read_only_tool(mcp, DAY_DETAIL_TOOL_NAME, args, token)
+
+                outcomes = await asyncio.gather(
+                    *(query(args) for _, args in validated), return_exceptions=True)
+
+            auth_failure = next((outcome for outcome in outcomes
+                                 if isinstance(outcome, McpClientError) and outcome.code == "AUTH_FAILED"), None)
+            if auth_failure is not None:
+                raise BusinessException(ErrorCode.MCP_AUTH_FAILED, message=str(auth_failure)) from auth_failure
+            results: list[ToolMessage] = []
+            for (call_id, _), outcome in zip(validated, outcomes):
+                if isinstance(outcome, McpClientError):
+                    log_turn_step("CHAT_TOOL_RESULT", call_id=call_id, 结果="失败", 错误码=outcome.code)
+                    # 鉴权错误终止对话；普通工具错误交给模型解释给用户。
+                    content = json.dumps({"error": outcome.code, "message": str(outcome)},
+                                         ensure_ascii=False)
+                    if writer:
+                        writer(ToolResultEvent(data=ToolResultData(
+                            call_id=call_id, status="error", code=outcome.code,
+                        )).model_dump(mode="json", by_alias=True, exclude_none=True))
+                elif isinstance(outcome, BaseException):
+                    raise outcome
+                else:
+                    content = outcome.model_dump_json(exclude_unset=True)
+                    log_turn_step("CHAT_TOOL_RESULT", call_id=call_id, 结果="成功")
+                    if writer:
+                        writer(ToolResultEvent(data=ToolResultData(
+                            call_id=call_id, status="success",
+                            summary=summarize_tool_result(DAY_DETAIL_TOOL_NAME, outcome.model_dump()),
+                        )).model_dump(mode="json", by_alias=True, exclude_none=True))
+                results.append(ToolMessage(tool_call_id=call_id, content=content))
             return {"messages": [*state["messages"], *results]}
 
         def next_step(state: ChatState) -> str:

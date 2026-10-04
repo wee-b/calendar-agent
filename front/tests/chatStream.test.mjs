@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { consumeChatStream } from '../src/api/chatStream.ts';
+import { playChatStream } from '../src/api/chatPlayback.ts';
 import { timelineNarration, createAgentStepPresenter } from '../src/api/agentTimeline.ts';
 import { createStreamTextPresenter } from '../src/utils/streamText.ts';
 
@@ -125,6 +126,36 @@ const clock = (t) => {
         }
     };
 };
+
+test('reply playback waits until all loop steps have finished displaying', async (t) => {
+    const advance = clock(t);
+    const events = [];
+    let reply = '';
+    let done = false;
+    const pending = playChatStream(stream(
+        event('agent_step', { id: 1, kind: 'agent', label: '分析查询需求',
+            narration: '我先确认要查询的日期。', status: 'success', elapsedMs: 5 }) +
+        event('assistant_delta', { delta: '这段回复应等待查询步骤。' }) +
+        event('agent_step', { id: 2, kind: 'tool', label: '查询日程',
+            resultSummary: '当天有两项待办。', status: 'success', elapsedMs: 10 }) +
+        event('result', {}) + event('done', {}),
+    ), {
+        onToken: token => { reply += token; events.push('text'); },
+        onAgentStep: step => events.push(`step-${step.id}-${step.status}`),
+        onDone: () => { done = true; },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    advance(320);
+    assert.equal(reply, '');
+    advance(6000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(events.at(-1), 'text');
+    advance(6000);
+    await pending;
+    assert.equal(reply, '这段回复应等待查询步骤。');
+    assert.equal(done, true);
+    assert.ok(events.indexOf('text') > events.lastIndexOf('step-2-success'));
+});
 
 test('short replies start immediately but finish progressively after the minimum duration', async (t) => {
     const advance = clock(t);

@@ -1,12 +1,72 @@
+import asyncio
 import json
 import unittest
+from unittest.mock import patch
 
+from app.core.config.common.mcp import McpSettings
+from app.helper.mcp_client import McpClientError
 from app.schemas.chat.messages import TextMessage
 from app.all_graph.chat_graph import ChatGraph
 from app.schemas.chat.model_stream import ToolResultEvent
 
 
 class ChatGraphTests(unittest.IsolatedAsyncioTestCase):
+    async def test_read_only_calls_overlap_retry_independently_and_keep_model_order(self):
+        both_started = asyncio.Event()
+        finished = []
+
+        class Model:
+            calls = 0
+
+            async def chat(self, messages, tools=None):
+                self.calls += 1
+                if self.calls == 1:
+                    return {"role": "assistant", "tool_calls": [
+                        {"id": f"call-{i}", "function": {"name": "queryDayDetail",
+                         "arguments": json.dumps({"date": f"2026-09-{i + 27}"})}}
+                        for i in (1, 2)
+                    ]}
+                tool_messages = [item for item in messages if item["role"] == "tool"]
+                self_test.assertEqual(["call-1", "call-2"],
+                                      [item["tool_call_id"] for item in tool_messages])
+                self_test.assertEqual(["2026-09-28", "2026-09-29"],
+                                      [json.loads(item["content"])["date"] for item in tool_messages])
+                return {"role": "assistant", "content": "两天的日程已查到。"}
+
+        class Mcp:
+            started = 0
+            attempts = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                pass
+
+            async def call_tool(self, name, args, token):
+                day = args["date"]
+                self.attempts[day] = self.attempts.get(day, 0) + 1
+                self.started += 1
+                if self.started == 2:
+                    both_started.set()
+                await both_started.wait()
+                if day == "2026-09-28" and self.attempts[day] == 1:
+                    raise McpClientError("JAVA_TIMEOUT", "timeout", retryable=True)
+                if day == "2026-09-28":
+                    await asyncio.sleep(0.02)
+                finished.append(day)
+                return {"date": day, "todos": []}
+
+        self_test = self
+        mcp = Mcp()
+        with patch("app.service.read_only_tool.get_mcp_settings", return_value=McpSettings(
+            MCP_READ_RETRY_ATTEMPTS=2, MCP_READ_RETRY_DELAY_MS=0)):
+            answer = await asyncio.wait_for(ChatGraph(Model(), lambda: mcp).run(
+                [TextMessage(role="user", content="查两天的日程")], "token"), timeout=1)
+        self.assertEqual("两天的日程已查到。", answer)
+        self.assertEqual(["2026-09-29", "2026-09-28"], finished)
+        self.assertEqual({"2026-09-28": 2, "2026-09-29": 1}, mcp.attempts)
+
     async def test_stream_exposes_short_tool_result_summary(self):
         class Model:
             def __init__(self):
@@ -89,10 +149,12 @@ class ChatGraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_tool_arguments_reject_unexpected_fields_before_mcp_call(self):
         class Model:
             async def chat(self, messages, tools=None):
-                return {"role": "assistant", "tool_calls": [{
-                    "id": "call-1", "function": {"name": "queryDayDetail",
-                    "arguments": '{"date":"2026-09-28","userId":999}'},
-                }]}
+                return {"role": "assistant", "tool_calls": [
+                    {"id": "call-1", "function": {"name": "queryDayDetail",
+                     "arguments": '{"date":"2026-09-28"}'}},
+                    {"id": "call-2", "function": {"name": "queryDayDetail",
+                     "arguments": '{"date":"2026-09-29","userId":999}'}},
+                ]}
 
         class Mcp:
             async def __aenter__(self):
