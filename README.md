@@ -1,6 +1,6 @@
 # Calendar Agent
 
-智能日程管理应用。项目从早期的语音日历工具升级为 **日历 + 待办 + 日记 + AI Agent 对话助手**：支持日程 CRUD、每日任务拆分、现代黄历、语音/文字聊天、多会话管理和规划草稿确认后同步到日历。RAG 已迁移到 Python 服务，暂未接入对话。
+智能日程管理应用。当前主线是 `ai-service` 分支：Vue 前端、Spring Boot 业务服务和 Python AI 服务共同提供日历、待办、日记、对话与规划。支持流式聊天、多会话、规划草稿确认后同步日历、用户文档检索、长期记忆和规划示意图。公共 RAG 语料检索是独立接口；用户在对话中引用的已解析文档可供 Planner 检索。
 
 
 ---
@@ -15,7 +15,7 @@
 | 缓存 | Redis |
 | AI 框架 | Python FastAPI + LangGraph，OpenAI 兼容 Chat/Streaming API |
 | 默认模型配置 | Python 配置管理：百炼用于路由/执行，DeepSeek 用于对话/规划，火山方舟用于生图；详见 `ai-service/README.md` |
-| RAG | Python 中文 BM25 + Qdrant Dense Vector + RRF 融合 + 可选 LLM Rerank |
+| RAG | Python 中文 BM25 + Qdrant 向量 + RRF 融合；用户文档存储在 MinIO 并建立独立向量索引 |
 | Embedding | 阿里云 `text-embedding-v4` 等远程 OpenAI 兼容模型 |
 | 文档 | Knife4j OpenAPI |
 | 语音 | Web Speech API + SpeechSynthesisUtterance + Web Audio API |
@@ -44,8 +44,8 @@ calendar-agent/
 │       ├── views/           # Layout/Home/Today/Chat 页面
 │       ├── router/
 │       └── utils/
-├── sql/                     # 表结构与初始化数据
-└── ai-service/              # Python 对话与独立 RAG 检索、语料导入
+├── sql/                     # 新库表结构、测试数据与旧库迁移脚本
+└── ai-service/              # Python 对话、记忆、文档、图片与 RAG
     └── rag_data/            # RAG Markdown 原始语料
 ```
 
@@ -67,10 +67,12 @@ AI 与 MCP 的职责：
 - Python `ChatTransitionTable`：按阶段与用户信号选择处理节点和下一阶段。
 - Python `PlanNode`：模型调用、规划校验；`PlanningService` 封装记忆查询及草稿保存。
 - Python `ExecuteNode`：确认后调用 MCP，规划同步使用 `batchCreateTodos`。
-- Python `ai-service/app/service/rag.py`：BM25 + Qdrant 混合检索、RRF 融合、可选 Rerank、缓存。
+- Python `SummaryNode`：长会话摘要和用户偏好提取。
+- Python 文档服务：MinIO 保存原文件，MySQL 记录文件及切片，Qdrant 建立用户文档索引；Planner 只检索本轮引用的文档。
+- Python `ai-service/app/service/rag.py`：公共语料的 BM25 + Qdrant 混合检索、RRF 融合、可选 Rerank 和缓存。
 - Java `McpController` / `McpToolRegistry` / `McpToolService`：提供业务工具，复用日历业务权限与事务；不持有模型或会话状态。
 
-Java 已删除旧对话入口、Agent、状态机、草稿/摘要/记忆管理、提示词和模型配置，移除 LangChain4j 依赖。AI 数据表继续供 Python 使用，清理代码不删除数据库数据。长期记忆抽取、行为刷新和上下文摘要尚待 Python 补齐。
+Java 保留用户、日程和 MCP 业务能力；对话、草稿、长期偏好记忆和上下文摘要由 Python 服务管理。当前没有行为统计记忆。
 
 Java 默认仅启用 `dev` profile，遗留本地 `application-unknown.yml` 不再加载或打包。模型与密钥由 Python 配置管理。
 
@@ -85,10 +87,12 @@ Java 默认仅启用 `dev` profile，遗留本地 `application-unknown.yml` 不�
 | `yl_todo_date` | 待办日期表，保存每天的具体任务内容和完成状态 |
 | `yl_daily_note` | 每日日记/备注表，每个用户每天一条 |
 | `yl_ai_dialogue` | AI 对话历史，按 `session_id` 分组 |
+| `yl_ai_session` | 会话列表、最近消息和上下文消息计数 |
 | `yl_plan_draft` | Planner 生成的待同步规划草稿 |
 | `yl_agent_flow_state` | 会话主流程 CHAT/PLAN/EXECUTE/IMAGE、任务产物及版本认领 |
-| `yl_user_memory` | 用户长期偏好、长期目标和行为习惯记忆 |
+| `yl_user_memory` | 用户长期偏好和长期目标记忆 |
 | `yl_chat_context_summary` | 长会话上下文摘要，用于压缩 Agent 历史输入 |
+| `yl_file`、`yl_document` | 用户上传文档或生成图片的文件记录，以及文档切片 |
 
 ---
 
@@ -147,7 +151,7 @@ Java 默认仅启用 `dev` profile，遗留本地 `application-unknown.yml` 不�
 | --- | --- | --- | --- |
 | POST | `/mcp` | JSON-RPC 端点，支持 `tools/list` 与 `tools/call` | 是 |
 
-Java `/memory` 入口已移除，Python 当前仅在规划时读取已有有效记忆。
+Python 另提供 `/memory`（查看和删除自己的长期记忆）、`/documents`（上传、解析、删除用户文档）、`/images/...`（通过签名地址展示或下载生成图片）和独立的 `/rag/search`。Java 不提供这些入口，详见 [AI 服务说明](ai-service/README.md)。
 
 ---
 
@@ -167,9 +171,8 @@ Java `/memory` 入口已移除，Python 当前仅在规划时读取已有有效�
 ```
 
 规划类任务会先输出草稿预览。用户明确要求同步后，Python `ExecuteNode` 将当前草稿转换为业务参数，通过 Java `batchCreateTodos` MCP 工具在一个事务中批量创建待办；普通“好的”不会触发同步。生图后仍可同步同一草稿。
-完整流转表和发布步骤见 [08 设计文档](docs/08-chat-state-transition-table.md)。已有数据库启动此版本前需执行一次 `sql/migrations/20260930_agent_conversation_stage.sql`。
-Planner 生成计划前会读取 active 用户记忆；公共 RAG 当前仅能通过 Python 独立检索接口调用，尚未注入规划对话。
-跨轮状态保存在 MySQL；当前 LangGraph 未启用 checkpointer。写操作结果不确定时保留会话认领待核实，不自动重试。RouteAgent 读取上一轮助手回复和本轮连续用户消息；上下文摘要自动刷新尚未接入 Python。
+完整流转表见 [08 设计文档](docs/08-chat-state-transition-table.md)。Planner 生成计划前会读取有效用户记忆；用户引用已解析文档时会检索对应文档。公共 RAG 仍通过独立接口调用，不自动注入对话。
+跨轮状态保存在 MySQL；当前 LangGraph 未启用 checkpointer。写操作结果不确定时保留会话认领待核实，不自动重试。对话历史达到阈值时，Python 在下一轮 Route 前刷新摘要与长期偏好。
 
 ---
 
@@ -195,20 +198,24 @@ python -m app.import_rag_corpus
 
 ### 1. 初始化数据库
 
+仅在**全新数据库**执行 `sql/tables.sql`；脚本包含 `DROP TABLE`，不能用于已有数据的升级。`sql/insert_data.sql` 是可选测试数据，不要用于生产库。
+
 ```bash
 mysql -u root -p < sql/tables.sql
-mysql -u root -p < sql/insert_data.sql
 ```
+
+已有数据库需要备份后，按当前表结构选择执行 `sql/migrations/` 中尚未应用的迁移。尤其注意会话表、文档表及 2026-10-04 的对话时间线、文档引用、图片文件迁移；图片文件迁移依赖先创建 `yl_file`。不要对已迁移的表重复执行非幂等 `ALTER TABLE`。
 
 ### 2. 准备依赖服务
 
 - MySQL：默认库名 `yl_database`
 - Redis：默认 `localhost:6379`，数据库 `15`
-- Qdrant：Python 默认使用 REST 端口 `6333`，集合 `rag_corpus`
+- Qdrant：默认 REST 端口 `6333`，公共语料集合 `rag_corpus`，用户文档集合 `user_documents`
+- MinIO：保存用户文档和生成图片原文件，默认端口 `9000`
 - Embedding：使用阿里云 `text-embedding-v4` 等远程 OpenAI 兼容模型
 - Chat Model：OpenAI 兼容接口，配置在 Python `ai-service/.env`，密钥在 `.env.prod` 或环境变量
 
-### 3. 配置后端
+### 3. 配置 Java 业务服务
 
 按本地环境修改：
 
@@ -216,24 +223,7 @@ mysql -u root -p < sql/insert_data.sql
 back/src/main/resources/application-dev.yml
 ```
 
-关键配置：
-
-```yaml
-app:
-  datasource:
-    host: localhost
-    port: 3306
-    database: yl_database
-    username: root
-    password: 123
-  redis:
-    host: localhost
-    port: 6379
-    database: 15
-  sa-token:
-    token-name: yvli-token
-    timeout: 604800
-```
+配置 MySQL、Redis 和 Sa-Token；不要沿用仓库中的开发密码部署生产环境。Java 当前默认启用 `dev` profile，部署时需提供自己的环境配置。
 
 ### 4. 启动后端
 
@@ -248,7 +238,19 @@ mvn spring-boot:run
 http://localhost:8080/doc.html
 ```
 
-### 5. 启动前端
+### 5. 配置并启动 Python AI 服务
+
+使用 Python 3.11+，在 `ai-service` 目录创建虚拟环境并安装依赖。配置 `.env` 中的 `DATABASE_URL`、`REDIS_URL`、`JAVA_BASE_URL`、Qdrant 和 MinIO 地址；数据库与 Redis 必须和 Java 指向同一套服务。将模型 API Key 和 MinIO 密钥放到被 Git 忽略的 `.env.prod` 或进程环境变量中。完整配置见 [AI 服务说明](ai-service/README.md)。
+
+```bash
+cd ai-service
+python -m venv .venv
+# 激活虚拟环境后：
+python -m pip install -e .
+python -m uvicorn app.main:app --port 8001
+```
+
+### 6. 启动前端
 
 ```bash
 cd front
@@ -256,13 +258,13 @@ npm install
 npm run dev
 ```
 
-Vite 将 `/chat`、`/rag` 代理到 Python `http://localhost:8001`，用户、日历、待办和日记请求代理到 Java `http://localhost:8080`。Python 启动和模型配置见 [AI 服务说明](ai-service/README.md)。
+Vite 开发服务器将 `/chat`、`/memory`、`/rag`、`/documents`、`/images` 代理到 Python `http://localhost:8001`，用户、日历、待办和日记请求代理到 Java `http://localhost:8080`。正式部署静态文件时，需要在反向代理中配置相同的路径转发和前端页面路由回退。
 
 ---
 
 ## 认证方式
 
-1. 调用 `/user/login` 获取 token，开发时也可用 `/test/getToken?userId=36`。
+1. 调用 `/user/login` 获取 token。
 2. 后续请求携带 Header：`yvli-token: <token>`。
 3. `LoginInterceptor` 校验 token 后写入 `LoginUserContext`。
 4. 业务层通过 `LoginUserContext.getUserId()` 获取当前用户。
@@ -274,10 +276,11 @@ Vite 将 `/chat`、`/rag` 代理到 Python `http://localhost:8001`，用户、�
 
 | 路由 | 页面 | 说明 |
 | --- | --- | --- |
-| `/` | Layout + 默认首页 | 应用布局入口 |
+| `/` | 重定向到 `/conversation` | 应用布局入口 |
 | `/calendar-view` | 日历页 | 月视图、待办高亮、日详情、日记 |
 | `/today` | 今日页 | 当天待办聚合 |
 | `/conversation` | 对话页 | AI 助手、多会话、SSE 进度、语音输入与朗读 |
+| `/knowledge` | 知识库页 | 上传、解析和管理用户文档 |
 
 主要组件：
 
@@ -304,12 +307,14 @@ Vite 将 `/chat`、`/rag` 代理到 Python `http://localhost:8001`，用户、�
 - [x] RouteAgent 结构化事件 + 状态机确定性执行 + Planner / Executor 架构
 - [x] 写操作确认流与 AgentFlowState 状态管理
 - [x] Planner 草稿预览与确认后同步到日历
-- [x] MySQL 长期偏好记忆与行为习惯记忆
-- [x] 长会话自动摘要与上下文压缩
+- [x] MySQL 长期偏好记忆与跨会话读取
+- [x] Python 长会话自动摘要与上下文压缩
 - [x] Executor 单日及通用写操作工具
 - [x] MCP `tools/list` / `tools/call`
 - [x] Python 中文 BM25 + Qdrant 向量检索 + RRF + 可选 Rerank（独立能力）
 - [x] RAG 语料去重、Embedding、Qdrant 入库脚本
+- [x] 用户知识库上传、解析及 Planner 引用检索
+- [x] 规划示意图生成和原图保存
 - [x] 现代黄历模块
 - [x] Knife4j 接口文档
 

@@ -21,7 +21,7 @@ Java 业务写入与 Python 草稿/状态提交不能组成同一个本地事务
 
 ## 记忆写入与摘要
 
-升级前暂停对话写入，执行 `sql/migrations/20261003_context_message_count.sql`，继续复用已有 `yl_user_memory`、`yl_chat_context_summary`。
+升级已有数据库前先暂停对话写入并备份。会话表使用 `yl_ai_session.message_count` 记录尚未压缩的有效消息条数；若旧库曾使用不同的计数语义，需按实际数据核对和修正。继续复用已有 `yl_user_memory`、`yl_chat_context_summary`。新库的 `sql/tables.sql` 已包含相关字段。
 
 - `ConversationGraph` 在 Route 前执行 `SummaryNode`：检查 `yl_ai_session.message_count`，达到50条时压缩较早消息，保留最近20条原文。消息按 user/assistant 各算一条，不按问答轮数。检查发生在本轮输入落库之前；压缩成功计数为20，本轮问答提交后为22。
 - SummaryAgent 使用 `summary_config`，一次模型调用同时生成结构化摘要和用户偏好；没有每轮偏好抽取，也没有独立后台图或队列。摘要合并旧摘要与较早消息，偏好可引用本次历史中的用户原文（包括保留的20条），不采用助手建议、临时要求或假设。相同键覆盖旧值，明确忘记请求写删除标记。
@@ -81,7 +81,7 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8001
 ```
 
-配置分开加载：提交到仓库的 `.env` 保存完整运行配置，包括 Redis、数据库和 Qdrant 连接地址；被 Git 忽略的 `.env.prod` 保存模型 API Key。普通配置类只读取 `.env`，厂商文件中的 `SecretSettings` 只读取 `.env.prod`（也支持进程环境变量），因此 `.env` 中的同名密钥不会被读取。
+配置分开加载：本地创建的 `.env` 保存 Redis、数据库和 Qdrant 等连接地址；被 Git 忽略的 `.env.prod` 保存模型 API Key 和 MinIO 密钥。两个文件都不会提交到仓库。普通配置类只读取 `.env`，厂商文件中的 `SecretSettings` 只读取 `.env.prod`（也支持进程环境变量），因此 `.env` 中的同名密钥不会被读取。
 
 启动日志打印接口文档地址，默认 `http://127.0.0.1:8001/docs`。修改监听端口或通过网关访问时，可在环境变量或 `.env` 中设置 `PUBLIC_BASE_URL`（例如 `http://127.0.0.1:9001`），用于生成日志中的文档链接，不改变 Uvicorn 监听配置。
 
