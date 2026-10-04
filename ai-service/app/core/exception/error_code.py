@@ -16,6 +16,7 @@ class ErrorCode(Enum):
     MODEL_TOOL_DUPLICATE = (50222, "模型重复请求了同一写操作，已停止执行", 502)
     IMAGE_LIMIT = (42901, "图片模型已达到账号用量限制，请调整限额后重试", 429)
     IMAGE_FAILED = (50223, "图片生成失败，原规划已保留", 502)
+    IMAGE_STORAGE_FAILED = (50224, "图片已生成但保存到 MinIO 失败，原规划已保留", 502)
     MODEL_TEXT_DELTA_INVALID = (50201, "模型文本增量格式异常", 502)
     MODEL_TOOL_DELTA_INVALID = (50202, "模型工具增量格式异常", 502)
     MODEL_MESSAGE_INVALID = (50203, "模型消息格式异常", 502)

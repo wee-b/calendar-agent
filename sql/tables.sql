@@ -272,19 +272,22 @@ DROP TABLE IF EXISTS `yl_file`;
 CREATE TABLE `yl_file` (
     `file_id` BIGINT NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT NOT NULL,
+    `file_kind` VARCHAR(20) NOT NULL DEFAULT 'document',
     `file_name` VARCHAR(255) NOT NULL,
     `content_type` VARCHAR(100) NOT NULL,
     `size_bytes` BIGINT NOT NULL,
     `sha256` CHAR(64) NOT NULL,
+    `dedupe_key` CHAR(64) NULL,
     `object_key` VARCHAR(500) NOT NULL,
+    `object_bucket` VARCHAR(63) NOT NULL DEFAULT 'calendar-documents',
     `status` VARCHAR(20) NOT NULL DEFAULT 'uploading',
     `error_message` VARCHAR(500) NULL,
     `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`file_id`),
-    UNIQUE KEY `uk_user_sha256` (`user_id`, `sha256`),
+    UNIQUE KEY `uk_user_dedupe` (`user_id`, `dedupe_key`),
     KEY `idx_user_status` (`user_id`, `status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户上传文件';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户文档与生成图片';
 
 CREATE TABLE `yl_document` (
     `document_id` BIGINT NOT NULL AUTO_INCREMENT,

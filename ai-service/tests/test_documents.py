@@ -135,7 +135,8 @@ class DocumentTests(unittest.IsolatedAsyncioTestCase):
         data = "每天背单词并练习听力。".encode()
         entry = SimpleNamespace(file_id=5, file_name="notes.txt", size_bytes=len(data),
                                 sha256=sha256(data).hexdigest(),
-                                status="uploading", error_message=None, create_time=None, object_key="")
+                                status="uploading", error_message=None, create_time=None,
+                                object_key="", object_bucket="calendar-documents")
 
         async def create_or_get(**kwargs):
             entry.object_key = kwargs["object_key"]
@@ -192,6 +193,7 @@ class DocumentTests(unittest.IsolatedAsyncioTestCase):
         data = "每天复习十个单词并练习听力。".encode()
         entry = SimpleNamespace(file_id=5, file_name="notes.txt", size_bytes=len(data),
                                 sha256=sha256(data).hexdigest(), object_key="source",
+                                object_bucket="calendar-documents",
                                 status="processing", error_message=None)
         stream = BytesIO(data)
         stream.release_conn = lambda: None
@@ -210,6 +212,7 @@ class DocumentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_delete_parse_preserves_source_and_delete_source_removes_all(self):
         entry = SimpleNamespace(file_id=5, user_id=7, object_key="users/7/source.txt",
+                                object_bucket="calendar-documents",
                                 file_name="source.txt", size_bytes=20, create_time=None,
                                 status="ready", error_message=None)
         repo = SimpleNamespace(claim_delete_parse=AsyncMock(return_value=(entry, True)),

@@ -9,6 +9,7 @@ class DocumentSettings(BaseSettings):
     minio_endpoint: str = "localhost:9000"
     minio_secure: bool = False
     minio_bucket: str = "calendar-documents"
+    image_minio_bucket: str = "calendar-images"
     qdrant_document_collection: str = "user_documents"
     document_max_bytes: int = 10 * 1024 * 1024
 

@@ -138,8 +138,8 @@ class DocumentService:
                     raise
         client.put_object(bucket, key, BytesIO(data), len(data), content_type=content_type)
 
-    def _get_object(self, key: str) -> bytes:
-        response = self._minio().get_object(self.settings.minio_bucket, key)
+    def _get_object(self, key: str, bucket: str) -> bytes:
+        response = self._minio().get_object(bucket, key)
         try:
             return response.read(self.settings.document_max_bytes + 1)
         finally:
@@ -165,7 +165,8 @@ class DocumentUploadService(DocumentService):
         key = f"users/{user_id}/{uuid4().hex}/{name}"
         entry, created = await self.repository.create_or_get(
             user_id=user_id, name=name, content_type=content_type,
-            size=len(data), digest=digest, object_key=key)
+            size=len(data), digest=digest, object_key=key,
+            object_bucket=self.settings.minio_bucket)
         if not created:
             if entry.status in {"uploaded", "processing", "ready", "failed"}:
                 return file_result(entry)
@@ -197,7 +198,7 @@ class DocumentParseService(DocumentService):
             raise HTTPException(409, "文档尚未上传完成或正在解析")
         destructive_started = False
         try:
-            data = await asyncio.to_thread(self._get_object, entry.object_key)
+            data = await asyncio.to_thread(self._get_object, entry.object_key, entry.object_bucket)
             if len(data) != entry.size_bytes or sha256(data).hexdigest() != entry.sha256:
                 raise ValueError("MinIO 文件内容与登记记录不一致")
             chunks = await asyncio.to_thread(extract_chunks, entry.file_name, data)
@@ -282,7 +283,7 @@ class DocumentManagementService(DocumentService):
             if await self.qdrant.collection_info() is not None:
                 await self.qdrant.delete_file(user_id, file_id)
             await asyncio.to_thread(self._minio().remove_object,
-                                    self.settings.minio_bucket, entry.object_key)
+                                    entry.object_bucket, entry.object_key)
             await self.repository.complete_delete_source(file_id)
         except Exception as exc:
             await self.repository.fail_delete(file_id, str(exc), source=True)

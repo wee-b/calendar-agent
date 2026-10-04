@@ -60,12 +60,33 @@
         </div>
 
         <p v-if="msg.content && isUserRole(msg.role)">{{ msg.content }}</p>
-        <div
-          v-else-if="msg.content"
-          class="markdown-body"
-          @dblclick="openImagePreview"
-          v-html="renderMarkdown(msg.content)"
-        ></div>
+        <template v-else-if="msg.content">
+          <template v-if="imageAssets[index]">
+            <div class="markdown-body" @dblclick="openImagePreview"
+              v-html="renderMarkdown(imageAssets[index]!.before)"></div>
+            <div class="image-asset-actions" aria-label="图片操作">
+              <button type="button" class="image-asset-button"
+                :title="imageAssets[index]!.minioUrl"
+                @click="$emit('copy', imageAssets[index]!.minioUrl)">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.7" />
+                  <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="1.7" />
+                </svg>
+                复制 MinIO URL
+              </button>
+              <a class="image-asset-button" :href="resolveAiAssetUrl(imageAssets[index]!.downloadUrl)" download>
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 4v11m0 0 4-4m-4 4-4-4M5 18v2h14v-2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                下载原图
+              </a>
+            </div>
+            <div v-if="imageAssets[index]!.after" class="markdown-body image-message-after"
+              @dblclick="openImagePreview" v-html="renderMarkdown(imageAssets[index]!.after)"></div>
+          </template>
+          <div v-else class="markdown-body" @dblclick="openImagePreview"
+            v-html="renderMarkdown(msg.content)"></div>
+        </template>
         <TypingIndicator v-else-if="msg.loading" />
 
         <div v-if="!msg.loading && index === messages.length - 1 && msg.dispatchType === 'PLAN_CLARIFICATION'" class="plan-choices">
@@ -137,13 +158,13 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { renderMarkdown } from '../../../utils/markdown';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { renderMarkdown, resolveAiAssetUrl } from '../../../utils/markdown';
 import EmptyChat from './EmptyChat.vue';
 import TypingIndicator from './TypingIndicator.vue';
 import type { ChatMessage } from './types';
 
-defineProps<{
+const props = defineProps<{
   hasMoreHistory: boolean;
   isLoadingHistory: boolean;
   isSending: boolean;
@@ -156,6 +177,36 @@ defineProps<{
   isThinkingStepFailed: (step: string) => boolean;
   formatResponseTime: (durationMs: number) => string;
 }>();
+
+interface ImageAssetMessage {
+  before: string;
+  after: string;
+  minioUrl: string;
+  downloadUrl: string;
+}
+
+const parseImageAsset = (content: string): ImageAssetMessage | null => {
+  const match = /^MinIO 路径：\s*`(minio:\/\/[^\s`]+)`\s*·\s*\[下载原图\]\(([^\s)]+)\)[ \t]*$/m.exec(content);
+  if (!match) return null;
+  try {
+    const url = new URL(match[2], window.location.origin);
+    const key = decodeURIComponent(url.pathname.slice('/images/'.length));
+    if (!url.pathname.startsWith('/images/') || !match[1].endsWith(`/${key}`)
+        || !/^[a-f0-9]{64}$/.test(url.searchParams.get('sig') || '')
+        || url.searchParams.get('download') !== 'true') return null;
+    return {
+      before: content.slice(0, match.index).trimEnd(),
+      after: content.slice(match.index + match[0].length).trimStart(),
+      minioUrl: match[1],
+      downloadUrl: url.pathname + url.search,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const imageAssets = computed(() => props.messages.map(message =>
+  props.isUserRole(message.role) ? null : parseImageAsset(message.content || '')));
 
 const chatHistoryRef = ref<HTMLElement | null>(null);
 const inlineChoiceIndex = ref<number | null>(null);
@@ -422,6 +473,46 @@ defineExpose({ scrollToBottom, prependKeepingPosition });
 .markdown-body :deep(li + li) {
   margin-top: 6px;
 }
+
+.image-asset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 16px;
+}
+
+.image-asset-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #dbe3f0;
+  border-radius: 9px;
+  background: #f8fafc;
+  color: #334155;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.image-asset-button svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.image-asset-button:hover,
+.image-asset-button:focus-visible {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.image-message-after { margin-top: 0; }
 
 .markdown-body :deep(table) {
   display: block;

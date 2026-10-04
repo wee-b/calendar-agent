@@ -213,3 +213,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8001/rag/search -Method Post -ContentTyp
 运行 `sql/migrations/20261003_user_documents.sql` 创建 `yl_file` 和 `yl_document`；完整新库结构也包含在 `sql/tables.sql`。在 `ai-service/.env` 配置 `MINIO_ENDPOINT=localhost:9000`、`MINIO_SECURE=false`、`MINIO_BUCKET=calendar-documents` 和可选的 `QDRANT_DOCUMENT_COLLECTION=user_documents`，在 `ai-service/.env.prod` 配置 `MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`。上传时若 MinIO 桶不存在会自动创建；首次解析时创建独立的 Qdrant 集合。
 
 知识库页支持 TXT、Markdown、可提取文本的 PDF 和 DOCX，单文件上限 10 MB。`POST /documents` 只保存原文件到 MinIO 并登记 `uploaded` 状态，不解析、不请求 Embedding 或 Qdrant；`POST /documents/{file_id}/parse` 从 MinIO 读取原文件，按段落切片、去重、向量化，并写入 `yl_document` 和 Qdrant，完成后变为 `ready`。`POST /documents/{file_id}/reparse` 替换旧解析结果；`DELETE /documents/{file_id}/parse` 只清理向量和片段，保留源文件；`DELETE /documents/{file_id}` 删除源文件以及全部解析结果。删除操作按登录用户校验归属，正在处理的文件不能删除。重复上传同一用户的相同内容会复用已有文件。对话请求可附 `documentIds: [文件ID]`（最多五个），Planner 只接受 `ready` 文件并仅检索这些文件；没有引用时不会查询文档向量库。扫描版 PDF 需要先进行 OCR。
+
+## 规划图片归档
+
+其他已有数据库部署时运行 `sql/migrations/20261004_image_files.sql`，为 `yl_file` 增加文件类型、桶名和仅针对文档的去重键；本地开发数据库已执行该迁移。图片模型返回下载地址后，Python 后端下载原始 JPEG、PNG 或 WebP 字节（上限 20 MB），先在 `yl_file` 登记 `image/uploading`，再保存到 MinIO 的 `IMAGE_MINIO_BUCKET`，默认 `calendar-images`；成功变为 `uploaded`，失败变为 `upload_failed`。桶不存在时自动创建。图片不进入知识库文档列表或解析流程。对话消息保存 `minio://桶名/对象路径`、预览图和“下载原图”链接；预览及下载通过 Python `/images/...` 签名地址从私有桶读取，无需将 MinIO 桶设为公开。签名地址使用 `MINIO_SECRET_KEY` 生成，修改该密钥会使历史图片链接失效。前端开发代理已转发 `/images`；前后端分域部署时沿用 `VITE_AI_API_BASE_URL`。

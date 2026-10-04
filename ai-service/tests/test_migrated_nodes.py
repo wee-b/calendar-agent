@@ -256,17 +256,25 @@ class ImageNodeTests(unittest.IsolatedAsyncioTestCase):
     async def test_image_feedback_keeps_original_draft_and_accumulates_instruction(self):
         drafts = SimpleNamespace(find_pending=AsyncMock(return_value=SimpleNamespace(plan_json=plan_json())))
         client = SimpleNamespace(generate=AsyncMock(return_value="https://example.com/plan.jpg"))
+        image = SimpleNamespace(minio_uri="minio://calendar-images/users/7/plan.jpg",
+                                view_url="https://example.com/images/plan.jpg",
+                                download_url="https://example.com/images/plan.jpg?download=true")
+        storage = SimpleNamespace(archive=AsyncMock(return_value=image))
         pending = PendingTask(task="英语", draft_id=8, plan_preview="原规划", image_instruction="蓝色")
         state = turn(Signal.MODIFY, Stage.IMAGE, pending)
         state["message"] = "字体大一点"
-        result = await ImageNode(client, drafts)(state, context())
+        result = await ImageNode(client, drafts, storage)(state, context())
         self.assertEqual(8, result.pending.draft_id)
         self.assertEqual("原规划", result.pending.plan_preview)
         self.assertIn("蓝色", result.pending.image_instruction)
         self.assertIn("字体大一点", result.pending.image_instruction)
+        self.assertIn(image.minio_uri, result.reply)
+        self.assertIn(image.view_url, result.reply)
+        self.assertIn("下载原图", result.reply)
+        storage.archive.assert_awaited_once_with("https://example.com/plan.jpg", 7, "s", 8)
         client.generate.side_effect = RuntimeError("failed")
         with self.assertRaises(RuntimeError):
-            await ImageNode(client, drafts)(state, context())
+            await ImageNode(client, drafts, storage)(state, context())
         self.assertEqual("蓝色", pending.image_instruction)
 
     async def test_image_http_protocol_and_limit_error(self):
@@ -298,7 +306,11 @@ class NodeGraphTests(unittest.IsolatedAsyncioTestCase):
         mcp = Mcp(["batchCreateTodos"], result={"createdCount": 1, "createdTodos": [{"todoId": 9, "title": "英语"}]})
         graph = ConversationGraph(user_id=7, session_id="s", chat_service=ChatService(repo), summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))), route_agent=route)
         graph.handlers[AgentType.PLANNER] = PlanNode(planning, SimpleNamespace(complete=AsyncMock(return_value=plan_json())))
-        graph.handlers[AgentType.IMAGE] = ImageNode(SimpleNamespace(generate=AsyncMock(return_value="https://example.com/x.jpg")), drafts)
+        image = SimpleNamespace(minio_uri="minio://calendar-images/users/7/x.jpg",
+                                view_url="https://example.com/images/x.jpg",
+                                download_url="https://example.com/images/x.jpg?download=true")
+        storage = SimpleNamespace(archive=AsyncMock(return_value=image))
+        graph.handlers[AgentType.IMAGE] = ImageNode(SimpleNamespace(generate=AsyncMock(return_value="https://example.com/x.jpg")), drafts, storage)
         graph.handlers[AgentType.EXECUTOR] = ExecuteNode(mcp_factory=lambda: mcp, drafts=drafts)
         self.assertEqual(Stage.PLAN, (await graph.run_turn("英语学习", "user-token")).stage)
         route.route.return_value = RouteDecision(signal=Signal.GENERATE_PLAN_IMAGE)

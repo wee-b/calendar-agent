@@ -12,7 +12,7 @@ class DocumentRepository:
     async def list_files(self, user_id: int) -> list[UserFile]:
         async with self.sessions() as session:
             result = await session.scalars(select(UserFile).where(
-                UserFile.user_id == user_id
+                UserFile.user_id == user_id, UserFile.file_kind == "document"
             ).order_by(UserFile.file_id.desc()))
             return list(result)
 
@@ -21,20 +21,26 @@ class DocumentRepository:
             return []
         async with self.sessions() as session:
             result = await session.scalars(select(UserFile).where(
-                UserFile.user_id == user_id, UserFile.file_id.in_(ids), UserFile.status == "ready"
+                UserFile.user_id == user_id, UserFile.file_id.in_(ids),
+                UserFile.status == "ready", UserFile.file_kind == "document"
             ))
             return list(result)
 
     async def create_or_get(self, *, user_id: int, name: str, content_type: str,
-                            size: int, digest: str, object_key: str) -> tuple[UserFile, bool]:
+                            size: int, digest: str, object_key: str,
+                            object_bucket: str, file_kind: str = "document",
+                            deduplicate: bool = True) -> tuple[UserFile, bool]:
         async with self.sessions() as session:
-            existing = await session.scalar(select(UserFile).where(
-                UserFile.user_id == user_id, UserFile.sha256 == digest))
-            if existing:
-                return existing, False
-            entry = UserFile(user_id=user_id, file_name=name, content_type=content_type,
-                             size_bytes=size, sha256=digest, object_key=object_key,
-                             status="uploading")
+            if deduplicate:
+                existing = await session.scalar(select(UserFile).where(
+                    UserFile.user_id == user_id, UserFile.file_kind == file_kind,
+                    UserFile.dedupe_key == digest))
+                if existing:
+                    return existing, False
+            entry = UserFile(user_id=user_id, file_kind=file_kind, file_name=name, content_type=content_type,
+                             size_bytes=size, sha256=digest,
+                             dedupe_key=digest if deduplicate else None, object_key=object_key,
+                             object_bucket=object_bucket, status="uploading")
             try:
                 session.add(entry)
                 await session.commit()
@@ -42,8 +48,11 @@ class DocumentRepository:
                 return entry, True
             except IntegrityError:
                 await session.rollback()
+                if not deduplicate:
+                    raise
                 existing = await session.scalar(select(UserFile).where(
-                    UserFile.user_id == user_id, UserFile.sha256 == digest))
+                    UserFile.user_id == user_id, UserFile.file_kind == file_kind,
+                    UserFile.dedupe_key == digest))
                 if existing is None:
                     raise
                 return existing, False
@@ -77,7 +86,8 @@ class DocumentRepository:
         async with self.sessions() as session:
             async with session.begin():
                 entry = await session.scalar(select(UserFile).where(
-                    UserFile.user_id == user_id, UserFile.file_id == file_id).with_for_update())
+                    UserFile.user_id == user_id, UserFile.file_id == file_id,
+                    UserFile.file_kind == "document").with_for_update())
                 if entry is None:
                     return None, False, None
                 previous_status = entry.status
@@ -111,7 +121,8 @@ class DocumentRepository:
         async with self.sessions() as session:
             async with session.begin():
                 entry = await session.scalar(select(UserFile).where(
-                    UserFile.user_id == user_id, UserFile.file_id == file_id).with_for_update())
+                    UserFile.user_id == user_id, UserFile.file_id == file_id,
+                    UserFile.file_kind == "document").with_for_update())
                 if entry is None:
                     return None, False
                 if entry.status in {"ready", "failed"}:
@@ -131,7 +142,8 @@ class DocumentRepository:
         async with self.sessions() as session:
             async with session.begin():
                 entry = await session.scalar(select(UserFile).where(
-                    UserFile.user_id == user_id, UserFile.file_id == file_id).with_for_update())
+                    UserFile.user_id == user_id, UserFile.file_id == file_id,
+                    UserFile.file_kind == "document").with_for_update())
                 if entry is None:
                     return None, False
                 if entry.status in {"uploaded", "ready", "failed", "upload_failed", "delete_failed"}:
