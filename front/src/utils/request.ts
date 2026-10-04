@@ -10,8 +10,7 @@ const whiteList = [
     '/user/login',
     '/user/register',
     '/almanac/day',
-    '/test/testConnection',
-    '/test/getToken'
+    '/test/testConnection'
 ];
 
 // 2. 创建 axios 实例

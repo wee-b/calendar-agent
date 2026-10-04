@@ -55,9 +55,28 @@ class BackApplicationTests {
         var paths = mappings.getHandlerMethods().keySet().stream()
                 .flatMap(mapping -> mapping.getPatternValues().stream()).toList();
         assertTrue(paths.containsAll(List.of("/mcp", "/user/info", "/todo", "/calendar/day")));
+        assertFalse(paths.contains("/test/getToken"));
         assertFalse(paths.stream().anyMatch(path -> path.startsWith("/chat") || path.startsWith("/memory")));
         assertFalse(mappings.getHandlerMethods().values().stream()
                 .anyMatch(method -> method.getBeanType().getPackageName().contains(".assistant")));
+    }
+
+    @Test
+    void registrationRejectsInvalidInputBeforeDatabaseAccess() throws Exception {
+        mvc.perform(post("/user/register").contentType("application/json")
+                        .content("{\"phone\":\"13800138000\",\"password\":\"\",\"userName\":\"test\"}"))
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.ok").value(false));
+        verifyNoInteractions(userMapper);
+    }
+
+    @Test
+    void loginRejectsInvalidPhoneBeforeDatabaseAccess() throws Exception {
+        mvc.perform(post("/user/login").contentType("application/json")
+                        .content("{\"phone\":\"not-a-phone\",\"password\":\"test-password\"}"))
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.ok").value(false));
+        verifyNoInteractions(userMapper);
     }
 
     @Test
