@@ -12,6 +12,7 @@
       :class="isUserRole(msg.role) ? 'is-user' : 'is-ai'"
     >
       <div class="bubble-content">
+        <MessageDocuments v-if="isUserRole(msg.role)" :references="msg.documentReferences" />
         <div v-if="!isUserRole(msg.role) && (msg.agentSteps?.length || msg.runStartedAt)" class="thinking-panel" :class="{ completed: msg.runDone }">
           <button class="thinking-summary" :aria-expanded="!msg.timelineCollapsed" @click="$emit('toggle-timeline', index)">
             <span>{{ thinkingSummary(msg) }}</span>
@@ -156,6 +157,7 @@ import { renderMarkdown, resolveAiAssetUrl } from '../../../utils/markdown';
 import { timelineAction, timelineNarration } from '../../../api/agentTimeline';
 import EmptyChat from './EmptyChat.vue';
 import TypingIndicator from './TypingIndicator.vue';
+import MessageDocuments from './MessageDocuments.vue';
 import type { ChatMessage } from './types';
 
 const props = defineProps<{

@@ -12,6 +12,7 @@ from app.repository.flow_state import FlowStateRepository
 from app.repository.plan_draft import PlanDraftRepository
 from app.schemas.plan import parse_plan
 from app.schemas.chat.timeline import AgentStep
+from app.schemas.chat.history import DocumentReference
 from app.schemas.statemachine.flow import ConversationStage, PendingTask
 from app.schemas.statemachine.transitions import AgentType
 from tests.test_chat_history import HistoryMysqlCase
@@ -28,6 +29,7 @@ class FlowPersistenceTests(HistoryMysqlCase):
         owner = first if claimed[0] else second
         await repo.complete(owner, ConversationStage.PLAN, PendingTask(task="学习", draft_id=7),
                             AgentType.PLANNER, message="学习计划", reply="规划正文", elapsed_ms=5,
+                            document_references=[DocumentReference(fileId=12, fileName="学习资料.pdf")],
                             agent_steps=[AgentStep(id=1, kind="agent", label="制定规划",
                                                    narration="先学习基础，再做练习。",
                                                    status="success", elapsedMs=2, round=1),
@@ -39,6 +41,8 @@ class FlowPersistenceTests(HistoryMysqlCase):
         async with repo.sessions() as session:
             messages = (await session.scalars(select(AiDialogue).order_by(AiDialogue.dialogue_id))).all()
             self.assertEqual(["学习计划", "规划正文"], [m.content for m in messages])
+            self.assertEqual([{"fileId": 12, "fileName": "学习资料.pdf"}], messages[0].document_references)
+            self.assertIsNone(messages[1].document_references)
             self.assertEqual("制定规划", messages[1].agent_steps[0]["label"])
             self.assertEqual("先学习基础，再做练习。", messages[1].agent_steps[0]["narration"])
             self.assertEqual("2026-10-04：2 项待办。", messages[1].agent_steps[1]["resultSummary"])
@@ -46,6 +50,8 @@ class FlowPersistenceTests(HistoryMysqlCase):
         history = await ChatRepository(self.engine).list_history(23, "s")
         self.assertEqual("制定规划", history[0][0].agent_steps[0]["label"])
         page = (await self.client.get("/chat/history?sessionId=s")).json()["data"]
+        self.assertEqual([{"fileId": 12, "fileName": "学习资料.pdf"}], page["items"][0]["documentReferences"])
+        self.assertEqual([], page["items"][1]["documentReferences"])
         self.assertEqual("制定规划", page["items"][-1]["agentSteps"][0]["label"])
         self.assertEqual("先学习基础，再做练习。", page["items"][-1]["agentSteps"][0]["narration"])
         self.assertEqual("2026-10-04：2 项待办。", page["items"][-1]["agentSteps"][1]["resultSummary"])

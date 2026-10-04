@@ -254,7 +254,7 @@ class DocumentTests(unittest.IsolatedAsyncioTestCase):
         model = SimpleNamespace(complete=AsyncMock(return_value=valid_plan()))
         context = SimpleNamespace(use_model=lambda *_: None,
                                   add_step=AsyncMock(return_value=1), complete_step=AsyncMock(),
-                                  set_agent_narration=AsyncMock())
+                                  set_agent_narration=AsyncMock(), send=AsyncMock())
         node = PlanNode(planning, model, documents)
         state = {"user_id": 7, "session_id": "s", "message": "明天复习",
                  "pending": PendingTask(), "signal": UserSignal.NEW_PLAN}
@@ -265,5 +265,6 @@ class DocumentTests(unittest.IsolatedAsyncioTestCase):
         await node(state, context)
         documents.search.assert_awaited_once_with(7, [42], "明天复习")
         context.add_step.assert_any_await("tool", "检索引用文档")
-        context.complete_step.assert_awaited_once_with(1)
+        context.complete_step.assert_awaited_once_with(
+            1, result_summary="找到 1 个相关片段，来源：notes.md。片段摘录：每天背单词")
         self.assertIn("每天背单词", model.complete.call_args.args[0][1]["content"])

@@ -8,6 +8,8 @@
 
 ## 状态机与节点迁移
 
+引用文档的消息记录：现有数据库部署前执行 `sql/migrations/20261004_chat_document_references.sql`，新库已包含在 `sql/tables.sql` 中。每轮开始时按当前用户校验 `documentIds` 并取得文件名快照，随用户消息一同提交；历史接口通过 `documentReferences` 返回 `{fileId, fileName}` 列表，文档之后删除或改名也不影响历史记录。旧消息返回空数组。前端发送后立即清空输入区引用，并在对应用户消息上展示文档名称。
+
 - Planner：读取已有用户偏好、必要时澄清、生成或修改结构化草稿；校验失败允许模型修正一次。草稿由 Python 写入 `yl_plan_draft`。
 - Executor：新操作先展示任务，确认后才调用 Java MCP。确认使用已保存任务；工具参数由本地白名单校验，写结果核对操作与目标，不自动重试写入。
 - 同步规划：仅接受当前用户、当前会话绑定的待同步草稿，通过新增的 `batchCreateTodos` MCP 工具调用 Java 的事务批量创建，再标记草稿已同步。部署时需同时更新 Java MCP。
@@ -177,7 +179,7 @@ curl.exe -N -X POST http://127.0.0.1:8001/chat/stream `
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-也可以用 `tests/test_main.http` 手动测试接口。需要清理源码中的 Python 缓存时运行 `python -m app.clean_pycache`。
+需要清理源码中的 Python 缓存时运行 `python -m app.clean_pycache`。
 
 `/chat` 的用户 ID 只来自 Redis token 映射；用户资料由 `/auth/me` 转发 token 向 Java 获取。Python 依赖 Sa-Token 1.44.0 的 `client` token 键格式，升级 Java 鉴权实现时要同步验证登录、退出和过期行为。
 

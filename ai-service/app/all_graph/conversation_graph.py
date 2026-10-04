@@ -31,6 +31,7 @@ from app.schemas.chat.model_stream import (
     ToolCallLifecycleEvent, ToolResultEvent,
 )
 from app.schemas.chat.timeline import AgentStep
+from app.schemas.chat.history import DocumentReference
 
 
 _AGENT_LABELS = {
@@ -62,6 +63,7 @@ class ConversationState(TypedDict):
     session_id: str
     message: str
     document_ids: NotRequired[list[int]]
+    document_references: NotRequired[list[DocumentReference]]
     stage: ConversationStage
     pending: PendingTask
     signal: NotRequired[UserSignal]
@@ -155,11 +157,14 @@ class TurnContext:
                 step.resultSummary = event.data.summary
                 await self._publish_step(step)
 
-    async def complete_step(self, step_id: int | None, status: str = "success") -> None:
+    async def complete_step(self, step_id: int | None, status: str = "success", *,
+                            result_summary: str | None = None) -> None:
         if step_id is None:
             return
         step = self.agent_steps[step_id - 1]
         step.status = status
+        if result_summary is not None:
+            step.resultSummary = " ".join(result_summary.split())[:160]
         await self._publish_step(step)
 
     async def set_agent_narration(self, label: str, narration: str | None) -> None:
@@ -284,8 +289,11 @@ class ConversationGraph:
             handler = self.handlers.get(agent)
             if handler is None:
                 raise RuntimeError(f"{agent.name} Agent 节点尚未接入")
-            await runtime.context.send(AgentStatusEvent(data=AgentStatusData(
-                agent=agent.name.lower(), round=1, stage="model")))
+            # Planner 先读取资料，再由节点在实际调用模型前发布“制定规划”。
+            # 否则后续检索工具启动时会把尚未执行的规划步骤自动标为完成。
+            if agent != AgentType.PLANNER:
+                await runtime.context.send(AgentStatusEvent(data=AgentStatusData(
+                    agent=agent.name.lower(), round=1, stage="model")))
             result = await handler(state, runtime.context)
             if not isinstance(result, AgentTurnResult):
                 raise TypeError(f"{agent.name} Agent 未返回 AgentTurnResult")
@@ -318,6 +326,7 @@ class ConversationGraph:
             message=state["message"], reply=result.reply,
             elapsed_ms=int((perf_counter() - runtime.context.started) * 1000),
             agent_steps=runtime.context.agent_steps,
+            document_references=state.get("document_references", []),
         )
         log_session_transition(state["stage"].name, next_stage.name, "已提交",
                                信号=state["signal"].name, 节点=state["agent"].name,
@@ -368,6 +377,7 @@ class ConversationGraph:
         context = TurnContext(token=token, flow_state=flow_state, emit=emit,
                               is_disconnected=is_disconnected, started=started)
         try:
+            references = await self.chat_service.document_references(self.user_id, document_ids) if document_ids else []
             # 主图先检查压缩，再 route -> transition -> Agent -> commit。
             # context 参数通过 Runtime 注入节点，不混入可持久化的图状态。
             state = await self.graph.ainvoke({
@@ -375,6 +385,7 @@ class ConversationGraph:
                 "session_id": self.session_id,
                 "message": message,
                 "document_ids": document_ids or [],
+                "document_references": references,
                 "stage": self.chat_service.resolve_flow_stage(flow_state),
                 "pending": self.chat_service.flow_pending(flow_state),
             }, context=context)

@@ -5,11 +5,13 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import httpx
+from fastapi import HTTPException
 from sqlalchemy import event, func, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DataError, DBAPIError
@@ -49,6 +51,44 @@ class HistoryValidationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(422, (await client.get("/chat/latest")).status_code)
                 self.assertEqual(422, (await client.get("/chat/latest?sessionId=s&throughId=0")).status_code)
             repository.assert_not_called()
+
+
+    async def test_snapshot_preserves_selection_order_and_deduplicates_ids(self):
+        files = [SimpleNamespace(file_id=2, file_name="第二份.pdf"),
+                 SimpleNamespace(file_id=1, file_name="第一份.docx")]
+        repository = SimpleNamespace(ready_files=AsyncMock(return_value=files))
+        with patch("app.service.chat.DocumentRepository", return_value=repository):
+            references = await ChatService().document_references(23, [1, 2, 1])
+        repository.ready_files.assert_awaited_once_with(23, [1, 2])
+        files[1].file_name = "之后改名.docx"
+        self.assertEqual([{"fileId": 1, "fileName": "第一份.docx"},
+                          {"fileId": 2, "fileName": "第二份.pdf"}],
+                         [item.model_dump() for item in references])
+
+
+    async def test_missing_inaccessible_or_unready_references_reject_the_whole_selection(self):
+        repository = SimpleNamespace(ready_files=AsyncMock(return_value=[
+            SimpleNamespace(file_id=1, file_name="可访问.pdf")]))
+        with patch("app.service.chat.DocumentRepository", return_value=repository):
+            with self.assertRaises(HTTPException) as caught:
+                await ChatService().document_references(23, [1, 2])
+        self.assertEqual(400, caught.exception.status_code)
+        repository.ready_files.assert_awaited_once_with(23, [1, 2])
+
+
+    async def test_history_returns_saved_names_without_reloading_deleted_files(self):
+        snapshot = [{"fileId": 12, "fileName": "原文件名.pdf"}]
+        rows = [SimpleNamespace(dialogue_id=index, role="user", content="参考资料规划",
+                                create_time=datetime(2026, 10, 4), response_time_ms=None,
+                                agent_steps=None, document_references=references)
+                for index, references in [(2, snapshot), (1, None)]]
+        repository = SimpleNamespace(list_history=AsyncMock(return_value=(rows, False)))
+        with patch("app.service.chat.ChatRepository", return_value=repository), \
+             patch("app.service.chat.DocumentRepository") as documents:
+            history = await ChatService().get_history(23, "s")
+            documents.assert_not_called()
+        self.assertEqual([], history.items[0].documentReferences)
+        self.assertEqual(snapshot, history.model_dump()["items"][1]["documentReferences"])
 
 
 MYSQL_URL = os.getenv("CHAT_TEST_MYSQL_URL")

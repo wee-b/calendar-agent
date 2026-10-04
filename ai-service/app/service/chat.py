@@ -2,12 +2,15 @@
 
 from uuid import uuid4
 
+from fastapi import HTTPException
+
 from app.repository.chat import ChatRepository
+from app.repository.documents import DocumentRepository
 from app.repository.chat_session import ChatSessionRepository
 from app.repository.flow_state import FlowStateRepository
 from app.models.agent_flow_state import YlAgentFlowState
 from app.schemas.chat.history import (
-    ChatHistoryItem, ChatHistoryPage, ChatSessionItem, DEFAULT_HISTORY_LIMIT,
+    ChatHistoryItem, ChatHistoryPage, ChatSessionItem, DocumentReference, DEFAULT_HISTORY_LIMIT,
 )
 from app.schemas.chat.timeline import AgentStep
 from app.schemas.statemachine.route_context import RouteContext, RouteContextMessage
@@ -60,6 +63,7 @@ class ChatService:
                 createTime=row.create_time,
                 responseTimeMs=row.response_time_ms,
                 agentSteps=row.agent_steps or [],
+                documentReferences=row.document_references or [],
             )
             for row in reversed(rows)
         ]
@@ -79,6 +83,18 @@ class ChatService:
             )
             for row in rows
         ]
+
+    async def document_references(self, user_id: int, ids: list[int]) -> list[DocumentReference]:
+        """在本轮开始时保存文档名称快照，不信任客户端名称或跨用户文件 ID。"""
+        unique_ids = list(dict.fromkeys(ids))
+        if not unique_ids:
+            return []
+        files = await DocumentRepository().ready_files(user_id, unique_ids)
+        by_id = {entry.file_id: entry for entry in files}
+        if any(file_id not in by_id for file_id in unique_ids):
+            raise HTTPException(400, "引用的文档不存在、未解析完成或无权访问")
+        return [DocumentReference(fileId=file_id, fileName=by_id[file_id].file_name)
+                for file_id in unique_ids]
 
     async def get_route_context(
         self, user_id: int, session_id: str,
@@ -132,11 +148,12 @@ class ChatService:
         pending: PendingTask, agent: AgentType,
         *, message: str | None = None, reply: str | None = None, elapsed_ms: int = 0,
         agent_steps: list[AgentStep] | None = None,
+        document_references: list[DocumentReference] | None = None,
     ) -> None:
         """提交阶段与待处理任务，并释放本轮认领。"""
         await self.flow_states.complete(state, next_stage, pending, agent,
                                         message=message, reply=reply, elapsed_ms=elapsed_ms,
-                                        agent_steps=agent_steps)
+                                        agent_steps=agent_steps, document_references=document_references)
 
     async def release_flow_state_claim(self, state: YlAgentFlowState) -> None:
         """仅在尚未开始外部写操作的失败路径释放认领。"""

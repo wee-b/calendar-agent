@@ -46,7 +46,7 @@
         :is-sending="isSending"
         :is-user-logged-in="isUserLoggedIn"
         :db-bars="dbBars"
-        v-model:document-ids="selectedDocumentIds"
+        v-model:references="selectedDocumentReferences"
         @send="handleSend"
         @toggle-voice="toggleVoice"
         @toggle-expanded="isExpanded = !isExpanded"
@@ -74,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue';
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
@@ -87,6 +87,7 @@ import ChatMessageList from './ChatMessageList.vue';
 import ChatInputBox from './ChatInputBox.vue';
 import ConfirmModal from './ConfirmModal.vue';
 import type { ChatMessage } from './types';
+import type { DocumentReference } from '../../../api/documents';
 
 const emit = defineEmits<{
   (e: 'refresh'): void;
@@ -103,7 +104,7 @@ const hasMoreHistory = ref(false);
 const nextBeforeId = ref<number | null>(null);
 const isLoadingHistory = ref(false);
 const inputText = ref('');
-const selectedDocumentIds = ref<number[]>([]);
+const selectedDocumentReferences = ref<DocumentReference[]>([]);
 const isSending = ref(false);
 
 const isDropdownOpen = ref(false);
@@ -239,6 +240,7 @@ const loadSessionById = async (sessionId: string) => {
       content: h.content,
       responseTimeMs: h.responseTimeMs,
       agentSteps: h.agentSteps || [],
+      documentReferences: h.documentReferences || [],
       runDone: true,
       dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
     }));
@@ -610,18 +612,20 @@ const handleSend = async () => {
   }
 
   stopVoice();
-  messages.value.push({ role: 'user', content: text });
+  const documentReferences = selectedDocumentReferences.value.map(item => ({ ...item }));
+  messages.value.push({ role: 'user', content: text, documentReferences });
   inputText.value = '';
+  selectedDocumentReferences.value = [];
   scrollToBottom();
 
-  const replyMsg: ChatMessage = {
+  const replyMsg = reactive<ChatMessage>({
     role: 'ai',
     content: '',
     loading: true,
     agentSteps: [],
     timelineCollapsed: false,
     runStartedAt: Date.now()
-  };
+  });
   messages.value.push(replyMsg);
   scrollToBottom();
 
@@ -634,7 +638,7 @@ const handleSend = async () => {
     }, CHAT_TIMEOUT);
 
     await streamChatAPI(
-      { sessionId: activeSessionId, message: text, documentIds: [...selectedDocumentIds.value] },
+      { sessionId: activeSessionId, message: text, documentIds: documentReferences.map(item => item.fileId) },
       (token) => {
         clearTimeout(slowTimer);
         replyMsg.content += token;
@@ -683,7 +687,6 @@ const handleSend = async () => {
     }
   } finally {
     isSending.value = false;
-    selectedDocumentIds.value = [];
     scrollToBottom(false);
     inputText.value = '';
     if (inputMudle.value === 2) {

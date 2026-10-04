@@ -10,6 +10,8 @@ from app.core.flow_logging import log_turn_step
 from app.helper.model_client import ModelClient
 from app.repository.planning_memory import PREFERENCE_TYPES
 from app.schemas.plan import parse_plan, preview, today
+from app.schemas.chat.model_stream import AgentStatusData, AgentStatusEvent
+from app.schemas.chat.timeline import summarize_document_results
 from app.schemas.statemachine.flow import AgentTurnResult, PendingTask, UserSignal
 from app.service.planning import PlanningService
 
@@ -93,9 +95,10 @@ class PlanNode:
             except Exception:
                 await context.complete_step(step_id, "error")
                 raise
-            await context.complete_step(step_id)
+            await context.complete_step(step_id, result_summary=summarize_document_results(hits))
             references = "\n".join(f"[{hit.payload.source} / {hit.payload.section}] {hit.payload.text}"
                                    for hit in hits)
+        await context.send(AgentStatusEvent(data=AgentStatusData(agent="planner", round=1, stage="model")))
         context.use_model("planner", self.model)
         plan = await self._generate(requirement, memories, references)
         await context.set_agent_narration("制定规划", plan.analysis)

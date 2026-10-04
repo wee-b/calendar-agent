@@ -13,6 +13,7 @@ from app.schemas.chat.model_stream import AssistantDeltaEvent
 from app.all_graph.nodes.chat_node import ChatNode
 from app.all_graph.nodes.route_node import RouteAgent, RouteDecision
 from app.service.chat import ChatService
+from app.schemas.chat.history import DocumentReference
 
 
 class FakeModel:
@@ -140,6 +141,28 @@ class ConversationGraphTests(unittest.IsolatedAsyncioTestCase):
             user_id=1, session_id="s",
             chat_service=ChatService(self.repository), summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))), route_agent=self.route,
         )
+
+    async def test_document_references_are_snapshotted_for_only_the_current_user_message(self):
+        graph = self.graph()
+        references = [DocumentReference(fileId=12, fileName="学习资料.pdf")]
+        with patch.object(graph.chat_service, "document_references",
+                          new=AsyncMock(return_value=references)) as resolve:
+            await graph.run_turn("参考资料制定计划", "token", document_ids=[12])
+            resolve.assert_awaited_once_with(1, [12])
+            self.assertEqual(references, self.repository.round_data[-1]["document_references"])
+            await graph.run_turn("再调整一下", "token")
+            self.assertEqual([], self.repository.round_data[-1]["document_references"])
+            resolve.assert_awaited_once()
+
+    async def test_invalid_document_reference_releases_claim_without_running_or_committing(self):
+        graph = self.graph()
+        with patch.object(graph.chat_service, "document_references",
+                          new=AsyncMock(side_effect=ValueError("引用文档不可用"))):
+            with self.assertRaises(ValueError):
+                await graph.run_turn("参考资料制定计划", "token", document_ids=[12])
+        self.assertEqual([], self.repository.round_data)
+        self.assertEqual([], self.calls)
+        self.assertEqual(1, self.repository.releases)
 
     async def test_multiple_turns_use_persisted_stage_and_preserve_pending_on_query(self):
         graph = self.graph()

@@ -3,6 +3,9 @@ import request from '../utils/request';
 import { getToken, clearAuth } from '../utils/auth';
 import { consumeChatStream } from './chatStream';
 import type { AgentStep } from './chatStream';
+import { createStreamTextPresenter } from '../utils/streamText';
+import { createAgentStepPresenter } from './agentTimeline';
+import type { DocumentReference } from './documents';
 
 // 独立于 Java 的 API 地址；开发环境留空，通过 Vite /chat 代理访问 Python。
 const AI_BASE_URL = (import.meta.env.VITE_AI_API_BASE_URL || '').replace(/\/$/, '');
@@ -34,6 +37,7 @@ export interface ChatHistoryItemVO {
     createTime: string;
     responseTimeMs?: number | null;
     agentSteps?: AgentStep[];
+    documentReferences?: DocumentReference[];
 }
 
 export interface ChatSessionVO {
@@ -74,6 +78,8 @@ export const streamChatAPI = async (
 ): Promise<void> => {
     const token = getToken();
     const tokenName = import.meta.env.VITE_TOKEN_KEY || 'yvli-token';
+    const presenter = createStreamTextPresenter(onToken);
+    const stepPresenter = onAgentStep ? createAgentStepPresenter(onAgentStep) : undefined;
 
     try {
         const response = await fetch(`${AI_BASE_URL}/chat/stream`, {
@@ -99,9 +105,20 @@ export const streamChatAPI = async (
         onOpen?.();
 
         if (!response.body) throw new Error('未收到回复数据流');
-        await consumeChatStream(response.body, { onToken, onDone, onProgress, onResponseTime, onAgentStep });
+        await consumeChatStream(response.body, {
+            onToken: presenter.append,
+            onDone: () => {},
+            onProgress, onResponseTime, onAgentStep: stepPresenter?.append,
+        });
+        await Promise.all([presenter.finish(), stepPresenter?.finish()]);
+        onDone();
     } catch (error: any) {
+        presenter.cancel();
+        stepPresenter?.cancel();
         onError(error.message || '网络连接异常');
+    } finally {
+        presenter.cancel();
+        stepPresenter?.cancel();
     }
 };
 

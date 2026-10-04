@@ -258,6 +258,7 @@ CREATE TABLE `yl_ai_dialogue`
     `ai_audio_url`  VARCHAR(500) NULL DEFAULT NULL COMMENT 'AI回复TTS音频URL',
     `response_time_ms` BIGINT    NULL DEFAULT NULL COMMENT 'AI完整响应耗时，单位毫秒',
     `agent_steps` JSON NULL COMMENT '该助手回复的脱敏 Agent 过程时间线',
+    `document_references` JSON NULL COMMENT '用户消息引用的文档 ID 和名称快照',
 
     `deleted_flag`  TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '删除状态：0-未删除 1-已删除',
     `create_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',

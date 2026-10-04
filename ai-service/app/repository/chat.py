@@ -221,6 +221,8 @@ class ChatRepository:
             response_time_ms=message.response_time_ms, create_time=now,
             agent_steps=[step.model_dump(mode="json") for step in message.agent_steps]
             if message.agent_steps is not None else None,
+            document_references=[ref.model_dump(mode="json") for ref in message.document_references]
+            or None,
         ) for message in messages]
         session.add_all(rows)
         await session.flush()

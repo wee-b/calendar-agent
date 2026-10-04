@@ -24,6 +24,7 @@ class AiDialogue(Base):
     ai_audio_url: Mapped[str | None] = mapped_column(String(500))
     response_time_ms: Mapped[int | None] = mapped_column(BigInteger)
     agent_steps: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    document_references: Mapped[list | None] = mapped_column(JSON, nullable=True)
     deleted_flag: Mapped[int] = mapped_column(SmallInteger, server_default=text("0"), nullable=False)
     create_time: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp())
     update_time: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp())

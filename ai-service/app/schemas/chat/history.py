@@ -9,6 +9,11 @@ DEFAULT_HISTORY_LIMIT = 20
 MAX_HISTORY_LIMIT = 100
 
 
+class DocumentReference(BaseModel):
+    fileId: int = Field(gt=0)
+    fileName: str
+
+
 class ChatMessageCreate(BaseModel):
     """持久化一条消息；不要求 user 和 assistant 交替出现。"""
 
@@ -16,6 +21,7 @@ class ChatMessageCreate(BaseModel):
     content: str
     response_time_ms: int | None = Field(default=None, ge=0)
     agent_steps: list[AgentStep] | None = None
+    document_references: list[DocumentReference] = Field(default_factory=list)
 
 
 class ChatHistoryItem(BaseModel):
@@ -25,6 +31,7 @@ class ChatHistoryItem(BaseModel):
     createTime: datetime
     responseTimeMs: int | None = None
     agentSteps: list[AgentStep] = Field(default_factory=list)
+    documentReferences: list[DocumentReference] = Field(default_factory=list)
 
 
 class ChatHistoryPage(BaseModel):

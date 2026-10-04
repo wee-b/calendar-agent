@@ -1,11 +1,11 @@
 <template>
   <div class="chat-input-area" :class="{ 'is-expanded': isExpanded }">
-    <div v-if="selectedDocuments.length" class="reference-bubbles" role="list" aria-label="已引用文档">
-      <div v-for="item in selectedDocuments" :key="item.id" class="reference-bubble" role="listitem" :title="item.name">
+    <div v-if="references.length" class="reference-bubbles" role="list" aria-label="已引用文档">
+      <div v-for="item in references" :key="item.fileId" class="reference-bubble" role="listitem" :title="item.fileName">
         <span class="bubble-icon" aria-hidden="true">▤</span>
-        <span class="bubble-name">{{ item.name }}</span>
+        <span class="bubble-name">{{ item.fileName }}</span>
         <button type="button" class="bubble-remove" :disabled="isSending"
-          :aria-label="`移除引用文档 ${item.name}`" :title="`移除 ${item.name}`" @click="removeDocument(item.id)">×</button>
+          :aria-label="`移除引用文档 ${item.fileName}`" :title="`移除 ${item.fileName}`" @click="removeDocument(item.fileId)">×</button>
       </div>
     </div>
     <div class="textarea-wrapper">
@@ -32,7 +32,7 @@
             <p v-if="loadingDocuments">加载中…</p>
             <p v-else-if="!documents.length">知识库暂无文档</p>
             <label v-for="item in documents" :key="item.fileId" class="document-option">
-              <input type="checkbox" :checked="documentIds.includes(item.fileId)" :disabled="!documentIds.includes(item.fileId) && documentIds.length >= 5" @change="toggleDocument(item.fileId)" />
+              <input type="checkbox" :checked="documentIds.includes(item.fileId)" :disabled="isSending || (!documentIds.includes(item.fileId) && documentIds.length >= 5)" @change="toggleDocument(item.fileId)" />
               <span :title="item.fileName">{{ item.fileName }}</span>
             </label>
             <RouterLink to="/knowledge" class="knowledge-link" @click="showDocuments = false">打开知识库上传文档 →</RouterLink>
@@ -72,9 +72,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { listDocumentsAPI, type KnowledgeFile } from '../../../api/documents';
+import { listDocumentsAPI, type KnowledgeFile, type DocumentReference } from '../../../api/documents';
 
 const props = defineProps<{
   modelValue: string;
@@ -84,7 +84,7 @@ const props = defineProps<{
   isSending: boolean;
   isUserLoggedIn: boolean;
   dbBars: number[];
-  documentIds: number[];
+  references: DocumentReference[];
 }>();
 
 const emit = defineEmits<{
@@ -92,7 +92,7 @@ const emit = defineEmits<{
   (e: 'send'): void;
   (e: 'toggle-voice'): void;
   (e: 'toggle-expanded'): void;
-  (e: 'update:documentIds', value: number[]): void;
+  (e: 'update:references', value: DocumentReference[]): void;
 }>();
 
 const documents = ref<KnowledgeFile[]>([]);
@@ -115,10 +115,10 @@ onUnmounted(() => {
   document.removeEventListener('pointerdown', closeDocumentsOnOutsideClick);
   document.removeEventListener('keydown', closeDocumentsOnEscape);
 });
-const selectedDocuments = computed(() => props.documentIds.map(id => ({
-  id,
-  name: documents.value.find(item => item.fileId === id)?.fileName || `文档 #${id}`
-})));
+const documentIds = computed(() => props.references.map(item => item.fileId));
+watch(() => props.isSending, sending => {
+  if (sending) showDocuments.value = false;
+});
 const toggleDocuments = async () => {
   showDocuments.value = !showDocuments.value;
   if (!showDocuments.value) return;
@@ -126,18 +126,25 @@ const toggleDocuments = async () => {
   try {
     documents.value = (await listDocumentsAPI()).filter(item => item.status === 'ready');
     const readyIds = new Set(documents.value.map(item => item.fileId));
-    const validSelection = props.documentIds.filter(id => readyIds.has(id));
-    if (validSelection.length !== props.documentIds.length) emit('update:documentIds', validSelection);
+    const validSelection = props.references.filter(item => readyIds.has(item.fileId));
+    if (!props.isSending && validSelection.length !== props.references.length) emit('update:references', validSelection);
   }
   catch { ElMessage.error('文档列表加载失败'); }
   finally { loadingDocuments.value = false; }
 };
 const toggleDocument = (id: number) => {
-  emit('update:documentIds', props.documentIds.includes(id)
-    ? props.documentIds.filter(item => item !== id) : [...props.documentIds, id]);
+  if (props.isSending) return;
+  if (documentIds.value.includes(id)) {
+    removeDocument(id);
+    return;
+  }
+  const item = documents.value.find(item => item.fileId === id);
+  if (item && props.references.length < 5) {
+    emit('update:references', [...props.references, { fileId: item.fileId, fileName: item.fileName }]);
+  }
 };
 const removeDocument = (id: number) => {
-  emit('update:documentIds', props.documentIds.filter(item => item !== id));
+  if (!props.isSending) emit('update:references', props.references.filter(item => item.fileId !== id));
 };
 
 const placeholder = computed(() => props.inputMode === 2

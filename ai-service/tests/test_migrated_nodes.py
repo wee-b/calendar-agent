@@ -19,7 +19,7 @@ from app.core.config.agent.providers import ModelConfig
 from app.core.exception.exceptions import BusinessException, McpClientError
 from app.helper.image_client import ImageClient
 from app.schemas.chat import ChatRequest
-from app.schemas.chat.model_stream import AssistantMessage, ModelDelta, ToolCall, ToolFunction
+from app.schemas.chat.model_stream import AssistantMessage, ModelDelta, ToolCall, ToolFunction, AgentStepEvent
 from app.schemas.executor_tools import READ_TOOLS
 from app.schemas.mcp import McpToolDefinition, McpToolMetadata
 from app.schemas.plan import parse_plan, today
@@ -83,7 +83,6 @@ class PlanNodeTests(unittest.IsolatedAsyncioTestCase):
         data["analysis"] = "先学习页面结构，再完成一个小项目。"
         model = SimpleNamespace(complete=AsyncMock(return_value=json.dumps(data, ensure_ascii=False)))
         ctx = context()
-        await ctx.add_step("agent", "制定规划")
         await PlanNode(planning, model)(turn(task="三天学习前端"), ctx)
         self.assertEqual("先学习页面结构，再完成一个小项目。", ctx.agent_steps[0].narration)
         model.complete.assert_awaited_once()
@@ -308,6 +307,52 @@ class ImageNodeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NodeGraphTests(unittest.IsolatedAsyncioTestCase):
+    async def test_referenced_plan_searches_before_planning_and_publishes_search_results(self):
+        for outcome in ("hits", "empty", "error"):
+            with self.subTest(outcome=outcome):
+                events = []
+                async def collect(event):
+                    if isinstance(event, AgentStepEvent):
+                        events.append(event.data)
+
+                async def search(*_):
+                    self.assertFalse(any(step.label == "制定规划" for step in events))
+                    self.assertEqual(("检索引用文档", "running"),
+                                     (events[-1].label, events[-1].status))
+                    if outcome == "error":
+                        raise RuntimeError("search failed")
+                    return [] if outcome == "empty" else [SimpleNamespace(payload=SimpleNamespace(
+                        source="英语笔记.pdf", section="词汇", text="每天复习单词并练习听力。"))]
+
+                async def generate(*_):
+                    search_step = next(step for step in reversed(events) if step.label == "检索引用文档")
+                    self.assertEqual("success", search_step.status)
+                    self.assertIn("未找到相关文档片段" if outcome == "empty" else "每天复习单词", search_step.resultSummary)
+                    self.assertEqual(("制定规划", "running"), (events[-1].label, events[-1].status))
+                    self.assertFalse(any(step.label == "制定规划" and step.status == "success" for step in events))
+                    return plan_json()
+
+                planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
+                                           save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=8)))
+                model = SimpleNamespace(complete=AsyncMock(side_effect=generate))
+                service = ChatService(MemoryFlowRepository())
+                service.document_references = AsyncMock(return_value=[])
+                graph = ConversationGraph(user_id=7, session_id="s", chat_service=service,
+                    summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))),
+                    route_agent=SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=Signal.NEW_PLAN))))
+                graph.handlers[AgentType.PLANNER] = PlanNode(planning, model, SimpleNamespace(search=search))
+                if outcome == "error":
+                    with self.assertRaisesRegex(RuntimeError, "search failed"):
+                        await graph.run_turn("参考资料复习英语", "token", document_ids=[42], emit=collect)
+                    self.assertEqual("error", events[-1].status)
+                    model.complete.assert_not_awaited()
+                    planning.save_draft.assert_not_awaited()
+                else:
+                    await graph.run_turn("参考资料复习英语", "token", document_ids=[42], emit=collect)
+                    labels = list(dict.fromkeys(step.label for step in events))
+                    self.assertEqual(["识别意图", "分配给规划 Agent", "检索引用文档", "制定规划", "保存规划草稿"], labels)
+                    self.assertEqual("success", next(step.status for step in reversed(events) if step.label == "制定规划"))
+
     async def test_plan_image_sync_across_turns_and_temporary_query(self):
         repo = MemoryFlowRepository()
         route = SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=Signal.NEW_PLAN)))

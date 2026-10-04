@@ -3,6 +3,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from app.schemas.rag import QdrantPoint
 
 
 class AgentStep(BaseModel):
@@ -14,6 +15,26 @@ class AgentStep(BaseModel):
     status: Literal["running", "success", "error"]
     elapsedMs: int = Field(ge=0)
     round: int | None = None
+
+
+def summarize_document_results(hits: list[QdrantPoint]) -> str:
+    """展示命中数量、少量来源及首条摘录，不增加模型调用。"""
+    if not hits:
+        return "未找到相关文档片段，将根据本轮需求继续规划。"
+
+    def brief(value: str, limit: int) -> str:
+        value = " ".join(value.split())
+        return value if len(value) <= limit else value[:limit - 1] + "…"
+
+    sources = list(dict.fromkeys(hit.payload.source for hit in hits if hit.payload.source))
+    source_text = "、".join(brief(source, 28) for source in sources[:2]) or "引用文档"
+    if len(sources) > 2:
+        source_text += "等"
+    summary = f"找到 {len(hits)} 个相关片段，来源：{source_text}。"
+    excerpt = brief(hits[0].payload.text, 60)
+    if excerpt:
+        summary += f"片段摘录：{excerpt}"
+    return summary[:160]
 
 
 def summarize_tool_result(name: str, data: object) -> str:

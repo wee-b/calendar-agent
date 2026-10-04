@@ -2,6 +2,11 @@ import request from '../utils/request';
 
 const AI_BASE_URL = (import.meta.env.VITE_AI_API_BASE_URL || '').replace(/\/$/, '');
 
+export interface DocumentReference {
+  fileId: number;
+  fileName: string;
+}
+
 export interface KnowledgeFile {
   fileId: number;
   fileName: string;

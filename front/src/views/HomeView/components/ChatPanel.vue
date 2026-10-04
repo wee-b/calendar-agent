@@ -49,6 +49,7 @@
           <span class="avatar">{{ isUserRole(msg.role) ? '我' : 'AI' }}</span>
 
           <div class="bubble-content">
+            <MessageDocuments v-if="isUserRole(msg.role)" :references="msg.documentReferences" />
             <div v-if="!isUserRole(msg.role) && (msg.agentSteps?.length || msg.runActive)" class="agent-timeline">
               <button class="timeline-toggle" :aria-expanded="!msg.timelineCollapsed" @click="msg.timelineCollapsed = !msg.timelineCollapsed">
                 {{ msg.runActive ? '运行中' : `用时 ${formatResponseTime(msg.responseTimeMs || 0)}` }}
@@ -174,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from 'vue';
+import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   newSessionAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
@@ -182,6 +183,8 @@ import {
 import { tokenRef } from '../../../utils/auth';
 import { renderMarkdown } from '../../../utils/markdown';
 import type { AgentStep } from '../../../api/chatStream';
+import type { DocumentReference } from '../../../api/documents';
+import MessageDocuments from '../../ChatView/components/MessageDocuments.vue';
 import { timelineAction, timelineNarration } from '../../../api/agentTimeline';
 
 const props = defineProps<{ isOpen: boolean }>();
@@ -189,7 +192,8 @@ const emit = defineEmits<{ (e: 'refresh'): void }>();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
 
 interface ChatMessage { role: string; content: string; loading?: boolean; responseTimeMs?: number | null;
-  dispatchType?: string; agentSteps?: AgentStep[]; runActive?: boolean; timelineCollapsed?: boolean; }
+  dispatchType?: string; agentSteps?: AgentStep[]; documentReferences?: DocumentReference[];
+  runActive?: boolean; timelineCollapsed?: boolean; }
 
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
@@ -284,6 +288,7 @@ const selectSession = async (session: ChatSessionVO) => {
       content: h.content,
       responseTimeMs: h.responseTimeMs,
       agentSteps: h.agentSteps || [],
+      documentReferences: h.documentReferences || [],
       dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
     }));
     scrollToBottom();
@@ -408,6 +413,7 @@ const handleDeleteLastRound = async () => {
       content: h.content,
       responseTimeMs: h.responseTimeMs,
       agentSteps: h.agentSteps || [],
+      documentReferences: h.documentReferences || [],
       dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
     }));
     scrollToBottom();
@@ -630,8 +636,8 @@ const handleSend = async () => {
   inputText.value = '';
   scrollToBottom();
 
-  const replyMsg: ChatMessage = { role: 'ai', content: '', loading: true, runActive: true,
-    agentSteps: [], timelineCollapsed: false };
+  const replyMsg = reactive<ChatMessage>({ role: 'ai', content: '', loading: true, runActive: true,
+    agentSteps: [], timelineCollapsed: false });
   messages.value.push(replyMsg);
   isSending.value = true;
   scrollToBottom();

@@ -7,7 +7,8 @@ from app.schemas.chat.model_stream import (
     AgentStatusData, AgentStatusEvent, AgentStepEvent, ToolCallData,
     ToolCallLifecycleEvent, ToolResultData, ToolResultEvent,
 )
-from app.schemas.chat.timeline import summarize_tool_result
+from app.schemas.chat.timeline import summarize_tool_result, summarize_document_results
+from app.schemas.rag import QdrantPoint, QdrantPayload
 
 
 class AgentTimelineTests(unittest.IsolatedAsyncioTestCase):
@@ -53,3 +54,15 @@ class AgentTimelineTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual("2026-10-04：1 项待办，有日记。", summary)
         self.assertNotIn("private", summary)
+
+    def test_document_summary_limits_sources_and_excerpt(self):
+        hits = [QdrantPoint(id=f"internal-id-{index}", payload=QdrantPayload(
+            source=name, text="每天复习单词。\n" * 30))
+            for index, name in enumerate(["英语笔记.pdf", "英语笔记.pdf", "语法.pdf", "练习.pdf"])]
+        summary = summarize_document_results(hits)
+        self.assertIn("找到 4 个相关片段", summary)
+        self.assertEqual(1, summary.count("英语笔记.pdf"))
+        self.assertIn("片段摘录：每天复习单词", summary)
+        self.assertNotIn("internal-id", summary)
+        self.assertNotIn("\n", summary)
+        self.assertLessEqual(len(summary), 160)
