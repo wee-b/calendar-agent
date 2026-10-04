@@ -257,6 +257,7 @@ CREATE TABLE `yl_ai_dialogue`
     `content`       TEXT         NOT NULL COMMENT '消息正文',
     `ai_audio_url`  VARCHAR(500) NULL DEFAULT NULL COMMENT 'AI回复TTS音频URL',
     `response_time_ms` BIGINT    NULL DEFAULT NULL COMMENT 'AI完整响应耗时，单位毫秒',
+    `dispatch_type` VARCHAR(32) NULL COMMENT '助手回复的业务分发类型',
     `agent_steps` JSON NULL COMMENT '该助手回复的脱敏 Agent 过程时间线',
     `document_references` JSON NULL COMMENT '用户消息引用的文档 ID 和名称快照',
 

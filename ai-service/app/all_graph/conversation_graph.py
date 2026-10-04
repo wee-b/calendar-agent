@@ -327,6 +327,7 @@ class ConversationGraph:
             elapsed_ms=int((perf_counter() - runtime.context.started) * 1000),
             agent_steps=runtime.context.agent_steps,
             document_references=state.get("document_references", []),
+            dispatch_type=result.dispatch_type,
         )
         log_session_transition(state["stage"].name, next_stage.name, "已提交",
                                信号=state["signal"].name, 节点=state["agent"].name,

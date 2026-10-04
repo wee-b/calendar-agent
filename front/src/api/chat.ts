@@ -36,6 +36,7 @@ export interface ChatHistoryItemVO {
     content: string;
     createTime: string;
     responseTimeMs?: number | null;
+    dispatchType?: string | null;
     agentSteps?: AgentStep[];
     documentReferences?: DocumentReference[];
 }
@@ -73,7 +74,7 @@ export const streamChatAPI = async (
     onOpen?: () => void,
     onProgress?: (message: string) => void,
     onResponseTime?: (responseTimeMs: number) => void,
-    _onDispatchType?: (dispatchType: string) => void,
+    onDispatchType?: (dispatchType: string) => void,
     onAgentStep?: (step: AgentStep) => void
 ): Promise<void> => {
     const token = getToken();
@@ -108,7 +109,7 @@ export const streamChatAPI = async (
         await consumeChatStream(response.body, {
             onToken: presenter.append,
             onDone: () => {},
-            onProgress, onResponseTime, onAgentStep: stepPresenter?.append,
+            onProgress, onResponseTime, onDispatchType, onAgentStep: stepPresenter?.append,
         });
         await Promise.all([presenter.finish(), stepPresenter?.finish()]);
         onDone();

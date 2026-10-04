@@ -93,6 +93,7 @@ class FlowStateRepository:
         *, message: str | None = None, reply: str | None = None, elapsed_ms: int = 0,
         agent_steps: list[AgentStep] | None = None,
         document_references: list[DocumentReference] | None = None,
+        dispatch_type: str | None = None,
     ) -> None:
         """只有持有当前版本的请求可以提交阶段、产物并释放认领。"""
         self._validate_key(state.user_id, state.session_id)
@@ -124,7 +125,7 @@ class FlowStateRepository:
                         ChatMessageCreate(role="user", content=message,
                                           document_references=document_references or []),
                         ChatMessageCreate(role="assistant", content=reply, response_time_ms=elapsed_ms,
-                                          agent_steps=agent_steps),
+                                          agent_steps=agent_steps, dispatch_type=dispatch_type),
                     ])
         state.stage = next_stage.name
         state.current_agent = agent.name

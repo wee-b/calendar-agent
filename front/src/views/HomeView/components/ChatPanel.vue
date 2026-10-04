@@ -289,7 +289,7 @@ const selectSession = async (session: ChatSessionVO) => {
       responseTimeMs: h.responseTimeMs,
       agentSteps: h.agentSteps || [],
       documentReferences: h.documentReferences || [],
-      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+      dispatchType: h.dispatchType || (h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined)
     }));
     scrollToBottom();
   } catch (error) {}
@@ -307,7 +307,7 @@ const loadEarlierHistory = async () => {
     const element = chatHistoryRef.value;
     const height = element?.scrollHeight || 0;
     const top = element?.scrollTop || 0;
-    messages.value = [...page.items, ...messages.value];
+    messages.value = [...page.items.map(h => ({ ...h, dispatchType: h.dispatchType || undefined })), ...messages.value];
     hasMoreHistory.value = page.hasMore;
     nextBeforeId.value = page.nextBeforeId;
     await nextTick();
@@ -414,7 +414,7 @@ const handleDeleteLastRound = async () => {
       responseTimeMs: h.responseTimeMs,
       agentSteps: h.agentSteps || [],
       documentReferences: h.documentReferences || [],
-      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+      dispatchType: h.dispatchType || (h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined)
     }));
     scrollToBottom();
     await fetchSessions();

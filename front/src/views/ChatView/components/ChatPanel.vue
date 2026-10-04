@@ -242,7 +242,7 @@ const loadSessionById = async (sessionId: string) => {
       agentSteps: h.agentSteps || [],
       documentReferences: h.documentReferences || [],
       runDone: true,
-      dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
+      dispatchType: h.dispatchType || (h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined)
     }));
     scrollToBottom();
   } catch (error) {}
@@ -264,7 +264,10 @@ const loadEarlierHistory = async () => {
     const page = await getHistoryAPI(sessionId, beforeId);
     if (loadToken !== historyLoadToken || sessionId !== currentSessionId.value) return;
     const existing = new Set(messages.value.map(m => m.dialogueId));
-    const earlier = page.items.filter(m => !existing.has(m.dialogueId));
+    const earlier = page.items.filter(m => !existing.has(m.dialogueId)).map(h => ({
+      ...h,
+      dispatchType: h.dispatchType || undefined
+    }));
     hasMoreHistory.value = page.hasMore;
     nextBeforeId.value = page.nextBeforeId;
     await chatHistoryRef.value?.prependKeepingPosition(() => {

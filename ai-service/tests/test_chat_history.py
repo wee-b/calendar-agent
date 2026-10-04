@@ -80,7 +80,8 @@ class HistoryValidationTests(unittest.IsolatedAsyncioTestCase):
         snapshot = [{"fileId": 12, "fileName": "原文件名.pdf"}]
         rows = [SimpleNamespace(dialogue_id=index, role="user", content="参考资料规划",
                                 create_time=datetime(2026, 10, 4), response_time_ms=None,
-                                agent_steps=None, document_references=references)
+                                agent_steps=None, document_references=references,
+                                dispatch_type="PLAN" if index == 2 else None)
                 for index, references in [(2, snapshot), (1, None)]]
         repository = SimpleNamespace(list_history=AsyncMock(return_value=(rows, False)))
         with patch("app.service.chat.ChatRepository", return_value=repository), \
@@ -89,6 +90,7 @@ class HistoryValidationTests(unittest.IsolatedAsyncioTestCase):
             documents.assert_not_called()
         self.assertEqual([], history.items[0].documentReferences)
         self.assertEqual(snapshot, history.model_dump()["items"][1]["documentReferences"])
+        self.assertEqual("PLAN", history.items[1].dispatchType)
 
 
 MYSQL_URL = os.getenv("CHAT_TEST_MYSQL_URL")

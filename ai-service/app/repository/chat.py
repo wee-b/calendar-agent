@@ -219,6 +219,7 @@ class ChatRepository:
             user_id=chat_session.user_id, session_id=chat_session.session_id,
             role=message.role, content=message.content,
             response_time_ms=message.response_time_ms, create_time=now,
+            dispatch_type=message.dispatch_type,
             agent_steps=[step.model_dump(mode="json") for step in message.agent_steps]
             if message.agent_steps is not None else None,
             document_references=[ref.model_dump(mode="json") for ref in message.document_references]

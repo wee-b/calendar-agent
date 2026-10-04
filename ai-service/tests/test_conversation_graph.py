@@ -150,6 +150,7 @@ class ConversationGraphTests(unittest.IsolatedAsyncioTestCase):
             await graph.run_turn("参考资料制定计划", "token", document_ids=[12])
             resolve.assert_awaited_once_with(1, [12])
             self.assertEqual(references, self.repository.round_data[-1]["document_references"])
+            self.assertEqual("TEST", self.repository.round_data[-1]["dispatch_type"])
             await graph.run_turn("再调整一下", "token")
             self.assertEqual([], self.repository.round_data[-1]["document_references"])
             resolve.assert_awaited_once()

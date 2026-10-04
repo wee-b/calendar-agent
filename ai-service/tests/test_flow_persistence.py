@@ -29,6 +29,7 @@ class FlowPersistenceTests(HistoryMysqlCase):
         owner = first if claimed[0] else second
         await repo.complete(owner, ConversationStage.PLAN, PendingTask(task="学习", draft_id=7),
                             AgentType.PLANNER, message="学习计划", reply="规划正文", elapsed_ms=5,
+                            dispatch_type="PLAN",
                             document_references=[DocumentReference(fileId=12, fileName="学习资料.pdf")],
                             agent_steps=[AgentStep(id=1, kind="agent", label="制定规划",
                                                    narration="先学习基础，再做练习。",
@@ -44,6 +45,7 @@ class FlowPersistenceTests(HistoryMysqlCase):
             self.assertEqual([{"fileId": 12, "fileName": "学习资料.pdf"}], messages[0].document_references)
             self.assertIsNone(messages[1].document_references)
             self.assertEqual("制定规划", messages[1].agent_steps[0]["label"])
+            self.assertEqual("PLAN", messages[1].dispatch_type)
             self.assertEqual("先学习基础，再做练习。", messages[1].agent_steps[0]["narration"])
             self.assertEqual("2026-10-04：2 项待办。", messages[1].agent_steps[1]["resultSummary"])
             self.assertEqual(2, (await session.scalar(select(AiSession))).message_count)
@@ -53,6 +55,7 @@ class FlowPersistenceTests(HistoryMysqlCase):
         self.assertEqual([{"fileId": 12, "fileName": "学习资料.pdf"}], page["items"][0]["documentReferences"])
         self.assertEqual([], page["items"][1]["documentReferences"])
         self.assertEqual("制定规划", page["items"][-1]["agentSteps"][0]["label"])
+        self.assertEqual("PLAN", page["items"][-1]["dispatchType"])
         self.assertEqual("先学习基础，再做练习。", page["items"][-1]["agentSteps"][0]["narration"])
         self.assertEqual("2026-10-04：2 项待办。", page["items"][-1]["agentSteps"][1]["resultSummary"])
 

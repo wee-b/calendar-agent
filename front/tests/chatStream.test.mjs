@@ -19,6 +19,7 @@ test('Python SSE handles fragmented UTF-8 and emits only reply text', async () =
     let reply = '';
     let done = 0;
     let time = 0;
+    let dispatchType = '';
     const progress = [];
     await consumeChatStream(stream(
         event('ping', {}) + event('agent_status', { stage: 'model' }) +
@@ -27,17 +28,19 @@ test('Python SSE handles fragmented UTF-8 and emits only reply text', async () =
         event('tool_call_delta', { receivedChars: 12 }) +
         event('tool_result', { callId: 'query-1', status: 'success' }) +
         event('assistant_delta', { delta: '，日程已查询。' }) +
-        event('result', { aiResult: '你好，日程已查询。', responseTimeMs: 123 }) +
+        event('result', { aiResult: '你好，日程已查询。', responseTimeMs: 123, dispatchType: 'PLAN' }) +
         event('done', { rounds: 2, responseTimeMs: 123 }),
     ), {
         onToken: text => reply += text,
         onDone: () => done++,
         onResponseTime: milliseconds => time = milliseconds,
+        onDispatchType: value => dispatchType = value,
         onProgress: message => progress.push(message),
     });
     assert.equal(reply, '你好，日程已查询。');
     assert.equal(done, 1);
     assert.equal(time, 123);
+    assert.equal(dispatchType, 'PLAN');
     assert.deepEqual(progress, ['开始：生成回复', '开始：查询日程', '完成：查询日程']);
 });
 

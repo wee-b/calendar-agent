@@ -20,6 +20,7 @@ class ChatMessageCreate(BaseModel):
     role: Literal["user", "assistant"]
     content: str
     response_time_ms: int | None = Field(default=None, ge=0)
+    dispatch_type: str | None = None
     agent_steps: list[AgentStep] | None = None
     document_references: list[DocumentReference] = Field(default_factory=list)
 
@@ -30,6 +31,7 @@ class ChatHistoryItem(BaseModel):
     content: str
     createTime: datetime
     responseTimeMs: int | None = None
+    dispatchType: str | None = None
     agentSteps: list[AgentStep] = Field(default_factory=list)
     documentReferences: list[DocumentReference] = Field(default_factory=list)
 

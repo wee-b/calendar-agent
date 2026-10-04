@@ -62,6 +62,7 @@ class ChatService:
                 content=row.content,
                 createTime=row.create_time,
                 responseTimeMs=row.response_time_ms,
+                dispatchType=row.dispatch_type,
                 agentSteps=row.agent_steps or [],
                 documentReferences=row.document_references or [],
             )
@@ -149,11 +150,13 @@ class ChatService:
         *, message: str | None = None, reply: str | None = None, elapsed_ms: int = 0,
         agent_steps: list[AgentStep] | None = None,
         document_references: list[DocumentReference] | None = None,
+        dispatch_type: str | None = None,
     ) -> None:
         """提交阶段与待处理任务，并释放本轮认领。"""
         await self.flow_states.complete(state, next_stage, pending, agent,
                                         message=message, reply=reply, elapsed_ms=elapsed_ms,
-                                        agent_steps=agent_steps, document_references=document_references)
+                                        agent_steps=agent_steps, document_references=document_references,
+                                        dispatch_type=dispatch_type)
 
     async def release_flow_state_claim(self, state: YlAgentFlowState) -> None:
         """仅在尚未开始外部写操作的失败路径释放认领。"""

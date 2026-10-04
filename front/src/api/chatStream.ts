@@ -15,6 +15,7 @@ export interface ChatStreamHandlers {
     onDone: () => void;
     onProgress?: (message: string) => void;
     onResponseTime?: (milliseconds: number) => void;
+    onDispatchType?: (dispatchType: string) => void;
     onAgentStep?: (step: AgentStep) => void;
 }
 
@@ -75,6 +76,7 @@ export async function consumeChatStream(
             case 'result':
                 receivedResult = true;
                 if (typeof payload.responseTimeMs === 'number') handlers.onResponseTime?.(payload.responseTimeMs);
+                if (typeof payload.dispatchType === 'string') handlers.onDispatchType?.(payload.dispatchType);
                 break;
             case 'done':
                 if (!receivedResult) throw new Error('回复未保存，请重试');

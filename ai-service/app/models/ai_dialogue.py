@@ -23,6 +23,7 @@ class AiDialogue(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     ai_audio_url: Mapped[str | None] = mapped_column(String(500))
     response_time_ms: Mapped[int | None] = mapped_column(BigInteger)
+    dispatch_type: Mapped[str | None] = mapped_column(String(32))
     agent_steps: Mapped[list | None] = mapped_column(JSON, nullable=True)
     document_references: Mapped[list | None] = mapped_column(JSON, nullable=True)
     deleted_flag: Mapped[int] = mapped_column(SmallInteger, server_default=text("0"), nullable=False)
