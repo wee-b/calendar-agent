@@ -24,6 +24,7 @@ from app.schemas.chat.model_stream import (
 from app.schemas.chat.tools import (
     DAY_DETAIL_TOOL, DAY_DETAIL_TOOL_NAME, MAX_MODEL_ROUNDS, DayDetailArguments,
 )
+from app.schemas.chat.timeline import summarize_tool_result
 from app.service.model_stream import StreamResponseAccumulator
 from app.service.read_only_tool import call_read_only_tool
 
@@ -177,6 +178,7 @@ class ChatGraph:
                         if writer:
                             writer(ToolResultEvent(data=ToolResultData(
                                 call_id=call.id, status="success",
+                                summary=summarize_tool_result(DAY_DETAIL_TOOL_NAME, data.model_dump()),
                             )).model_dump(mode="json", by_alias=True, exclude_none=True))
                     except McpClientError as exc:
                         log_turn_step("CHAT_TOOL_RESULT", call_id=call.id, 结果="失败", 错误码=exc.code)

@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 from app.schemas.chat.chat import ChatResult
+from app.schemas.chat.timeline import AgentStep
 
 
 class FunctionFragment(BaseModel):
@@ -107,12 +108,20 @@ class AgentStatusEvent(BaseModel):
     data: AgentStatusData
 
 
+class AgentStepEvent(BaseModel):
+    """A full milestone snapshot; repeated IDs update an existing UI row."""
+
+    event: Literal["agent_step"] = "agent_step"
+    data: AgentStep
+
+
 class ToolResultData(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     call_id: str = Field(alias="callId")
     status: Literal["success", "error"]
     code: str | None = None
+    summary: str | None = Field(default=None, max_length=160)
 
 
 class ToolResultEvent(BaseModel):
@@ -181,4 +190,4 @@ StreamEvent = (AssistantDeltaEvent | ToolCallDeltaEvent | ToolCallLifecycleEvent
                | AgentStatusEvent | ToolResultEvent)
 # 图输出包括仅供服务层消费的 _final；客户端输出包含 ping/result/done/error。
 GraphEvent = StreamEvent | FinalEvent
-ClientEvent = StreamEvent | PingEvent | ResultEvent | DoneEvent | ErrorEvent
+ClientEvent = StreamEvent | AgentStepEvent | PingEvent | ResultEvent | DoneEvent | ErrorEvent

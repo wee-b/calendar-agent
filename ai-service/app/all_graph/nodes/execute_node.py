@@ -16,6 +16,7 @@ from app.schemas.chat.model_stream import (
     AgentStatusData, AgentStatusEvent, AssistantMessage, ModelDelta,
     ToolCallData, ToolCallLifecycleEvent, ToolResultData, ToolResultEvent,
 )
+from app.schemas.chat.timeline import summarize_tool_result
 from app.schemas.executor_tools import ARGUMENTS, READ_TOOLS, BatchCreateResult, validate_write_result
 from app.schemas.plan import parse_plan, today
 from app.schemas.statemachine.flow import AgentTurnResult, ConversationStage, PendingTask, UserSignal
@@ -187,5 +188,6 @@ class ExecuteNode:
                 raise BusinessException(ErrorCode.MCP_AUTH_FAILED) from exc
             raise
         log_turn_step("EXECUTOR_TOOL_RESULT", call_id=call_id, 结果="成功")
-        await context.send(ToolResultEvent(data=ToolResultData(call_id=call_id, status="success")))
+        await context.send(ToolResultEvent(data=ToolResultData(
+            call_id=call_id, status="success", summary=summarize_tool_result(tool.name, data))))
         return data

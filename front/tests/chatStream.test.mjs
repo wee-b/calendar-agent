@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { consumeChatStream } from '../src/api/chatStream.ts';
+import { timelineNarration } from '../src/api/agentTimeline.ts';
 
 const event = (name, data) => `event: ${name}\r\ndata: ${JSON.stringify(data)}\r\n\r\n`;
 const stream = (body, chunkSize = 3) => {
@@ -39,6 +40,32 @@ test('Python SSE handles fragmented UTF-8 and emits only reply text', async () =
     assert.deepEqual(progress, ['开始：生成回复', '开始：查询日程', '完成：查询日程']);
 });
 
+test('assistant text reaches the UI before the SSE stream completes', async () => {
+    let visible = '';
+    let done = false;
+    const response = new ReadableStream({
+        start(controller) {
+            controller.enqueue(new TextEncoder().encode(event('assistant_delta', { delta: '先' })));
+            setTimeout(() => {
+                controller.enqueue(new TextEncoder().encode(
+                    event('assistant_delta', { delta: '显示' }) + event('result', {}) + event('done', {}),
+                ));
+                controller.close();
+            }, 30);
+        },
+    });
+    const pending = consumeChatStream(response, {
+        onToken: chunk => { visible += chunk; },
+        onDone: () => { done = true; },
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(visible, '先');
+    assert.equal(done, false);
+    await pending;
+    assert.equal(visible, '先显示');
+    assert.equal(done, true);
+});
+
 test('error and truncated streams never report success', async () => {
     for (const body of [
         event('assistant_delta', { delta: '半句' }),
@@ -59,4 +86,24 @@ test('done without final newline is accepted after saved result', async () => {
         onToken() {}, onDone() { done = true; },
     });
     assert.equal(done, true);
+});
+
+test('agent milestones update by stable ID without exposing tool arguments', async () => {
+    const steps = [];
+    await consumeChatStream(stream(
+        event('agent_step', { id: 1, kind: 'tool', label: '查询日程', status: 'running', elapsedMs: 40 }) +
+        event('agent_step', { id: 1, kind: 'tool', label: '查询日程', status: 'success', elapsedMs: 40,
+            resultSummary: '2026-10-04：2 项待办。' }) +
+        event('result', { responseTimeMs: 100 }) + event('done', { rounds: 1 }),
+    ), { onToken() {}, onDone() {}, onAgentStep: step => steps.push(step) });
+    assert.deepEqual(steps.map(step => step.status), ['running', 'success']);
+    assert.equal(steps[0].label, '查询日程');
+    assert.equal(steps[1].resultSummary, '2026-10-04：2 项待办。');
+});
+
+test('timeline prefers persisted model-authored public narration', () => {
+    const step = { id: 1, kind: 'agent', label: '识别意图', status: 'success', elapsedMs: 8,
+        narration: '我会把三天分成基础、实作和复盘。' };
+    assert.equal(timelineNarration(step), step.narration);
+    assert.equal(timelineNarration({ ...step, narration: null }), '识别意图已完成。');
 });

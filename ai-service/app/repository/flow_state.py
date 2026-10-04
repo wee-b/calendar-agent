@@ -13,6 +13,7 @@ from app.schemas.statemachine.flow import ConversationStage, PendingTask
 from app.schemas.statemachine.transitions import AgentType
 from app.repository.chat import ChatRepository
 from app.schemas.chat.history import ChatMessageCreate
+from app.schemas.chat.timeline import AgentStep
 
 
 class FlowStateRepository:
@@ -90,6 +91,7 @@ class FlowStateRepository:
         self, state: YlAgentFlowState, next_stage: ConversationStage,
         pending: PendingTask, agent: AgentType,
         *, message: str | None = None, reply: str | None = None, elapsed_ms: int = 0,
+        agent_steps: list[AgentStep] | None = None,
     ) -> None:
         """只有持有当前版本的请求可以提交阶段、产物并释放认领。"""
         self._validate_key(state.user_id, state.session_id)
@@ -119,7 +121,8 @@ class FlowStateRepository:
                 if message is not None and reply is not None:
                     await ChatRepository.append_locked(session, chat_session, [
                         ChatMessageCreate(role="user", content=message),
-                        ChatMessageCreate(role="assistant", content=reply, response_time_ms=elapsed_ms),
+                        ChatMessageCreate(role="assistant", content=reply, response_time_ms=elapsed_ms,
+                                          agent_steps=agent_steps),
                     ])
         state.stage = next_stage.name
         state.current_agent = agent.name

@@ -11,6 +11,7 @@ from app.repository.chat import ChatRepository
 from app.repository.flow_state import FlowStateRepository
 from app.repository.plan_draft import PlanDraftRepository
 from app.schemas.plan import parse_plan
+from app.schemas.chat.timeline import AgentStep
 from app.schemas.statemachine.flow import ConversationStage, PendingTask
 from app.schemas.statemachine.transitions import AgentType
 from tests.test_chat_history import HistoryMysqlCase
@@ -26,13 +27,28 @@ class FlowPersistenceTests(HistoryMysqlCase):
         self.assertEqual(1, sum(claimed))
         owner = first if claimed[0] else second
         await repo.complete(owner, ConversationStage.PLAN, PendingTask(task="学习", draft_id=7),
-                            AgentType.PLANNER, message="学习计划", reply="规划正文", elapsed_ms=5)
+                            AgentType.PLANNER, message="学习计划", reply="规划正文", elapsed_ms=5,
+                            agent_steps=[AgentStep(id=1, kind="agent", label="制定规划",
+                                                   narration="先学习基础，再做练习。",
+                                                   status="success", elapsedMs=2, round=1),
+                                         AgentStep(id=2, kind="tool", label="查询日程",
+                                                   resultSummary="2026-10-04：2 项待办。",
+                                                   status="success", elapsedMs=3, round=1)])
         saved = await repo.get(23, "s")
         self.assertEqual(("PLAN", 7, 0), (saved.stage, saved.pending_draft_id, saved.processing))
         async with repo.sessions() as session:
             messages = (await session.scalars(select(AiDialogue).order_by(AiDialogue.dialogue_id))).all()
             self.assertEqual(["学习计划", "规划正文"], [m.content for m in messages])
+            self.assertEqual("制定规划", messages[1].agent_steps[0]["label"])
+            self.assertEqual("先学习基础，再做练习。", messages[1].agent_steps[0]["narration"])
+            self.assertEqual("2026-10-04：2 项待办。", messages[1].agent_steps[1]["resultSummary"])
             self.assertEqual(2, (await session.scalar(select(AiSession))).message_count)
+        history = await ChatRepository(self.engine).list_history(23, "s")
+        self.assertEqual("制定规划", history[0][0].agent_steps[0]["label"])
+        page = (await self.client.get("/chat/history?sessionId=s")).json()["data"]
+        self.assertEqual("制定规划", page["items"][-1]["agentSteps"][0]["label"])
+        self.assertEqual("先学习基础，再做练习。", page["items"][-1]["agentSteps"][0]["narration"])
+        self.assertEqual("2026-10-04：2 项待办。", page["items"][-1]["agentSteps"][1]["resultSummary"])
 
     async def test_failed_message_append_rolls_back_stage_and_messages(self):
         repo = FlowStateRepository(self.engine)

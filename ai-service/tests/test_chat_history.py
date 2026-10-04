@@ -390,6 +390,7 @@ class HistoryMigrationTests(HistoryMysqlCase):
                     (23, 'empty', 'assistant', NULL, NULL, 0, '2026-01-01', '2026-01-02')
             """))
             await execute_mysql_script(connection, (root / "sql/migrations/20261002_chat_session_content.sql").read_text(encoding="utf-8"))
+            await execute_mysql_script(connection, (root / "sql/migrations/20261004_agent_timeline.sql").read_text(encoding="utf-8"))
             columns = (await connection.exec_driver_sql("SHOW COLUMNS FROM yl_ai_dialogue")).all()
             self.assertFalse({"user_text", "ai_result", "intent", "execute_result"} & {row[0] for row in columns})
             self.assertEqual(6, await connection.scalar(text("SELECT COUNT(*) FROM yl_ai_dialogue_backup_20261002")))

@@ -1,9 +1,21 @@
 /** Python 聊天 SSE 协议；只有 done 表示成功，EOF 或 error 都不能当作完成。 */
+export interface AgentStep {
+    id: number;
+    kind: 'agent' | 'tool' | 'summary';
+    label: string;
+    narration?: string | null;
+    resultSummary?: string | null;
+    status: 'running' | 'success' | 'error';
+    elapsedMs: number;
+    round?: number | null;
+}
+
 export interface ChatStreamHandlers {
     onToken: (token: string) => void;
     onDone: () => void;
     onProgress?: (message: string) => void;
     onResponseTime?: (milliseconds: number) => void;
+    onAgentStep?: (step: AgentStep) => void;
 }
 
 export async function consumeChatStream(
@@ -36,6 +48,13 @@ export async function consumeChatStream(
         if (!data.length || event === 'ping') return;
         const payload = JSON.parse(data.join('\n'));
         switch (event) {
+            case 'agent_step':
+                if (!Number.isInteger(payload.id) || typeof payload.label !== 'string'
+                    || !['running', 'success', 'error'].includes(payload.status)) {
+                    throw new Error('过程事件格式错误');
+                }
+                handlers.onAgentStep?.(payload as AgentStep);
+                break;
             case 'assistant_delta':
                 if (typeof payload.delta !== 'string') throw new Error('回复数据格式错误');
                 handlers.onToken(payload.delta);

@@ -2,6 +2,10 @@
 
 当前提供 `GET /health`、`GET /auth/me`、`POST /chat`、流式 `POST /chat/stream`、`GET /chat/history`、`GET /chat/sessions`、`GET /chat/latest`、`POST /chat/new-session`、`DELETE /chat/session`、`DELETE /chat/last-round`、独立的 `POST /rag/search` 和知识库 `GET/POST /documents`、`POST /documents/{file_id}/parse`。普通与流式对话统一经过 LangGraph 主图：Summary（达到阈值时压缩并提取偏好）→ Route → 状态转换表 → Chat / Planner / Executor / Image → 提交。Chat 和 Executor 的工具循环最多三轮模型调用；Planner 仅在本轮请求引用文档时检索用户文档。
 
+## Agent 过程时间线
+
+现有数据库升级时先运行 `sql/migrations/20261004_agent_timeline.sql`，为 `yl_ai_dialogue` 增加 `agent_steps` JSON 列；新库的 `sql/tables.sql` 已包含该列。每轮成功的助手回复会与用户可见的 Agent/工具步骤及会话状态在同一事务提交。`/chat/stream` 发送 `agent_step` 事件，步骤 ID 相同表示状态更新；`/chat/history` 在助手消息的 `agentSteps` 字段返回已保存步骤，旧消息返回空数组。Route Agent 在原有结构化判断中附带简短公开说明，Planner 复用已校验规划的 analysis；这两处不增加模型调用次数。前端将 Agent 阶段显示为叙述段落，将分派和工具动作显示为穿插的活动记录；实时运行与历史回放使用同一条时间线。时间线仅记录预定义动作名称、公开说明、工具结果摘要、轮次、状态和相对耗时，不保存模型原始推理文本、工具参数、完整工具结果或 token。失败或断连且未提交助手回复的请求不会写入历史时间线。
+
 ## 状态机与节点迁移
 
 - Planner：读取已有用户偏好、必要时澄清、生成或修改结构化草稿；校验失败允许模型修正一次。草稿由 Python 写入 `yl_plan_draft`。

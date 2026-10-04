@@ -3,9 +3,40 @@ import unittest
 
 from app.schemas.chat.messages import TextMessage
 from app.all_graph.chat_graph import ChatGraph
+from app.schemas.chat.model_stream import ToolResultEvent
 
 
 class ChatGraphTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_exposes_short_tool_result_summary(self):
+        class Model:
+            def __init__(self):
+                self.calls = 0
+
+            async def stream_chat(self, messages, tools=None):
+                self.calls += 1
+                if self.calls == 1:
+                    yield {"tool_calls": [{"index": 0, "id": "call-1", "function": {
+                        "name": "queryDayDetail", "arguments": '{"date":"2026-09-28"}'}}]}
+                else:
+                    yield {"content": "当天有一项待办。"}
+
+        class Mcp:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                pass
+
+            async def call_tool(self, *_):
+                return {"date": "2026-09-28", "todos": [{"todoId": 1, "title": "私密标题"}],
+                        "dailyNote": "私密日记"}
+
+        events = [event async for event in ChatGraph(Model(), Mcp).stream(
+            [TextMessage(role="user", content="查询日程")], "token")]
+        results = [event.data for event in events if isinstance(event, ToolResultEvent)]
+        self.assertEqual("2026-09-28：1 项待办，有日记。", results[0].summary)
+        self.assertNotIn("私密", str(results[0]))
+
     async def test_read_only_tool_result_is_returned_to_model(self):
         class Model:
             def __init__(self):

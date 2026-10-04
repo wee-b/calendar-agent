@@ -1,15 +1,15 @@
+import type { AgentStep } from '../../../api/chatStream';
+
 export interface ChatMessage {
   dialogueId?: number;
   role: string;
   content: string;
-  pendingContent?: string;
   loading?: boolean;
-  thinking?: string[];
-  thinkingCollapsed?: boolean;
-  thinkingDone?: boolean;
-  thinkingStartedAt?: number;
-  thinkingFinishedAt?: number;
+  agentSteps?: AgentStep[];
+  timelineCollapsed?: boolean;
+  runDone?: boolean;
+  runStartedAt?: number;
+  runFinishedAt?: number;
   responseTimeMs?: number | null;
-  showServerResponseTime?: boolean;
   dispatchType?: string;
 }

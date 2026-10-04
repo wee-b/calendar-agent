@@ -9,6 +9,7 @@ from app.schemas.statemachine.flow import AgentTurnResult, ConversationStage, Pe
 from app.schemas.statemachine.route_context import RouteContext, RouteContextMessage
 from app.schemas.statemachine.transitions import AgentType
 from app.all_graph.conversation_graph import ConversationGraph
+from app.schemas.chat.model_stream import AssistantDeltaEvent
 from app.all_graph.nodes.chat_node import ChatNode
 from app.all_graph.nodes.route_node import RouteAgent, RouteDecision
 from app.service.chat import ChatService
@@ -31,6 +32,7 @@ class FakeRepository:
             pending_payload=None, image_instruction=None, processing=0,
         )
         self.commits = []
+        self.round_data = []
         self.releases = 0
 
     async def get_or_create(self, user_id, session_id):
@@ -50,6 +52,7 @@ class FakeRepository:
         state.image_instruction = pending.image_instruction
         state.processing = 0
         self.commits.append((stage, agent))
+        self.round_data.append(round_data)
 
     async def release_claim(self, state):
         state.processing = 0
@@ -101,6 +104,15 @@ class RouteAgentTests(unittest.IsolatedAsyncioTestCase):
         for raw in ('{"userSignal":"READY_EXECUTE"}', "not json", '{"userSignal":3}'):
             self.assertEqual(UserSignal.UNKNOWN, RouteAgent.parse(raw).signal)
 
+    async def test_public_summary_is_parsed_without_changing_the_route_signal(self):
+        decision = RouteAgent.parse(
+            '{"userSignal":"NEW_PLAN","task":"三天学习前端",'
+            '"publicSummary":"我会根据三天的时间安排基础学习和练习。"}')
+        self.assertEqual(UserSignal.NEW_PLAN, decision.signal)
+        self.assertEqual("我会根据三天的时间安排基础学习和练习。", decision.public_summary)
+        self.assertEqual(UserSignal.NEW_PLAN, RouteAgent.parse(
+            '{"userSignal":"NEW_PLAN","publicSummary":42}').signal)
+
 
 class ConversationGraphTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -131,15 +143,38 @@ class ConversationGraphTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_multiple_turns_use_persisted_stage_and_preserve_pending_on_query(self):
         graph = self.graph()
+        self.decision.public_summary = "我会把学习目标拆成可执行的每日安排。"
         first = await graph.run_turn("做一个学习计划", "token")
         self.assertEqual(ConversationStage.PLAN, first.stage)
         self.assertEqual(AgentType.PLANNER, first.agent)
+        self.assertEqual(
+            ["识别意图", "分配给规划 Agent"],
+            [step.label for step in self.repository.round_data[0]["agent_steps"][:2]],
+        )
+        self.assertEqual("我会把学习目标拆成可执行的每日安排。",
+                         self.repository.round_data[0]["agent_steps"][0].narration)
         self.decision = RouteDecision(signal=UserSignal.NEW_QUERY, task="查明天安排")
         second = await graph.run_turn("另外查明天安排", "token")
         self.assertEqual(AgentType.CHAT, second.agent)
         self.assertEqual(ConversationStage.PLAN, second.stage)
         self.assertEqual("制定学习计划", self.repository.state.pending_task)
         self.assertEqual(("route", ConversationStage.PLAN, "制定学习计划"), self.calls[2])
+
+    async def test_planner_reply_is_streamed_in_order_after_it_is_ready(self):
+        reply = "三天前端规划：" + "每日练习与复盘。" * 5
+        events = []
+
+        async def handler(state, context):
+            return AgentTurnResult(reply=reply, completed=True, pending=PendingTask(), dispatch_type="PLAN")
+
+        async def collect(event):
+            events.append(event)
+
+        result = await self.graph({AgentType.PLANNER: handler}).run_turn("制定规划", "token", emit=collect)
+        chunks = [event.data.delta for event in events if isinstance(event, AssistantDeltaEvent)]
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual(reply, "".join(chunks))
+        self.assertEqual(reply, result.reply)
 
     async def test_uncompleted_turn_keeps_previous_stage(self):
         self.repository.state.stage = "EXECUTE"

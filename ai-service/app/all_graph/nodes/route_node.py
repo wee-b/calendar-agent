@@ -17,9 +17,10 @@ if TYPE_CHECKING:
     from app.service.chat import ChatService
 
 
-ROUTE_PROMPT = """你是 RouteAgent。结合会话主流程、当前任务、上一轮助手回复和本轮用户输入，只输出一个结构化信号。
-你不回复用户、不调用工具、不选择 Agent、不决定下一会话阶段。
-只输出 JSON：{"userSignal":"NEW_CHAT","task":"本轮明确任务"}
+ROUTE_PROMPT = """你是 RouteAgent。结合会话主流程、当前任务、上一轮助手回复和本轮用户输入，只输出结构化判断。
+你不生成最终回复、不调用工具、不选择 Agent、不决定下一会话阶段。
+只输出 JSON：{"userSignal":"NEW_CHAT","task":"本轮明确任务","publicSummary":"给用户看的简短处理说明"}
+publicSummary 用一句自然中文概括你对本轮请求的理解和接下来要做的事，30 到 90 字；不要输出内部推理、工具参数，也不要声称尚未完成的操作已经完成。
 userSignal 只能是以下十种：
 - NEW_CHAT：独立的闲聊或普通问答。
 - NEW_QUERY：新的只读日程查询，包括在规划、执行确认或生图过程中临时查询。
@@ -46,10 +47,11 @@ userSignal 只能是以下十种：
 class RouteDecision(BaseModel):
     signal: UserSignal
     task: str | None = None
+    public_summary: str | None = None
 
 
 class RouteAgent:
-    """模型只输出 UserSignal；阶段和处理节点交给 ConversationGraph 查表。
+    """模型输出信号、任务和公开说明；阶段与处理节点仍由转换表决定。
 
     增加意图时同步修改 UserSignal、ROUTE_PROMPT 和 ChatTransitionTable。
     """
@@ -104,7 +106,13 @@ class RouteAgent:
             task = payload.get("task")
             if task is not None and not isinstance(task, str):
                 raise ValueError("task must be text")
-            return RouteDecision(signal=signal, task=task.strip() or None if task is not None else None)
+            summary = payload.get("publicSummary")
+            if not isinstance(summary, str):
+                summary = None
+            else:
+                summary = " ".join(summary.split())[:180] or None
+            return RouteDecision(signal=signal, task=task.strip() or None if task is not None else None,
+                                 public_summary=summary)
         except (ValueError, KeyError, TypeError):
             return RouteDecision(signal=UserSignal.UNKNOWN)
 
@@ -124,4 +132,5 @@ class RouteNode:
             state["user_id"], state["session_id"], state["message"],
             state["stage"], state["pending"],
         )
-        return {"signal": decision.signal, "task": decision.task}
+        return {"signal": decision.signal, "task": decision.task,
+                "public_summary": decision.public_summary}

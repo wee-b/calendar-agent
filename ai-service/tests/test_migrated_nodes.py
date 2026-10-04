@@ -76,6 +76,18 @@ class Mcp:
 
 
 class PlanNodeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_validated_plan_analysis_updates_public_timeline_without_another_model_call(self):
+        planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
+                                   save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=12)))
+        data = json.loads(plan_json())
+        data["analysis"] = "先学习页面结构，再完成一个小项目。"
+        model = SimpleNamespace(complete=AsyncMock(return_value=json.dumps(data, ensure_ascii=False)))
+        ctx = context()
+        await ctx.add_step("agent", "制定规划")
+        await PlanNode(planning, model)(turn(task="三天学习前端"), ctx)
+        self.assertEqual("先学习页面结构，再完成一个小项目。", ctx.agent_steps[0].narration)
+        model.complete.assert_awaited_once()
+
     async def test_generate_then_modify_preserves_old_draft_until_success(self):
         planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
                                    save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=12)))

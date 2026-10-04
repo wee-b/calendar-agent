@@ -252,7 +252,9 @@ class DocumentTests(unittest.IsolatedAsyncioTestCase):
         planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
                                    save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=3)))
         model = SimpleNamespace(complete=AsyncMock(return_value=valid_plan()))
-        context = SimpleNamespace(use_model=lambda *_: None)
+        context = SimpleNamespace(use_model=lambda *_: None,
+                                  add_step=AsyncMock(return_value=1), complete_step=AsyncMock(),
+                                  set_agent_narration=AsyncMock())
         node = PlanNode(planning, model, documents)
         state = {"user_id": 7, "session_id": "s", "message": "明天复习",
                  "pending": PendingTask(), "signal": UserSignal.NEW_PLAN}
@@ -262,4 +264,6 @@ class DocumentTests(unittest.IsolatedAsyncioTestCase):
         state["document_ids"] = [42]
         await node(state, context)
         documents.search.assert_awaited_once_with(7, [42], "明天复习")
+        context.add_step.assert_any_await("tool", "检索引用文档")
+        context.complete_step.assert_awaited_once_with(1)
         self.assertIn("每天背单词", model.complete.call_args.args[0][1]["content"])

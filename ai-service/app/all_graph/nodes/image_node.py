@@ -31,7 +31,13 @@ class ImageNode:
         log_turn_step("IMAGE_MODEL", 草稿ID=pending.draft_id, 模型=context.agent_label)
         url = await self.client.generate(draft.plan_json, instruction)
         log_turn_step("IMAGE_MODEL_RESULT", 结果="成功")
-        image = await self.storage.archive(url, state["user_id"], state["session_id"], pending.draft_id)
+        step_id = await context.add_step("tool", "保存规划图片")
+        try:
+            image = await self.storage.archive(url, state["user_id"], state["session_id"], pending.draft_id)
+        except Exception:
+            await context.complete_step(step_id, "error")
+            raise
+        await context.complete_step(step_id)
         log_turn_step("IMAGE_STORED", 草稿ID=pending.draft_id)
         return AgentTurnResult(
             reply=(f"已生成规划示意图：\n\n![规划示意图]({image.view_url})\n\n"

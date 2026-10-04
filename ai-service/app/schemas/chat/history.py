@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from app.schemas.chat.timeline import AgentStep
 
 
 DEFAULT_HISTORY_LIMIT = 20
@@ -14,6 +15,7 @@ class ChatMessageCreate(BaseModel):
     role: Literal["user", "assistant"]
     content: str
     response_time_ms: int | None = Field(default=None, ge=0)
+    agent_steps: list[AgentStep] | None = None
 
 
 class ChatHistoryItem(BaseModel):
@@ -22,6 +24,7 @@ class ChatHistoryItem(BaseModel):
     content: str
     createTime: datetime
     responseTimeMs: int | None = None
+    agentSteps: list[AgentStep] = Field(default_factory=list)
 
 
 class ChatHistoryPage(BaseModel):

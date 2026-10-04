@@ -12,12 +12,12 @@
       :class="isUserRole(msg.role) ? 'is-user' : 'is-ai'"
     >
       <div class="bubble-content">
-        <div v-if="msg.thinking?.length" class="thinking-panel" :class="{ completed: msg.thinkingDone }">
-          <button class="thinking-summary" @click="$emit('toggle-thinking', index)">
+        <div v-if="!isUserRole(msg.role) && (msg.agentSteps?.length || msg.runStartedAt)" class="thinking-panel" :class="{ completed: msg.runDone }">
+          <button class="thinking-summary" :aria-expanded="!msg.timelineCollapsed" @click="$emit('toggle-timeline', index)">
             <span>{{ thinkingSummary(msg) }}</span>
             <svg
               class="thinking-arrow"
-              :class="{ open: !msg.thinkingCollapsed }"
+              :class="{ open: !msg.timelineCollapsed }"
               viewBox="0 0 24 24"
               fill="none"
               aria-hidden="true"
@@ -25,34 +25,26 @@
               <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </button>
-          <div v-if="!msg.thinkingCollapsed" class="thinking-steps">
+          <div v-if="!msg.timelineCollapsed" class="process-log">
             <div
-              v-for="(step, stepIndex) in msg.thinking"
-              :key="`${index}-${stepIndex}`"
-              class="thinking-step"
-              :class="{ done: isThinkingStepDone(step), failed: isThinkingStepFailed(step) }"
+              v-for="step in msg.agentSteps || []"
+              :key="step.id"
+              class="process-entry"
+              :class="[step.kind === 'agent' ? 'process-narration' : 'process-action', { 'is-failed': step.status === 'error' }]"
             >
-              <svg
-                v-if="isThinkingStepDone(step)"
-                class="step-mark"
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path d="M5 12.5 10 17.5 19 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              <svg
-                v-else-if="isThinkingStepFailed(step)"
-                class="step-mark is-failed"
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path d="M8 8l8 8M16 8l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-              </svg>
-              <span v-else class="step-dot"></span>
-              <span class="step-text">{{ step }}</span>
+              <p v-if="step.kind === 'agent'">{{ timelineNarration(step) }}</p>
+              <template v-else>
+                <svg class="process-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect x="3.5" y="4.5" width="17" height="15" rx="3" stroke="currentColor" stroke-width="1.5" />
+                  <path d="m7.5 9 3 3-3 3M12.5 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span class="process-action-text">
+                  <span>{{ timelineAction(step) }}</span>
+                  <span v-if="step.kind === 'tool' && step.resultSummary" class="process-tool-result">{{ step.resultSummary }}</span>
+                </span>
+              </template>
             </div>
+            <p v-if="!msg.agentSteps?.length" class="process-entry process-narration">我正在处理这条请求。</p>
           </div>
         </div>
         <div v-else-if="!isUserRole(msg.role) && msg.responseTimeMs != null" class="response-time">
@@ -61,7 +53,8 @@
 
         <p v-if="msg.content && isUserRole(msg.role)">{{ msg.content }}</p>
         <template v-else-if="msg.content">
-          <template v-if="imageAssets[index]">
+          <div v-if="!msg.runDone" class="stream-text">{{ msg.content }}</div>
+          <template v-else-if="imageAssets[index]">
             <div class="markdown-body" @dblclick="openImagePreview"
               v-html="renderMarkdown(imageAssets[index]!.before)"></div>
             <div class="image-asset-actions" aria-label="图片操作">
@@ -89,7 +82,7 @@
         </template>
         <TypingIndicator v-else-if="msg.loading" />
 
-        <div v-if="!msg.loading && index === messages.length - 1 && msg.dispatchType === 'PLAN_CLARIFICATION'" class="plan-choices">
+        <div v-if="msg.runDone && index === messages.length - 1 && msg.dispatchType === 'PLAN_CLARIFICATION'" class="plan-choices">
           <button type="button" @click="openChoiceInput(index, '补充信息')">1. 补充信息</button>
           <button type="button" class="primary" @click="$emit('quick-reply', '不补充信息，直接规划')">
             2. 不补充信息，直接规划
@@ -97,7 +90,7 @@
           <button type="button" @click="openChoiceInput(index, '其他')">3. 其他</button>
         </div>
         <div
-          v-if="!msg.loading && index === messages.length - 1 && ['PLAN', 'PLAN_REFINE'].includes(msg.dispatchType || '')"
+          v-if="msg.runDone && index === messages.length - 1 && ['PLAN', 'PLAN_REFINE'].includes(msg.dispatchType || '')"
           class="plan-choices"
         >
           <button type="button" class="primary" @click="$emit('quick-reply', '同步到日历')">
@@ -119,7 +112,7 @@
           <button type="submit" :disabled="!inlineChoiceText.trim()">发送</button>
         </form>
 
-        <div class="msg-actions" v-if="!msg.loading && !isUserRole(msg.role)">
+        <div class="msg-actions" v-if="msg.runDone && !isUserRole(msg.role)">
           <button type="button" class="action-icon" @click="$emit('copy', msg.content)">复制</button>
           <button
             type="button"
@@ -160,6 +153,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { renderMarkdown, resolveAiAssetUrl } from '../../../utils/markdown';
+import { timelineAction, timelineNarration } from '../../../api/agentTimeline';
 import EmptyChat from './EmptyChat.vue';
 import TypingIndicator from './TypingIndicator.vue';
 import type { ChatMessage } from './types';
@@ -173,8 +167,6 @@ const props = defineProps<{
   isPaused: boolean;
   isUserRole: (role: string) => boolean;
   thinkingSummary: (message: ChatMessage) => string;
-  isThinkingStepDone: (step: string) => boolean;
-  isThinkingStepFailed: (step: string) => boolean;
   formatResponseTime: (durationMs: number) => string;
 }>();
 
@@ -206,7 +198,7 @@ const parseImageAsset = (content: string): ImageAssetMessage | null => {
 };
 
 const imageAssets = computed(() => props.messages.map(message =>
-  props.isUserRole(message.role) ? null : parseImageAsset(message.content || '')));
+  props.isUserRole(message.role) || !message.runDone ? null : parseImageAsset(message.content || '')));
 
 const chatHistoryRef = ref<HTMLElement | null>(null);
 const inlineChoiceIndex = ref<number | null>(null);
@@ -255,7 +247,7 @@ const openChoiceInput = async (index: number, kind: string) => {
 const emit = defineEmits<{
   (e: 'load-earlier'): void;
   (e: 'select-prompt', prompt: string): void;
-  (e: 'toggle-thinking', index: number): void;
+  (e: 'toggle-timeline', index: number): void;
   (e: 'copy', content: string): void;
   (e: 'read', content: string, index: number): void;
   (e: 'delete-last-round'): void;
@@ -270,11 +262,11 @@ const submitChoiceInput = () => {
   emit('quick-reply', content);
 };
 
-const scrollToBottom = async () => {
+const scrollToBottom = async (force = true) => {
+  const element = chatHistoryRef.value;
+  const shouldFollow = force || !element || element.scrollHeight - element.scrollTop - element.clientHeight < 140;
   await nextTick();
-  if (chatHistoryRef.value) {
-    chatHistoryRef.value.scrollTop = chatHistoryRef.value.scrollHeight;
-  }
+  if (shouldFollow && element) element.scrollTop = element.scrollHeight;
 };
 
 const prependKeepingPosition = async (prepend: () => void) => {
@@ -333,6 +325,27 @@ defineExpose({ scrollToBottom, prependKeepingPosition });
 .markdown-body {
   max-width: 100%;
   min-width: 0;
+}
+
+.stream-text {
+  color: #18181b;
+  font-size: 15px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.stream-text::after {
+  content: '▍';
+  margin-left: 2px;
+  color: #909097;
+  animation: stream-cursor 0.8s steps(1) infinite;
+}
+
+@keyframes stream-cursor { 50% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-text::after { animation: none; }
 }
 
 .msg-item.is-ai .bubble-content {
@@ -688,10 +701,24 @@ defineExpose({ scrollToBottom, prependKeepingPosition });
   opacity: 0.45;
 }
 
+.thinking-panel { margin-bottom: 20px; }
+
 .thinking-summary {
-  color: #a1a1aa;
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 12px;
+  border: 0;
+  background: transparent;
+  color: #909097;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
 }
+
+.thinking-summary:hover { color: #52525b; }
+.thinking-summary:focus-visible { outline: 2px solid #a1a1aa; outline-offset: 3px; border-radius: 2px; }
 
 .thinking-arrow {
   width: 14px;
@@ -706,57 +733,43 @@ defineExpose({ scrollToBottom, prependKeepingPosition });
   transform: rotate(0deg);
 }
 
-.thinking-steps {
-  margin-top: 8px;
-  padding-top: 10px;
-  border-top: 1px solid #f4f4f5;
+.process-log {
+  padding-top: 20px;
+  border-top: 1px solid #e4e4e7;
 }
 
-.thinking-step {
+.process-entry + .process-entry {
+  margin-top: 22px;
+}
+
+.process-narration {
+  color: #27272a;
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.process-narration p {
+  margin: 0;
+}
+
+.process-action {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding-left: 0;
-  color: #71717a;
+  gap: 10px;
+  color: #8a8a91;
   font-size: 13px;
   line-height: 1.6;
 }
 
-.thinking-step + .thinking-step {
-  margin-top: 6px;
-}
+.process-action-text { display: flex; flex-direction: column; min-width: 0; }
+.process-tool-result { color: #71717a; white-space: normal; overflow-wrap: anywhere; }
 
-.thinking-step::before,
-.thinking-step:not(.done)::before,
-.thinking-step.done::before,
-.thinking-step.failed::before {
-  content: none;
-  display: none;
-}
+.process-action.is-failed { color: #b45353; }
 
-.step-mark,
-.step-dot {
-  width: 14px;
-  height: 14px;
-  margin-top: 3px;
-  flex-shrink: 0;
-}
-
-.step-mark {
-  color: #22c55e;
-}
-
-.step-mark.is-failed {
-  color: #ef4444;
-}
-
-.step-dot {
-  border-radius: 50%;
-  background: #d4d4d8;
-}
-
-.thinking-step.done .step-text {
-  color: #52525b;
+.process-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
 }
 
 @media (max-width: 960px) {

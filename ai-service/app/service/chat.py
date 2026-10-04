@@ -9,6 +9,7 @@ from app.models.agent_flow_state import YlAgentFlowState
 from app.schemas.chat.history import (
     ChatHistoryItem, ChatHistoryPage, ChatSessionItem, DEFAULT_HISTORY_LIMIT,
 )
+from app.schemas.chat.timeline import AgentStep
 from app.schemas.statemachine.route_context import RouteContext, RouteContextMessage
 from app.schemas.statemachine.flow import ConversationStage, PendingTask
 from app.schemas.statemachine.transitions import AgentType
@@ -58,6 +59,7 @@ class ChatService:
                 content=row.content,
                 createTime=row.create_time,
                 responseTimeMs=row.response_time_ms,
+                agentSteps=row.agent_steps or [],
             )
             for row in reversed(rows)
         ]
@@ -129,10 +131,12 @@ class ChatService:
         self, state: YlAgentFlowState, next_stage: ConversationStage,
         pending: PendingTask, agent: AgentType,
         *, message: str | None = None, reply: str | None = None, elapsed_ms: int = 0,
+        agent_steps: list[AgentStep] | None = None,
     ) -> None:
         """提交阶段与待处理任务，并释放本轮认领。"""
         await self.flow_states.complete(state, next_stage, pending, agent,
-                                        message=message, reply=reply, elapsed_ms=elapsed_ms)
+                                        message=message, reply=reply, elapsed_ms=elapsed_ms,
+                                        agent_steps=agent_steps)
 
     async def release_flow_state_claim(self, state: YlAgentFlowState) -> None:
         """仅在尚未开始外部写操作的失败路径释放认领。"""

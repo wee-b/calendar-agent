@@ -49,20 +49,44 @@
           <span class="avatar">{{ isUserRole(msg.role) ? '我' : 'AI' }}</span>
 
           <div class="bubble-content">
-            <div v-if="!isUserRole(msg.role) && msg.responseTimeMs != null" class="response-time">
+            <div v-if="!isUserRole(msg.role) && (msg.agentSteps?.length || msg.runActive)" class="agent-timeline">
+              <button class="timeline-toggle" :aria-expanded="!msg.timelineCollapsed" @click="msg.timelineCollapsed = !msg.timelineCollapsed">
+                {{ msg.runActive ? '运行中' : `用时 ${formatResponseTime(msg.responseTimeMs || 0)}` }}
+                <span :class="{ open: !msg.timelineCollapsed }">⌄</span>
+              </button>
+              <div v-if="!msg.timelineCollapsed" class="timeline-log">
+                <div v-for="step in msg.agentSteps || []" :key="step.id" class="timeline-entry"
+                     :class="[step.kind === 'agent' ? 'timeline-narration' : 'timeline-action', { 'is-failed': step.status === 'error' }]">
+                  <span v-if="step.kind === 'agent'">{{ timelineNarration(step) }}</span>
+                  <template v-else>
+                    <svg class="timeline-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <rect x="3.5" y="4.5" width="17" height="15" rx="3" stroke="currentColor" stroke-width="1.5" />
+                      <path d="m7.5 9 3 3-3 3M12.5 15h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    <span class="timeline-action-text">
+                      <span>{{ timelineAction(step) }}</span>
+                      <span v-if="step.kind === 'tool' && step.resultSummary" class="timeline-tool-result">{{ step.resultSummary }}</span>
+                    </span>
+                  </template>
+                </div>
+                <div v-if="!msg.agentSteps?.length" class="timeline-entry timeline-narration">我正在处理这条请求。</div>
+              </div>
+            </div>
+            <div v-else-if="!isUserRole(msg.role) && msg.responseTimeMs != null" class="response-time">
               耗时 {{ formatResponseTime(msg.responseTimeMs) }}
             </div>
             <p v-if="!msg.loading && isUserRole(msg.role)">{{ msg.content }}</p>
+            <div v-else-if="!msg.loading && msg.runActive" class="stream-text">{{ msg.content }}</div>
             <div
                 v-else-if="!msg.loading"
                 class="markdown-body"
                 v-html="renderMarkdown(msg.content)"
             ></div>
-            <div v-else class="typing-indicator">
+            <div v-else class="typing-indicator" role="status" aria-label="正在生成回复">
               <span></span><span></span><span></span>
             </div>
 
-            <div class="msg-actions" v-if="!msg.loading && !isUserRole(msg.role)">
+            <div class="msg-actions" v-if="!msg.loading && !msg.runActive && !isUserRole(msg.role)">
               <span class="action-icon" @click="handleCopy(msg.content)">复制</span>
               <span
                   class="action-icon"
@@ -71,7 +95,7 @@
               >{{ readingMsgIndex === index ? (isPaused ? '继续' : '暂停') : '朗读' }}</span>
               <span class="action-icon danger" @click="handleDeleteLastRound">撤回</span>
             </div>
-            <div v-if="!msg.loading && index === messages.length - 1 && msg.dispatchType === 'PLAN_CLARIFICATION'" class="plan-choices">
+            <div v-if="!msg.loading && !msg.runActive && index === messages.length - 1 && msg.dispatchType === 'PLAN_CLARIFICATION'" class="plan-choices">
               <button @click="focusPlanInput('请补充预算、时间、偏好等信息')">1. 补充信息</button>
               <button class="primary" @click="sendQuickReply('不补充信息，直接规划')">2. 不补充信息，直接规划</button>
               <button @click="focusPlanInput('请输入其他处理方式')">3. 其他</button>
@@ -157,12 +181,15 @@ import {
 } from '../../../api/chat';
 import { tokenRef } from '../../../utils/auth';
 import { renderMarkdown } from '../../../utils/markdown';
+import type { AgentStep } from '../../../api/chatStream';
+import { timelineAction, timelineNarration } from '../../../api/agentTimeline';
 
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'refresh'): void }>();
 const isUserLoggedIn = computed(() => !!tokenRef.value);
 
-interface ChatMessage { role: string; content: string; loading?: boolean; responseTimeMs?: number | null; dispatchType?: string; }
+interface ChatMessage { role: string; content: string; loading?: boolean; responseTimeMs?: number | null;
+  dispatchType?: string; agentSteps?: AgentStep[]; runActive?: boolean; timelineCollapsed?: boolean; }
 
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
@@ -202,14 +229,15 @@ const currentSessionTitle = computed(() => {
 const isUserRole = (role: string) => role.toLowerCase() === 'user';
 
 const formatResponseTime = (responseTimeMs: number) => {
-  return `${Math.max(0.1, responseTimeMs / 1000).toFixed(1)} 秒`;
+  const seconds = Math.max(0, Math.floor(responseTimeMs / 1000));
+  return seconds >= 60 ? `${Math.floor(seconds / 60)}分钟${seconds % 60}秒` : `${seconds}秒`;
 };
 
-const scrollToBottom = async () => {
+const scrollToBottom = async (force = true) => {
+  const element = chatHistoryRef.value;
+  const shouldFollow = force || !element || element.scrollHeight - element.scrollTop - element.clientHeight < 100;
   await nextTick();
-  if (chatHistoryRef.value) {
-    chatHistoryRef.value.scrollTop = chatHistoryRef.value.scrollHeight;
-  }
+  if (shouldFollow && element) element.scrollTop = element.scrollHeight;
 };
 
 const toggleDropdown = () => { if (isUserLoggedIn.value) isDropdownOpen.value = !isDropdownOpen.value; };
@@ -255,6 +283,7 @@ const selectSession = async (session: ChatSessionVO) => {
       role: h.role,
       content: h.content,
       responseTimeMs: h.responseTimeMs,
+      agentSteps: h.agentSteps || [],
       dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
     }));
     scrollToBottom();
@@ -378,6 +407,7 @@ const handleDeleteLastRound = async () => {
       role: h.role,
       content: h.content,
       responseTimeMs: h.responseTimeMs,
+      agentSteps: h.agentSteps || [],
       dispatchType: h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined
     }));
     scrollToBottom();
@@ -600,11 +630,15 @@ const handleSend = async () => {
   inputText.value = '';
   scrollToBottom();
 
-  messages.value.push({ role: 'ai', content: '', loading: true });
+  const replyMsg: ChatMessage = { role: 'ai', content: '', loading: true, runActive: true,
+    agentSteps: [], timelineCollapsed: false };
+  messages.value.push(replyMsg);
   isSending.value = true;
   scrollToBottom();
 
   let slowTimer: any = null;
+  let streamDone = false;
+  let streamFailed = false;
   try {
     slowTimer = setTimeout(() => {
       ElMessage.warning('响应较慢，请耐心等待...');
@@ -614,47 +648,46 @@ const handleSend = async () => {
       { sessionId: currentSessionId.value, message: text },
       (token) => {
         clearTimeout(slowTimer);
-        const lastMsg = messages.value[messages.value.length - 1];
-        if (lastMsg && lastMsg.role === 'ai') {
-          if (lastMsg.loading) lastMsg.loading = false;
-          lastMsg.content += token;
-          scrollToBottom();
-        }
+        replyMsg.content += token;
+        replyMsg.loading = false;
+        scrollToBottom(false);
       },
       () => {
+        streamDone = true;
         emit('refresh');
-        const lastMsg = messages.value[messages.value.length - 1];
-        if (lastMsg && lastMsg.role === 'ai' && inputMudle.value === 2) {
-          handleRead(lastMsg.content, messages.value.length - 1);
-        }
         fetchSessions();
       },
       (error) => {
+        streamFailed = true;
         clearTimeout(slowTimer);
-        const lastMsg = messages.value[messages.value.length - 1];
-        if (lastMsg && lastMsg.role === 'ai') {
-          lastMsg.loading = false;
-          lastMsg.content = error || '抱歉，网络开小差了，请重试。';
-        }
+        replyMsg.runActive = false;
+        replyMsg.loading = false;
+        replyMsg.content = error || '抱歉，网络开小差了，请重试。';
       },
       undefined,
       undefined,
       (responseTimeMs) => {
-        const lastMsg = messages.value[messages.value.length - 1];
-        if (lastMsg && lastMsg.role === 'ai') {
-          lastMsg.responseTimeMs = responseTimeMs;
-        }
+        replyMsg.responseTimeMs = responseTimeMs;
       },
       (dispatchType) => {
-        const lastMsg = messages.value[messages.value.length - 1];
-        if (lastMsg && lastMsg.role === 'ai') {
-          lastMsg.dispatchType = dispatchType;
-        }
+        replyMsg.dispatchType = dispatchType;
+      },
+      (step) => {
+        const steps = replyMsg.agentSteps || (replyMsg.agentSteps = []);
+        const index = steps.findIndex(item => item.id === step.id);
+        if (index >= 0) steps.splice(index, 1, step);
+        else steps.push(step);
+        scrollToBottom(false);
       }
     );
+    if (streamDone && !streamFailed) {
+      replyMsg.runActive = false;
+      replyMsg.loading = false;
+      if (inputMudle.value === 2) handleRead(replyMsg.content, messages.value.indexOf(replyMsg));
+    }
   } finally {
     isSending.value = false;
-    scrollToBottom();
+    scrollToBottom(false);
     inputText.value = '';
     if (inputMudle.value === 2) {
       resetVoiceTimer();
@@ -739,6 +772,19 @@ watch(isUserLoggedIn, async (newVal) => {
 .msg-bubble { display: flex; flex-direction: column; gap: 4px; max-width: 90%; }
 .avatar { font-size: 12px; color: #b5a992; font-weight: bold; }
 .bubble-content { border-radius: 12px; padding: 10px 14px; box-shadow: 0 2px 6px rgba(92, 75, 55, 0.05); }
+.agent-timeline { margin-bottom: 10px; color: #827d77; font-size: 12px; }
+.timeline-toggle { display: flex; align-items: center; gap: 6px; padding: 0; border: 0;
+  background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.timeline-toggle span { display: inline-block; transform: rotate(-90deg); transition: transform .16s; }
+.timeline-toggle span.open { transform: rotate(0); }
+.timeline-log { padding-top: 12px; border-top: 1px solid #eaddc4; }
+.timeline-entry + .timeline-entry { margin-top: 14px; }
+.timeline-narration { color: #5c4b37; font-size: 13px; line-height: 1.6; }
+.timeline-action { display: flex; align-items: flex-start; gap: 7px; color: #9a9185; font-size: 12px; line-height: 1.5; }
+.timeline-action-text { display: flex; flex-direction: column; min-width: 0; }
+.timeline-tool-result { color: #746c60; white-space: normal; overflow-wrap: anywhere; }
+.timeline-action.is-failed { color: #bc423f; }
+.timeline-icon { width: 14px; height: 14px; flex: 0 0 14px; }
 .bubble-content p { margin: 0; font-size: 14px; line-height: 1.5; color: #5c4b37; word-break: break-word; white-space: pre-wrap; }
 .markdown-body {
   color: #344054;
@@ -746,6 +792,10 @@ watch(isUserLoggedIn, async (newVal) => {
   line-height: 1.65;
   word-break: break-word;
 }
+.stream-text { color: #344054; font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.stream-text::after { content: '▍'; margin-left: 2px; color: #9a9185; animation: stream-cursor .8s steps(1) infinite; }
+@keyframes stream-cursor { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .stream-text::after { animation: none; } }
 .markdown-body :deep(*) {
   box-sizing: border-box;
 }

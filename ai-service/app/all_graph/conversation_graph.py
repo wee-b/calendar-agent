@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import NotRequired, TypedDict
 
@@ -26,7 +26,29 @@ from app.schemas.statemachine.flow import (
 from app.schemas.statemachine.transitions import AgentType, ChatTransitionTable
 from app.all_graph.nodes.route_node import RouteAgent, RouteNode
 from app.all_graph.nodes.summary_node import SummaryNode
-from app.schemas.chat.model_stream import AgentStatusData, AgentStatusEvent, AssistantDeltaData, AssistantDeltaEvent
+from app.schemas.chat.model_stream import (
+    AgentStatusData, AgentStatusEvent, AgentStepEvent, AssistantDeltaData, AssistantDeltaEvent,
+    ToolCallLifecycleEvent, ToolResultEvent,
+)
+from app.schemas.chat.timeline import AgentStep
+
+
+_AGENT_LABELS = {
+    "route": "识别意图", "chat": "生成回复", "planner": "制定规划",
+    "executor": "执行日历操作", "image": "生成规划图片",
+}
+_TOOL_LABELS = {
+    "queryDayDetail": "查询日程", "queryTodoList": "查询待办",
+    "queryMonthCount": "查询月历", "createTodo": "创建待办",
+    "batchCreateTodos": "同步规划", "updateTodo": "修改待办",
+    "deleteTodo": "删除待办", "toggleTodoDate": "更新完成状态",
+    "saveDailyNote": "保存日记", "removeTodoDay": "移除待办日期",
+    "addTodoDay": "添加待办日期",
+}
+_OWNER_LABELS = {
+    AgentType.CHAT: "分配给对话 Agent", AgentType.PLANNER: "分配给规划 Agent",
+    AgentType.EXECUTOR: "分配给执行 Agent", AgentType.IMAGE: "分配给图片 Agent",
+}
 
 
 class ConversationState(TypedDict):
@@ -68,6 +90,8 @@ class TurnContext:
     rounds: int = 0
     started: float = 0
     agent_label: str | None = None
+    agent_steps: list[AgentStep] = field(default_factory=list)
+    tool_step_ids: dict[str, int] = field(default_factory=dict)
 
     def use_model(self, agent: str, client) -> None:
         config = getattr(client, "config", None)
@@ -89,6 +113,71 @@ class TurnContext:
             await self.emit(event)
             if isinstance(event, AssistantDeltaEvent):
                 self.text_emitted = True
+        await self._record_event(event)
+
+    async def _publish_step(self, step: AgentStep) -> None:
+        if self.emit is not None:
+            await self.emit(AgentStepEvent(data=step.model_copy(deep=True)))
+
+    async def add_step(self, kind: str, label: str, *, round_number: int | None = None,
+                       status: str = "running") -> int | None:
+        if len(self.agent_steps) >= 40:
+            return None
+        # A repeated node status in the same model round does not create another row.
+        last = self.agent_steps[-1] if self.agent_steps else None
+        if kind == "agent" and last and last.kind == kind and last.label == label and last.round == round_number \
+                and last.status == "running":
+            return last.id
+        if last and last.status == "running":
+            last.status = "success"
+            await self._publish_step(last)
+        step = AgentStep(id=len(self.agent_steps) + 1, kind=kind, label=label,
+                         status=status, elapsedMs=max(0, int((perf_counter() - self.started) * 1000)),
+                         round=round_number)
+        self.agent_steps.append(step)
+        await self._publish_step(step)
+        return step.id
+
+    async def _record_event(self, event) -> None:
+        if isinstance(event, AgentStatusEvent) and event.data.stage == "model":
+            await self.add_step("agent", _AGENT_LABELS[event.data.agent],
+                                round_number=event.data.round)
+        elif isinstance(event, ToolCallLifecycleEvent) and event.event == "tool_call_start":
+            step_id = await self.add_step("tool", _TOOL_LABELS.get(event.data.tool, "调用日历工具"),
+                                          round_number=event.data.round)
+            if step_id is not None:
+                self.tool_step_ids[event.data.call_id] = step_id
+        elif isinstance(event, ToolResultEvent):
+            step_id = self.tool_step_ids.get(event.data.call_id)
+            if step_id is not None:
+                step = self.agent_steps[step_id - 1]
+                step.status = event.data.status
+                step.resultSummary = event.data.summary
+                await self._publish_step(step)
+
+    async def complete_step(self, step_id: int | None, status: str = "success") -> None:
+        if step_id is None:
+            return
+        step = self.agent_steps[step_id - 1]
+        step.status = status
+        await self._publish_step(step)
+
+    async def set_agent_narration(self, label: str, narration: str | None) -> None:
+        """为已有阶段追加用户可见说明，沿用同一个 SSE 步骤 ID。"""
+        value = " ".join((narration or "").split())[:240]
+        if not value:
+            return
+        for step in reversed(self.agent_steps):
+            if step.kind == "agent" and step.label == label:
+                step.narration = value
+                await self._publish_step(step)
+                return
+
+    async def finish_steps(self) -> None:
+        for step in self.agent_steps:
+            if step.status == "running":
+                step.status = "success"
+                await self._publish_step(step)
 
 
 # 扩展 Agent 时实现这个签名：读取图状态，返回 reply/completed/pending。
@@ -146,9 +235,19 @@ class ConversationGraph:
         async def route(state: ConversationState, runtime: Runtime[TurnContext]):
             log_turn_step("ROUTE")
             await runtime.context.send(AgentStatusEvent(data=AgentStatusData(agent="route", round=1, stage="model")))
-            return await route_node(state)
+            result = await route_node(state)
+            await runtime.context.set_agent_narration("识别意图", result.pop("public_summary", None))
+            return result
 
-        builder.add_node("summary", summary_node if summary_node is not None else SummaryNode())
+        summary_handler = summary_node if summary_node is not None else SummaryNode()
+
+        async def summary(state: ConversationState, runtime: Runtime[TurnContext]):
+            result = await summary_handler(state)
+            if result.get("context_compressed"):
+                await runtime.context.add_step("summary", "整理上下文与偏好", status="success")
+            return result
+
+        builder.add_node("summary", summary)
         builder.add_node("route", route)
         builder.add_node("transition", self._transition)
         for agent in AgentType:
@@ -168,12 +267,13 @@ class ConversationGraph:
         builder.add_edge("commit", END)
         self.graph = builder.compile()
 
-    def _transition(self, state: ConversationState) -> dict:
+    async def _transition(self, state: ConversationState, runtime: Runtime[TurnContext]) -> dict:
         """普通图节点：查业务转换表，返回值并入 ConversationState。"""
         rule = self.transitions.resolve(state["stage"], state["signal"])
         log_turn_step("TRANSITION", 信号=state["signal"].name, 节点=rule.agent.name)
         log_session_transition(state["stage"].name, rule.next_stage.name, "待执行",
                                信号=state["signal"].name, 节点=rule.agent.name)
+        await runtime.context.add_step("summary", _OWNER_LABELS[rule.agent], status="success")
         return {"agent": rule.agent, "target_stage": rule.next_stage}
 
     def _handler_node(self, agent: AgentType):
@@ -191,8 +291,15 @@ class ConversationGraph:
                 raise TypeError(f"{agent.name} Agent 未返回 AgentTurnResult")
             log_turn_step(f"{agent.name}_RESULT", 完成=result.completed, 分发类型=result.dispatch_type,
                           产物=pending_summary(result.pending))
-            if not runtime.context.text_emitted:
-                await runtime.context.send(AssistantDeltaEvent(data=AssistantDeltaData(round=1, delta=result.reply)))
+            if runtime.context.emit is not None and not runtime.context.text_emitted:
+                # Planner 等节点先生成并校验完整业务结果，再将可展示的回复分段发出。
+                # 每段让出事件循环，使 SSE 消费者和浏览器有机会逐段绘制。
+                chunk_size = min(40, max(4, len(result.reply) // 100))
+                for offset in range(0, len(result.reply), chunk_size):
+                    await runtime.context.send(AssistantDeltaEvent(data=AssistantDeltaData(
+                        round=1, delta=result.reply[offset:offset + chunk_size])))
+                    if offset + chunk_size < len(result.reply):
+                        await asyncio.sleep(0.012)
             return {"result": result}
 
         return run
@@ -205,10 +312,12 @@ class ConversationGraph:
         pending = state["pending"] if state["signal"] in {UserSignal.NEW_QUERY, UserSignal.NEW_CHAT} else result.pending
         log_turn_step("COMMIT", 目标阶段=next_stage.name)
         await runtime.context.ensure_connected()
+        await runtime.context.finish_steps()
         await self.chat_service.complete_flow_state(
             runtime.context.flow_state, next_stage, pending, state["agent"],
             message=state["message"], reply=result.reply,
             elapsed_ms=int((perf_counter() - runtime.context.started) * 1000),
+            agent_steps=runtime.context.agent_steps,
         )
         log_session_transition(state["stage"].name, next_stage.name, "已提交",
                                信号=state["signal"].name, 节点=state["agent"].name,

@@ -17,7 +17,7 @@ from app.service.planning import PlanningService
 logger = logging.getLogger(__name__)
 PLAN_PROMPT = """你是日历规划助手。只输出原始 JSON，不调用工具、不输出 Markdown。
 结构：{"goal":"目标","startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD",
-"analysis":"规划说明和假设","todos":[{"title":"目标名称","dayContent":"每日任务",
+"analysis":"面向用户的简短规划思路和必要假设","todos":[{"title":"目标名称","dayContent":"每日任务",
 "startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD","weekDays":[1,2,3,4,5],
 "color":"#4CAF50","reason":"原因"}]}。
 weekDays 的 1 是周一，7 是周日；单项日期跨度不超过180天。
@@ -87,13 +87,21 @@ class PlanNode:
             from app.service.documents import DocumentSearchService
             service = self.documents if self.documents is not None else DocumentSearchService()
             log_turn_step("SEARCH_DOCUMENTS", 引用文件数=len(document_ids))
-            hits = await service.search(state["user_id"], document_ids, requirement)
+            step_id = await context.add_step("tool", "检索引用文档")
+            try:
+                hits = await service.search(state["user_id"], document_ids, requirement)
+            except Exception:
+                await context.complete_step(step_id, "error")
+                raise
+            await context.complete_step(step_id)
             references = "\n".join(f"[{hit.payload.source} / {hit.payload.section}] {hit.payload.text}"
                                    for hit in hits)
         context.use_model("planner", self.model)
         plan = await self._generate(requirement, memories, references)
+        await context.set_agent_narration("制定规划", plan.analysis)
         log_turn_step("SAVE_DRAFT", 待办数=len(plan.todos))
         draft = await self.planning.save_draft(state["user_id"], state["session_id"], requirement, plan)
+        await context.add_step("summary", "保存规划草稿", status="success")
         plan_preview = preview(plan)
         return AgentTurnResult(
             reply=plan_preview + "\n\n接下来可以“同步到日历”或“生成示意图”，也可以修改规划。",
