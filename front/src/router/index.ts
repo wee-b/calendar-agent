@@ -6,6 +6,11 @@ const router = createRouter({
     history: createWebHistory(),
     routes: [
         {
+            path: '/operations',
+            name: 'Operations',
+            component: () => import('../views/OperationsView/OperationsView.vue')
+        },
+        {
             path: '/',
             component: LayoutView,
             children: [

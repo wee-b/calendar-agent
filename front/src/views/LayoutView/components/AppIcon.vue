@@ -37,6 +37,16 @@
       <circle cx="12" cy="8" r="2.1" />
       <circle cx="20" cy="16" r="2.1" />
     </template>
+    <template v-else-if="name === 'monitor'">
+      <rect x="3" y="4" width="18" height="13" rx="2" />
+      <path d="M8 21h8M12 17v4M6 11h3l2-4 3 7 2-3h2" />
+    </template>
+    <template v-else-if="name === 'refresh'">
+      <path d="M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.7-1L20 9M4 15l2.2 3A7 7 0 0 0 18 17" />
+    </template>
+    <template v-else-if="name === 'api'">
+      <path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16" />
+    </template>
     <template v-else-if="name === 'sparkle'">
       <path d="M12 4.5 13.6 10.4 19.5 12 13.6 13.6 12 19.5 10.4 13.6 4.5 12 10.4 10.4 12 4.5z" />
     </template>
@@ -59,7 +69,7 @@
 
 <script setup lang="ts">
 defineProps<{
-  name: 'search' | 'compose' | 'calendar' | 'today' | 'panel' | 'gear' | 'sparkle' | 'switch' | 'logout' | 'chevron';
+  name: 'search' | 'compose' | 'calendar' | 'today' | 'panel' | 'gear' | 'sparkle' | 'switch' | 'logout' | 'chevron' | 'monitor' | 'refresh' | 'api';
 }>();
 </script>
 

@@ -55,6 +55,10 @@
       <div class="sidebar-user" ref="userMenuRoot">
         <transition name="menu-pop">
           <div v-if="showUserMenu" class="user-popover">
+            <button class="menu-action" @click="openOperations">
+              <AppIcon name="monitor" />
+              <span>运维监控</span>
+            </button>
             <button class="menu-action" @click="handleMenuAction('设置')">
               <AppIcon name="gear" />
               <span>设置</span>
@@ -170,6 +174,11 @@ const handleUserTrigger = () => {
 const handleMenuAction = (label: string) => {
   showUserMenu.value = false;
   ElMessage.info(`${label}功能待实现`);
+};
+
+const openOperations = () => {
+  showUserMenu.value = false;
+  router.push('/operations');
 };
 
 const handleSwitchAccount = () => {
