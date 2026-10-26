@@ -11,7 +11,7 @@ from app.core.config.common.settings import PUBLIC_ENV_FILE
 class ChatStreamSettings(BaseSettings):
     """请求超时保护整次对话；ping 间隔只控制无输出时的保活事件。"""
 
-    request_timeout_seconds: float = Field(default=120, gt=0,
+    request_timeout_seconds: float = Field(default=300, gt=0,
                                            validation_alias="CHAT_STREAM_TIMEOUT_SECONDS")
     ping_interval_seconds: float = Field(default=15, gt=0,
                                          validation_alias="CHAT_STREAM_PING_SECONDS")

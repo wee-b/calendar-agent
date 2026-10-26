@@ -9,7 +9,7 @@
       <span v-if="planning.referenceCount">沿用 {{ planning.referenceCount }} 篇引用文章</span>
     </div>
     <form v-if="expanded" class="planning-form" @submit.prevent="submit">
-      <p class="planning-hint">逐项回答后继续规划，也可以直接在下方输入框回复。</p>
+      <p class="planning-hint">请补充以下信息，提交后将继续生成并校验规划。</p>
       <fieldset :disabled="disabled">
         <label v-for="(question, index) in planning.questions" :key="`${planning.questionSetId}-${index}`" class="planning-question">
           <span><b>{{ index + 1 }}</b>{{ question }}</span>
@@ -21,7 +21,7 @@
         </div>
       </fieldset>
     </form>
-    <p v-else class="planning-collapsed">{{ busy ? '正在结合你的回答生成并校验方案…' : '展开填写回答，或在输入框中补充条件。' }}</p>
+    <p v-else class="planning-collapsed">{{ busy ? '正在结合你的回答生成并校验方案…' : '展开填写回答后继续规划。' }}</p>
   </section>
   <section v-else-if="planning?.status === 'draft_ready'" class="planning-panel ready" aria-label="规划草稿操作">
     <div class="planning-heading"><strong>规划草稿已就绪</strong></div>
@@ -84,14 +84,14 @@ const submit = () => {
 
 <style scoped>
 .planning-panel { flex-shrink: 0; margin: 0 0 12px; padding: 13px 16px; border: 1px solid #e4e4e7; border-radius: 16px; background: #fff; color: #27272a; box-shadow: 0 4px 16px #18181b04; }
-.planning-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; }
+.planning-heading { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; }
 button.planning-heading { cursor: pointer; }
 .planning-heading strong { font-size: 14px; font-weight: 650; }
 .planning-heading small { margin-left: 10px; color: #71717a; font-size: 12px; }
 .planning-chevron { color: #71717a; transform: rotate(-90deg); transition: transform .15s; }
 .planning-chevron.open { transform: rotate(0); }
-.planning-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; color: #71717a; font-size: 12px; line-height: 1.5; }
-.planning-form { max-height: min(38vh, 360px); overflow-y: auto; margin-top: 12px; scrollbar-width: thin; }
+.planning-meta { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; color: #71717a; font-size: 12px; line-height: 1.5; }
+.planning-form { min-height: 0; max-height: min(38vh, 360px); overflow-y: auto; margin-top: 12px; scrollbar-width: thin; }
 .planning-hint, .planning-collapsed { margin: 8px 0 0; color: #71717a; font-size: 12px; line-height: 1.5; }
 .planning-form fieldset { min-width: 0; padding: 0; margin: 12px 0 0; border: 0; }
 .planning-question { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; font-size: 13px; line-height: 1.5; }

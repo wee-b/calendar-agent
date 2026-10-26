@@ -64,7 +64,7 @@ class SummaryTests(IsolatedAsyncioTestCase):
         await SummaryNode(repo, model, MemorySettings(enabled=False))({'user_id': 7, 'session_id': 's'})
         repo.snapshot.assert_not_awaited()
 
-    async def test_compression_finishes_before_route_and_business_node(self):
+    async def test_non_planning_compression_runs_after_route_and_before_business_node(self):
         from app.all_graph.conversation_graph import ConversationGraph
         from app.all_graph.nodes.route_node import RouteDecision
         from app.schemas.statemachine.flow import AgentTurnResult, PendingTask, UserSignal
@@ -86,7 +86,7 @@ class SummaryTests(IsolatedAsyncioTestCase):
             route_agent=SimpleNamespace(route=route))
         with self.assertLogs('app', level='INFO') as logs:
             await graph.run_turn('你好', 'authenticated')
-        self.assertEqual(['summary', 'route', 'chat'], order)
+        self.assertEqual(['route', 'summary', 'chat'], order)
         self.assertEqual(3, len(logs.records))
         self.assertNotIn('memory_extract', graph.graph.get_graph().nodes)
         self.assertNotIn('schedule_maintenance', graph.graph.get_graph().nodes)

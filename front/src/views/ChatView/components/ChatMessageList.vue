@@ -250,7 +250,7 @@ defineExpose({ scrollToBottom, prependKeepingPosition });
 
 .chat-history.has-messages {
   gap: 28px;
-  padding: 28px 24px 248px;
+  padding: 28px 24px 24px;
   overflow-y: scroll;
 }
 

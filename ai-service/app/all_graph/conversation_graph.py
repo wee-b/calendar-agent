@@ -256,6 +256,10 @@ class ConversationGraph:
         summary_handler = summary_node if summary_node is not None else SummaryNode()
 
         async def summary(state: ConversationState, runtime: Runtime[TurnContext]):
+            # 规划请求的总调用预算只包含 Route、Planner 和可选的一次审查。
+            if state["agent"] == AgentType.PLANNER:
+                log_turn_step("SUMMARY_SKIPPED_PLAN")
+                return {"context_compressed": False}
             result = await summary_handler(state)
             if result.get("context_compressed"):
                 await runtime.context.add_step("summary", "整理上下文与偏好", status="success")
@@ -267,13 +271,13 @@ class ConversationGraph:
         for agent in AgentType:
             builder.add_node(agent.name.lower(), self._handler_node(agent))
         builder.add_node("commit", self._commit)
-        builder.add_edge(START, "summary")
-        builder.add_edge("summary", "route")
+        builder.add_edge(START, "route")
         builder.add_edge("route", "transition")
-        # 条件边由 LangGraph 根据 transition 节点写入的 agent 选择分支；
+        builder.add_edge("transition", "summary")
+        # 非规划任务完成摘要后，根据 transition 节点写入的 agent 选择分支；
         # “哪个信号去哪个 Agent”仍由自有转换表决定，不交给模型或框架。
         builder.add_conditional_edges(
-            "transition", lambda state: state["agent"].name.lower(),
+            "summary", lambda state: state["agent"].name.lower(),
             {agent.name.lower(): agent.name.lower() for agent in AgentType},
         )
         for agent in AgentType:
@@ -388,7 +392,7 @@ class ConversationGraph:
                               is_disconnected=is_disconnected, started=started)
         try:
             references = await self.chat_service.document_references(self.user_id, document_ids) if document_ids else []
-            # 主图先检查压缩，再 route -> transition -> Agent -> commit。
+            # route -> transition -> 非规划任务压缩上下文 -> Agent -> commit。
             # context 参数通过 Runtime 注入节点，不混入可持久化的图状态。
             state = await self.graph.ainvoke({
                 "user_id": self.user_id,

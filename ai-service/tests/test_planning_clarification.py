@@ -17,7 +17,7 @@ from app.all_graph.plan_graph import PlanningGraph
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException, McpClientError
 from app.repository.flow_state import FlowStateRepository
-from app.schemas.chat.model_stream import AssistantMessage
+from app.schemas.chat.model_stream import AssistantMessage, AgentStepEvent, ToolCall, ToolFunction
 from app.schemas.plan import today
 from app.schemas.plan.planning_tools import PlanClarification, PlanningRange, ScheduleRangeResult
 from app.schemas.plan.preparation import PlanningPreparation, infer_planning_range
@@ -67,6 +67,30 @@ def restore(pending):
 
 
 class PlanningClarificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_selection_and_clarification_publish_accurate_model_milestones(self):
+        events = []
+
+        async def collect(event):
+            events.append(event)
+
+        context = turn_context()
+        context.emit = collect
+        model = SimpleNamespace(chat=AsyncMock(side_effect=[
+            AssistantMessage(tool_calls=[ToolCall(id="preferences", function=ToolFunction(
+                name="queryPreferences", arguments="{}"))]),
+            clarify("请确认规划的开始和结束日期？"),
+        ]))
+        service = planning_service()
+        result = await PlanNode(service, model)(state(), context)
+        self.assertEqual("PLAN_CLARIFICATION", result.dispatch_type)
+        completed = [event.data for event in events if isinstance(event, AgentStepEvent)
+                     and event.data.label == "制定规划" and event.data.status == "success"]
+        self.assertEqual(2, len(completed))
+        self.assertEqual("已分析本轮需求，接下来核对规划资料。", completed[0].resultSummary)
+        self.assertEqual("还需补充关键信息，回答后将继续生成并校验规划。", completed[1].resultSummary)
+        self.assertEqual("等待用户补充条件", context.agent_steps[-1].label)
+        service.save_draft.assert_not_awaited()
+
     async def test_all_sources_precede_first_llm_and_survive_restart_until_user_answers(self):
         trace = []
 
@@ -100,7 +124,7 @@ class PlanningClarificationTests(unittest.IsolatedAsyncioTestCase):
 
         # 用仓储序列化后创建全新节点，证明不依赖进程内缓存或 LangGraph checkpointer。
         pending = restore(first.pending)
-        next_model = SimpleNamespace(chat=AsyncMock(side_effect=[draft("听力复习"), review()]))
+        next_model = SimpleNamespace(chat=AsyncMock(side_effect=[draft("听力复习")]))
         second = await PlanNode(service, next_model, documents, lambda: mcp)(
             state(pending, UserSignal.MODIFY, "听力，每天两小时"), turn_context())
         self.assertEqual(19, second.pending.draft_id)
@@ -112,7 +136,7 @@ class PlanningClarificationTests(unittest.IsolatedAsyncioTestCase):
         prompt = next_model.chat.call_args_list[0].args[0][1]["content"]
         for text in ("安排英语学习", "每天能投入多久", "听力，每天两小时", "每天背单词"):
             self.assertIn(text, prompt)
-        self.assertEqual(2, next_model.chat.await_count)
+        self.assertEqual(1, next_model.chat.await_count)
 
     async def test_unknown_dates_ask_before_any_schedule_query_and_answer_triggers_prefetch(self):
         service, mcp = planning_service(), RangeMcp()
@@ -187,17 +211,18 @@ class PlanningClarificationTests(unittest.IsolatedAsyncioTestCase):
         result = await PlanningGraph(model).run([{"role": "user", "content": "安排学习"}],
             user_id=7, requirement="安排学习", context=turn_context())
         self.assertIsInstance(result, PlanClarification)
-        self.assertEqual(2, model.chat.await_count)
-        self.assertIn("日期尚未确认", model.chat.call_args_list[1].args[0][-1]["content"])
+        self.assertEqual(1, model.chat.await_count)
+        self.assertIn("开始和结束日期", result.questions[0])
 
     async def test_questions_are_one_to_three_nonblank_distinct_strings(self):
         for questions in ([], [""], ["重复？", "重复？"], ["一？", "二？", "三？", "四？"]):
             with self.subTest(questions=questions):
                 model = SimpleNamespace(chat=AsyncMock(side_effect=[clarify(*questions), clarify("具体目标是什么？")]))
-                result = await PlanningGraph(model).run([{"role": "user", "content": "学习"}],
-                    user_id=7, requirement="学习", context=turn_context(), date_range=day_range())
-                self.assertEqual(["具体目标是什么？"], result.questions)
-                self.assertEqual(2, model.chat.await_count)
+                with self.assertRaises(BusinessException) as caught:
+                    await PlanningGraph(model).run([{"role": "user", "content": "学习"}],
+                        user_id=7, requirement="学习", context=turn_context(), date_range=day_range())
+                self.assertEqual(ErrorCode.PLAN_INVALID.code, caught.exception.code)
+                self.assertEqual(1, model.chat.await_count)
 
     async def test_waiting_answers_block_sync_and_image_even_when_old_draft_exists(self):
         pending = PendingTask(task="修改原计划", draft_id=8, plan_preview="原草稿",

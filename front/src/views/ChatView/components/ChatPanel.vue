@@ -37,31 +37,34 @@
         @delete-last-round="handleDeleteLastRound"
       />
 
-      <PlanningFollowUp
-        :key="currentSessionId || 'new-session'"
-        :planning="planning.state.value"
-        :busy="isSending"
-        :loading="planning.loading.value || isRestoringSession"
-        :load-error="planning.error.value"
-        :logged-in="isUserLoggedIn"
-        @send="handleQuickReply"
-        @refresh="refreshPlanningState"
-      />
+      <div class="conversation-composer">
+        <PlanningFollowUp
+          :key="currentSessionId || 'new-session'"
+          :planning="planning.state.value"
+          :busy="isSending"
+          :loading="planning.loading.value || isRestoringSession"
+          :load-error="planning.error.value"
+          :logged-in="isUserLoggedIn"
+          @send="handleQuickReply"
+          @refresh="refreshPlanningState"
+        />
 
-      <ChatInputBox
-        v-model="inputText"
-        :input-mode="inputMudle"
-        :is-recording="isRecording"
-        :is-expanded="isExpanded"
-        :is-sending="isSending || isRestoringSession"
-        :is-user-logged-in="isUserLoggedIn"
-        :awaiting-planning-answers="planning.state.value?.status === 'awaiting_answers'"
-        :db-bars="dbBars"
-        v-model:references="selectedDocumentReferences"
-        @send="handleSend"
-        @toggle-voice="toggleVoice"
-        @toggle-expanded="isExpanded = !isExpanded"
-      />
+        <ChatInputBox
+          v-show="planning.state.value?.status !== 'awaiting_answers'"
+          class="conversation-input"
+          v-model="inputText"
+          :input-mode="inputMudle"
+          :is-recording="isRecording"
+          :is-expanded="isExpanded"
+          :is-sending="isSending || isRestoringSession"
+          :is-user-logged-in="isUserLoggedIn"
+          :db-bars="dbBars"
+          v-model:references="selectedDocumentReferences"
+          @send="handleSend"
+          @toggle-voice="toggleVoice"
+          @toggle-expanded="isExpanded = !isExpanded"
+        />
+      </div>
 
       <ConfirmModal
         v-if="confirmSendVisible"
@@ -123,6 +126,14 @@ const inputText = ref('');
 const selectedDocumentReferences = ref<DocumentReference[]>([]);
 const isSending = ref(false);
 const isRestoringSession = ref(false);
+
+watch(() => planning.state.value?.status, status => {
+  if (status !== 'awaiting_answers') return;
+  inputMudle.value = 1;
+  stopVoice();
+  cleanupConfirmRecognition();
+  confirmSendVisible.value = false;
+});
 
 const isDropdownOpen = ref(false);
 const showDeleteConfirm = ref(false);
@@ -1536,7 +1547,7 @@ watch(currentSessionTitle, (title) => {
 
 .chat-history.has-messages {
   gap: 28px;
-  padding: 28px 24px 248px;
+  padding: 28px 24px 24px;
 }
 
 .msg-item {
@@ -1692,5 +1703,50 @@ watch(currentSessionTitle, (title) => {
   .textarea-wrapper {
     min-height: 96px;
   }
+}
+/* 问题表单与输入框共用底部布局，实际高度由内容撑开。 */
+.chat-page .conversation-composer {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: calc(100% - 64px);
+  width: min(800px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 12px 0;
+  box-sizing: border-box;
+}
+
+.chat-page .conversation-composer > .planning-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.chat-page .conversation-composer > .conversation-input {
+  position: static;
+  inset: auto;
+  transform: none;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.chat-page .chat-content::after { display: none; }
+.chat-page .chat-history {
+  padding-bottom: 24px;
+  scroll-padding-bottom: 24px;
+}
+
+@media (max-width: 600px) {
+  .chat-page .conversation-composer { width: calc(100% - 24px); gap: 8px; padding: 8px 0; }
 }
 </style>

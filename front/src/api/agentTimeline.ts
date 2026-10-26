@@ -4,10 +4,15 @@ export function timelineNarration(step: AgentStep): string {
     if (step.narration?.trim()) return step.narration;
     if (step.kind === 'agent' && step.resultSummary?.trim()) return step.resultSummary;
     if (step.status === 'error') return `${step.label}未完成。`;
+    // 兼容历史步骤：一次模型分析结束，并不代表草稿已生成或已通过校验。
+    if (step.label === '制定规划') return step.status === 'running'
+        ? '正在分析规划需求…' : '已完成本轮规划分析。';
     return step.status === 'running' ? `正在${step.label}…` : `${step.label}已完成。`;
 }
 
 export function timelineAction(step: AgentStep): string {
+    // 状态说明直接展示，避免“已规划日期尚未确认”“已等待用户补充条件”。
+    if (step.kind === 'summary' && step.status !== 'error') return step.label;
     const prefix = step.status === 'running' ? '正在' : step.status === 'error' ? '执行失败：' : '已';
     return `${prefix}${step.label}`;
 }

@@ -89,7 +89,7 @@ class PlanNodeTests(unittest.IsolatedAsyncioTestCase):
         step = next(step for step in ctx.agent_steps if step.label == "制定规划")
         self.assertEqual("先学习页面结构，再完成一个小项目。", step.narration)
         model.complete.assert_awaited_once()
-        self.assertEqual(2, model.chat.await_count)  # 一次生成、一次独立校验。
+        self.assertEqual(1, model.chat.await_count)  # 首次规划仅生成一次，本地检查不调用模型。
 
     async def test_generate_then_modify_preserves_old_draft_until_success(self):
         planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
@@ -136,15 +136,14 @@ class PlanNodeTests(unittest.IsolatedAsyncioTestCase):
         result = await node(turn(Signal.CONFIRM, Stage.PLAN, result.pending), context())
         self.assertEqual(1, result.pending.draft_id)
 
-    async def test_invalid_model_json_is_corrected_once_and_saved_once(self):
+    async def test_invalid_model_json_stops_without_automatic_model_retry(self):
         model = text_planner(AsyncMock(side_effect=["not json", plan_json()]))
         drafts = SimpleNamespace(save=AsyncMock(return_value=SimpleNamespace(draft_id=5)))
         service = PlanningService(drafts=drafts, memory=SimpleNamespace(relevant=AsyncMock(return_value=[])))
-        result = await PlanNode(service, model, mcp_factory=EmptyScheduleMcp)(turn(task="英语学习"), context())
-        self.assertEqual(5, result.pending.draft_id)
-        self.assertIn("英语", result.pending.plan_preview)
-        self.assertEqual(2, model.complete.await_count)
-        drafts.save.assert_awaited_once()
+        with self.assertRaises(BusinessException):
+            await PlanNode(service, model, mcp_factory=EmptyScheduleMcp)(turn(task="英语学习"), context())
+        model.complete.assert_awaited_once()
+        drafts.save.assert_not_awaited()
 
     async def test_persistently_invalid_plan_never_saves(self):
         drafts = SimpleNamespace(save=AsyncMock())
@@ -354,7 +353,7 @@ class NodeGraphTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     await graph.run_turn("参考资料复习英语", "token", document_ids=[42], emit=collect)
                     labels = list(dict.fromkeys(step.label for step in events))
-                    self.assertEqual(["识别意图", "分配给规划 Agent", "读取用户偏好", "检索引用文档", "查询规划区间日程", "制定规划", "校验规划约束", "保存规划草稿"], labels)
+                    self.assertEqual(["识别意图", "分配给规划 Agent", "读取用户偏好", "检索引用文档", "查询规划区间日程", "制定规划", "检查规划结构与日期", "保存规划草稿"], labels)
                     self.assertEqual("success", next(step.status for step in reversed(events) if step.label == "制定规划"))
 
     async def test_plan_image_sync_across_turns_and_temporary_query(self):

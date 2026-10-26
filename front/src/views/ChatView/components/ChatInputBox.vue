@@ -85,7 +85,6 @@ const props = defineProps<{
   isUserLoggedIn: boolean;
   dbBars: number[];
   references: DocumentReference[];
-  awaitingPlanningAnswers?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -150,7 +149,7 @@ const removeDocument = (id: number) => {
 
 const placeholder = computed(() => props.inputMode === 2
   ? (props.isRecording ? '正在聆听...' : '正在聆听，说完后说发送提交')
-  : props.awaitingPlanningAnswers ? '补充规划条件，可一次回答上面的几个问题…' : '发消息...');
+  : '发消息...');
 
 const handleInput = (event: Event) => {
   emit('update:modelValue', (event.target as HTMLTextAreaElement).value);

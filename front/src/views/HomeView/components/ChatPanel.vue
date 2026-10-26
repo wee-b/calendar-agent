@@ -106,12 +106,12 @@
         :load-error="planning.error.value" :logged-in="isUserLoggedIn"
         @send="sendQuickReply" @refresh="refreshPlanningState"
       />
-      <div class="chat-input-area" :class="{ 'is-expanded': isExpanded }">
+      <div v-show="planning.state.value?.status !== 'awaiting_answers'" class="chat-input-area" :class="{ 'is-expanded': isExpanded }">
         <div class="textarea-wrapper">
           <textarea
               v-model="inputText"
               class="chat-input"
-              :placeholder="inputMudle === 2 ? (isRecording ? '正在聆听...' : '正在聆听，说完后说【发送】提交...') : planning.state.value?.status === 'awaiting_answers' ? '补充上面的规划条件…' : '输入指令或点击🎤开启语音'"
+              :placeholder="inputMudle === 2 ? (isRecording ? '正在聆听...' : '正在聆听，说完后说【发送】提交...') : '输入指令或点击🎤开启语音'"
               @keydown.enter.exact.prevent="handleSend"
               :disabled="isSending || isRestoringSession || !isUserLoggedIn"
               :rows="isExpanded ? 10 : 3"
@@ -210,6 +210,14 @@ let historyRequestId = 0;
 const inputText = ref('');
 const isSending = ref(false);
 const isRestoringSession = ref(false);
+
+watch(() => planning.state.value?.status, status => {
+  if (status !== 'awaiting_answers') return;
+  inputMudle.value = 1;
+  stopVoice();
+  cleanupConfirmRecognition();
+  confirmSendVisible.value = false;
+});
 
 const isDropdownOpen = ref(false);
 const showDeleteConfirm = ref(false);

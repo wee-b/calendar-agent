@@ -1,7 +1,5 @@
 """异步迁移 Java ImageAgent 的文生图协议与限额错误处理。"""
 
-import asyncio
-from time import perf_counter
 from urllib.parse import urlsplit
 
 import httpx
@@ -9,7 +7,7 @@ import httpx
 from app.core.config.agent.agents import image_config
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException
-from app.core.model_logging import log_model_interruption
+from app.core.model_logging import ModelCallTrace
 
 
 class ImageClient:
@@ -30,34 +28,34 @@ class ImageClient:
                       "不添加规划之外的事项。\n规划数据：\n" + plan_json + "\n图片要求：\n" + instruction,
         }
         client = self.client if self.client is not None else httpx.AsyncClient(timeout=config.timeout_seconds)
-        started = perf_counter()
-        try:
-            response = await client.post(model.base_url.rstrip("/") + "/images/generations",
-                                         headers={"Authorization": f"Bearer {model.api_key}"}, json=payload)
-            if not response.is_success:
-                try:
-                    error = response.json().get("error", {})
-                except (ValueError, AttributeError):
-                    error = {}
-                if response.status_code == 429 or isinstance(error, dict) and error.get("code") == "SetLimitExceeded":
-                    raise BusinessException(ErrorCode.IMAGE_LIMIT)
-                raise BusinessException(ErrorCode.IMAGE_FAILED)
+        with ModelCallTrace(config, "generate_image") as call:
             try:
-                url = response.json()["data"][0]["url"]
-                parts = urlsplit(url)
-                if not isinstance(url, str) or parts.scheme not in {"http", "https"} or not parts.netloc:
-                    raise ValueError("invalid image URL")
-                return url.replace("(", "%28").replace(")", "%29").replace("\n", "").replace("\r", "")
-            except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+                response = await client.post(model.base_url.rstrip("/") + "/images/generations",
+                                             headers={"Authorization": f"Bearer {model.api_key}"}, json=payload)
+                call.response_received(response)
+                if not response.is_success:
+                    try:
+                        error = response.json().get("error", {})
+                    except (ValueError, AttributeError):
+                        error = {}
+                    if response.status_code == 429 or isinstance(error, dict) and error.get("code") == "SetLimitExceeded":
+                        raise BusinessException(ErrorCode.IMAGE_LIMIT)
+                    raise BusinessException(ErrorCode.IMAGE_FAILED)
+                try:
+                    body = response.json()
+                    if isinstance(body, dict):
+                        call.capture_usage(body.get("usage"))
+                    url = body["data"][0]["url"]
+                    parts = urlsplit(url)
+                    if not isinstance(url, str) or parts.scheme not in {"http", "https"} or not parts.netloc:
+                        raise ValueError("invalid image URL")
+                    return url.replace("(", "%28").replace(")", "%29").replace("\n", "").replace("\r", "")
+                except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+                    raise BusinessException(ErrorCode.IMAGE_FAILED) from exc
+            except httpx.TimeoutException as exc:
+                raise BusinessException(ErrorCode.MODEL_TIMEOUT) from exc
+            except httpx.RequestError as exc:
                 raise BusinessException(ErrorCode.IMAGE_FAILED) from exc
-        except httpx.TimeoutException as exc:
-            log_model_interruption(config, "generate_image", started, exc)
-            raise BusinessException(ErrorCode.MODEL_TIMEOUT) from exc
-        except asyncio.CancelledError as exc:
-            log_model_interruption(config, "generate_image", started, exc)
-            raise
-        except httpx.RequestError as exc:
-            raise BusinessException(ErrorCode.IMAGE_FAILED) from exc
-        finally:
-            if self.client is None:
-                await client.aclose()
+            finally:
+                if self.client is None:
+                    await client.aclose()

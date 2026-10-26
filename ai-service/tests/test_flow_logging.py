@@ -44,8 +44,8 @@ class FlowLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret-token", "\n".join(logs.output))
         first = next(r for r in logs.records if getattr(r, "flow_scope", None) == "单轮流转")
         self.assertEqual("END", first.to_state)
-        self.assertEqual(["RECEIVED", "LOAD_STATE", "CLAIM", "SUMMARY_CHECK", "ROUTE",
-                          "TRANSITION(信号=NEW_PLAN,节点=PLANNER)", "PLANNER",
+        self.assertEqual(["RECEIVED", "LOAD_STATE", "CLAIM", "ROUTE",
+                          "TRANSITION(信号=NEW_PLAN,节点=PLANNER)", "SUMMARY_SKIPPED_PLAN", "PLANNER",
                           "PLANNER_RESULT(完成=True,分发类型=PLAN)", "COMMIT",
                           "END(分发类型=PLAN,最终阶段=PLAN)"],
                          first.flow_details["路径"].split(" → "))

@@ -1,4 +1,4 @@
-"""规划图的查询边界、证据传递、修正预算和 SSE/草稿隔离回归。"""
+"""规划调用预算、单轮工具、可选审查和 SSE/草稿隔离回归。"""
 
 import asyncio
 import json
@@ -86,16 +86,16 @@ class PlanningGraphTests(unittest.IsolatedAsyncioTestCase):
                                user_id=7, requirement="安排英语复习",
                                context=context or turn_context(), **kwargs)
 
-    async def test_first_draft_passes_structural_and_semantic_validation(self):
-        model = SimpleNamespace(chat=AsyncMock(side_effect=[draft(), review()]))
+    async def test_first_draft_only_uses_local_validation_and_may_skip_tools(self):
+        model = SimpleNamespace(chat=AsyncMock(side_effect=[draft()]))
         ctx = turn_context()
         plan = await self.run_graph(model, context=ctx)
         self.assertEqual("英语复习", plan.todos[0].title)
-        self.assertEqual(2, ctx.rounds)
+        self.assertEqual(1, ctx.rounds)
+        model.chat.assert_awaited_once()
         tools = model.chat.call_args_list[0].kwargs["tools"]
         self.assertEqual({"queryScheduleRange", "queryPreferences"}, {t["function"]["name"] for t in tools})
-        self.assertIsNone(model.chat.call_args_list[1].kwargs["tools"])
-        self.assertEqual(["制定规划", "校验规划约束"], [step.label for step in ctx.agent_steps])
+        self.assertEqual(["制定规划", "检查规划结构与日期"], [step.label for step in ctx.agent_steps])
 
     async def test_batch_schedule_and_preferences_are_cached_and_sent_to_reviewer(self):
         memories = [{"memory_type": "PREFERENCE_TIME", "content": "偏好晚上学习", "confidence": 0.9},
@@ -106,17 +106,19 @@ class PlanningGraphTests(unittest.IsolatedAsyncioTestCase):
             {"todoId": 3, "title": "已有任务", "date": day, "dayContent": "19:00-20:00 阅读",
              "privateField": "不要回填"}]})
         model = SimpleNamespace(chat=AsyncMock(side_effect=[
-            tool_calls("queryScheduleRange", "queryPreferences"),
-            tool_calls("queryScheduleRange", "queryPreferences", prefix="again"),
+            tool_calls("queryScheduleRange", "queryPreferences", "queryScheduleRange", "queryPreferences"),
             draft(), review(),
         ]))
         ctx = turn_context()
-        await self.run_graph(model, context=ctx, service=service, mcp=mcp)
+        await self.run_graph(model, context=ctx, service=service, mcp=mcp, review_required=True)
+        self.assertEqual(3, model.chat.await_count)
+        self.assertIsNone(model.chat.call_args_list[1].kwargs["tools"])
+        self.assertIsNone(model.chat.call_args_list[2].kwargs["tools"])
         self.assertEqual([("queryScheduleRange", day_range().model_dump(mode="json"), "secret-token")], mcp.calls)
         service.memories.assert_awaited_once_with(7, "安排英语复习")
-        messages = model.chat.call_args_list[2].args[0]
+        messages = model.chat.call_args_list[1].args[0]
         results = [message for message in messages if message["role"] == "tool"]
-        self.assertEqual(["call-0", "call-1", "again-0", "again-1"],
+        self.assertEqual(["call-0", "call-1", "call-2", "call-3"],
                          [message["tool_call_id"] for message in results])
         self.assertNotIn("privateField", str(results))
         self.assertNotIn("BEHAVIOR_PATTERN", str(results))
@@ -166,50 +168,61 @@ class PlanningGraphTests(unittest.IsolatedAsyncioTestCase):
                     await self.run_graph(SimpleNamespace(chat=AsyncMock(return_value=response)), mcp=mcp)
                 self.assertEqual([], mcp.calls)
 
-    async def test_format_and_past_date_errors_are_repaired_before_semantic_review(self):
+    async def test_format_and_past_date_errors_stop_without_model_repair(self):
         for response in (AssistantMessage(content="not json"), draft(day=today() - timedelta(days=1))):
             with self.subTest(response=response):
                 model = SimpleNamespace(chat=AsyncMock(side_effect=[response, draft(), review()]))
                 ctx = turn_context()
-                await self.run_graph(model, context=ctx)
-                self.assertEqual(3, model.chat.await_count)
-                self.assertIn("校验反馈", model.chat.call_args_list[1].args[0][-1]["content"])
-                self.assertTrue(any(step.label == "反馈修正规划" for step in ctx.agent_steps))
+                with self.assertRaises(BusinessException) as caught:
+                    await self.run_graph(model, context=ctx, review_required=True)
+                self.assertEqual(ErrorCode.PLAN_INVALID.code, caught.exception.code)
+                model.chat.assert_awaited_once()
+                self.assertFalse(any(step.label in {"反馈修正规划", "审查重新规划"} for step in ctx.agent_steps))
 
-    async def test_semantic_feedback_keeps_requirements_and_reference_evidence(self):
+    async def test_replanning_review_keeps_evidence_and_rejects_without_repair_or_second_review(self):
         issues = [{"category": category, "message": f"修正{category}问题"}
                   for category in ("constraint", "knowledge", "schedule")]
         model = SimpleNamespace(chat=AsyncMock(side_effect=[draft(), review(*issues), draft("修正后"), review()]))
         ctx = turn_context()
-        plan = await self.run_graph(model, context=ctx, references="[笔记 / 方法] 每天复习单词")
-        self.assertEqual("修正后", plan.todos[0].title)
-        correction = model.chat.call_args_list[2].args[0][-1]["content"]
+        with self.assertRaises(BusinessException) as caught:
+            await self.run_graph(model, context=ctx, review_required=True, previous_plan="原草稿",
+                                 references="[笔记 / 方法] 每天复习单词")
+        self.assertEqual(ErrorCode.PLAN_REVIEW_REJECTED.code, caught.exception.code)
+        self.assertEqual(2, model.chat.await_count)
         for issue in issues:
-            self.assertIn(issue["message"], correction)
-        for index in (1, 3):
-            payload = json.loads(model.chat.call_args_list[index].args[0][1]["content"])
-            self.assertEqual("安排英语复习", payload["requirement"])
-            self.assertIn("每天复习单词", payload["references"])
-        validation = [step for step in ctx.agent_steps if step.label == "校验规划约束"]
-        self.assertEqual(["error", "success"], [step.status for step in validation])
+            self.assertIn(issue["message"], str(caught.exception))
+        payload = json.loads(model.chat.call_args_list[1].args[0][1]["content"])
+        self.assertEqual("安排英语复习", payload["requirement"])
+        self.assertEqual("原草稿", payload["previousPlan"])
+        self.assertIn("每天复习单词", payload["references"])
+        validation = [step for step in ctx.agent_steps if step.label == "审查重新规划"]
+        self.assertEqual(["error"], [step.status for step in validation])
 
     async def test_invalid_review_protocol_never_counts_as_passed(self):
         for raw in ('{}', '{"issues":"ok"}', '{"issues":[],"passed":false}', '不是 JSON'):
             with self.subTest(raw=raw):
                 model = SimpleNamespace(chat=AsyncMock(side_effect=[draft(), AssistantMessage(content=raw)]))
                 with self.assertRaises(BusinessException) as caught:
-                    await self.run_graph(model)
+                    await self.run_graph(model, review_required=True)
                 self.assertEqual(ErrorCode.PLAN_REVIEW_INVALID.code, caught.exception.code)
 
-    async def test_semantic_rejections_stop_at_total_model_budget(self):
-        issue = {"category": "constraint", "message": "仍未满足明确要求"}
-        model = SimpleNamespace(chat=AsyncMock(side_effect=[draft(), review(issue)] * 3))
+    async def test_tool_generation_and_optional_review_respect_model_budgets(self):
+        for review_required in (False, True):
+            with self.subTest(review_required=review_required):
+                model = SimpleNamespace(chat=AsyncMock(side_effect=[tool_calls("queryScheduleRange"), draft(), review()]))
+                ctx = turn_context()
+                await self.run_graph(model, context=ctx, review_required=review_required)
+                self.assertEqual(MAX_PLAN_MODEL_ROUNDS + int(review_required), model.chat.await_count)
+                self.assertEqual(model.chat.await_count, ctx.rounds)
+                self.assertEqual(int(review_required), sum(step.label == "审查重新规划" for step in ctx.agent_steps))
+
+    async def test_tools_in_review_are_rejected_without_more_model_calls(self):
+        model = SimpleNamespace(chat=AsyncMock(side_effect=[draft(), tool_calls("queryPreferences")]))
         ctx = turn_context()
         with self.assertRaises(BusinessException) as caught:
-            await self.run_graph(model, context=ctx)
-        self.assertEqual(ErrorCode.PLAN_LOOP_EXHAUSTED.code, caught.exception.code)
-        self.assertEqual(MAX_PLAN_MODEL_ROUNDS, model.chat.await_count)
-        self.assertEqual("规划循环达到上限", ctx.agent_steps[-1].label)
+            await self.run_graph(model, context=ctx, review_required=True)
+        self.assertEqual(ErrorCode.PLAN_REVIEW_INVALID.code, caught.exception.code)
+        self.assertEqual(2, model.chat.await_count)
 
     async def test_endless_tool_requests_stop_and_backend_query_is_not_repeated(self):
         mcp = Mcp()
@@ -219,7 +232,7 @@ class PlanningGraphTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BusinessException) as caught:
             await self.run_graph(model, mcp=mcp)
         self.assertEqual(ErrorCode.PLAN_LOOP_EXHAUSTED.code, caught.exception.code)
-        self.assertEqual(5, model.chat.await_count)
+        self.assertEqual(2, model.chat.await_count)
         self.assertIsNone(model.chat.call_args_list[-1].kwargs["tools"])
         self.assertEqual(1, len(mcp.calls))
 
@@ -234,7 +247,9 @@ class PlanningGraphTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(ErrorCode.MCP_AUTH_FAILED.code, caught.exception.code)
                     self.assertEqual(1, model.chat.await_count)
                 else:
-                    await self.run_graph(model, mcp=mcp)
+                    with self.assertRaises(BusinessException) as caught:
+                        await self.run_graph(model, mcp=mcp)
+                    self.assertEqual(ErrorCode.PLAN_CONTEXT_UNAVAILABLE.code, caught.exception.code)
                     tool_result = json.loads(model.chat.call_args_list[1].args[0][-1]["content"])
                     self.assertEqual(code, tool_result["error"])
                     self.assertNotIn("todos", tool_result)
@@ -244,17 +259,22 @@ class PlanningGraphTests(unittest.IsolatedAsyncioTestCase):
         for result in ({"todos": "invalid"}, {"todos": [{"todoId": 1, "title": "缺少日期"}]}):
             with self.subTest(result=result):
                 model = SimpleNamespace(chat=AsyncMock(side_effect=[tool_calls("queryScheduleRange"), draft(), review()]))
-                await self.run_graph(model, mcp=Mcp(result))
+                with self.assertRaises(BusinessException) as caught:
+                    await self.run_graph(model, mcp=Mcp(result))
+                self.assertEqual(ErrorCode.PLAN_CONTEXT_UNAVAILABLE.code, caught.exception.code)
                 evidence = json.loads(model.chat.call_args_list[1].args[0][-1]["content"])
                 self.assertEqual("INVALID_RESPONSE", evidence["error"])
 
     async def test_repeated_failed_query_uses_error_summary_and_does_not_retry_backend(self):
         mcp = Mcp(failure=McpClientError("BUSINESS_ERROR", "private backend error"))
         model = SimpleNamespace(chat=AsyncMock(side_effect=[
-            tool_calls("queryScheduleRange"), tool_calls("queryScheduleRange", prefix="again"), draft(), review(),
+            tool_calls("queryScheduleRange", "queryScheduleRange"), draft(),
         ]))
         ctx = turn_context()
-        await self.run_graph(model, context=ctx, mcp=mcp)
+        with self.assertRaises(BusinessException) as caught:
+            await self.run_graph(model, context=ctx, mcp=mcp)
+        self.assertEqual(ErrorCode.PLAN_CONTEXT_UNAVAILABLE.code, caught.exception.code)
+        self.assertEqual(2, model.chat.await_count)
         self.assertEqual(1, len(mcp.calls))
         steps = [step for step in ctx.agent_steps if step.kind == "tool"]
         self.assertEqual(["error", "error"], [step.status for step in steps])
@@ -264,7 +284,7 @@ class PlanningGraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_cache_and_identity_are_isolated_between_users(self):
         mcp = Mcp()
         service = planning_service()
-        model = SimpleNamespace(chat=AsyncMock(side_effect=[tool_calls("queryScheduleRange"), draft(), review()] * 2))
+        model = SimpleNamespace(chat=AsyncMock(side_effect=[tool_calls("queryScheduleRange"), draft()] * 2))
         graph = PlanningGraph(model, service, lambda: mcp)
         for user_id, token in ((7, "token-a"), (8, "token-b")):
             ctx = TurnContext(token=token, flow_state=SimpleNamespace(), started=perf_counter())
@@ -279,12 +299,12 @@ class PlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     pending=PendingTask(task="旧需求", draft_id=11, plan_preview="旧草稿"),
                     signal=UserSignal.NEW_PLAN, planning_range=changes.pop("planning_range", day_range()), **changes)
 
-    async def test_references_retrieved_once_before_model_and_reused_during_repairs(self):
+    async def test_references_retrieved_once_and_initial_planning_has_no_model_review(self):
         hit = SimpleNamespace(payload=SimpleNamespace(source="笔记", section="复习", text="每天背单词"))
         documents = SimpleNamespace(search=AsyncMock(return_value=[hit]))
         service = planning_service()
         model = SimpleNamespace(chat=AsyncMock(side_effect=[
-            draft(), review({"category": "knowledge", "message": "缺少背单词任务"}), draft("背单词"), review(),
+            draft("背单词"),
         ]))
         node = PlanNode(service, model, documents, EmptyScheduleMcp)
         state, ctx = self.state(document_ids=[42]), turn_context()
@@ -293,6 +313,7 @@ class PlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(11, state["pending"].draft_id)
         documents.search.assert_awaited_once_with(7, [42], "参考文章学习英语")
         service.save_draft.assert_awaited_once()
+        model.chat.assert_awaited_once()
         self.assertIn("背单词", service.save_draft.call_args.args[3].todos[0].title)
         for call in model.chat.call_args_list:
             self.assertIn("每天背单词", str(call.args[0]))
@@ -300,14 +321,14 @@ class PlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(labels.index("检索引用文档"), labels.index("制定规划"))
         self.assertEqual(1, labels.count("检索引用文档"))
 
-    async def test_failed_loop_preserves_old_draft_and_does_not_save(self):
+    async def test_invalid_generation_preserves_old_draft_and_does_not_retry(self):
         service = planning_service()
         model = SimpleNamespace(chat=AsyncMock(return_value=AssistantMessage(content="{}")))
         state = self.state()
         with self.assertRaises(BusinessException) as caught:
             await PlanNode(service, model, mcp_factory=EmptyScheduleMcp)(state, turn_context())
-        self.assertEqual(ErrorCode.PLAN_LOOP_EXHAUSTED.code, caught.exception.code)
-        self.assertEqual(3, model.chat.await_count)
+        self.assertEqual(ErrorCode.PLAN_INVALID.code, caught.exception.code)
+        self.assertEqual(1, model.chat.await_count)
         service.save_draft.assert_not_awaited()
         self.assertEqual("旧草稿", state["pending"].plan_preview)
 
@@ -325,8 +346,10 @@ class PlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
             return disconnected
 
         ctx = turn_context(is_disconnected=is_disconnected)
+        current = self.state()
+        current["signal"] = UserSignal.MODIFY
         with self.assertRaises(asyncio.CancelledError):
-            await PlanNode(service, SimpleNamespace(chat=chat), mcp_factory=EmptyScheduleMcp)(self.state(), ctx)
+            await PlanNode(service, SimpleNamespace(chat=chat), mcp_factory=EmptyScheduleMcp)(current, ctx)
         service.save_draft.assert_not_awaited()
 
     async def test_cancelling_active_bulk_query_closes_mcp_and_preserves_draft(self):
@@ -351,23 +374,22 @@ class PlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(closed.is_set())
         service.save_draft.assert_not_awaited()
 
-    async def test_sse_publishes_retrieval_validation_repairs_and_commits_once(self):
+    async def test_sse_uses_three_total_model_calls_and_commits_once_without_summary_or_repair(self):
         repo, service = MemoryFlowRepository(), planning_service()
         hit = SimpleNamespace(payload=SimpleNamespace(source="文章", section="正文", text="每天复习单词"))
         documents = SimpleNamespace(search=AsyncMock(return_value=[hit]))
         model = SimpleNamespace(chat=AsyncMock(side_effect=[
             tool_calls("queryScheduleRange", "queryPreferences"), draft(),
-            review({"category": "constraint", "message": "private validation details"}),
-            draft("修正后"), review(),
         ]))
         mcp = Mcp()
+        route = SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=UserSignal.NEW_PLAN, planning_range=day_range())))
+        summary = AsyncMock(return_value={"context_compressed": True})
 
         def factory(**kwargs):
             chat = ChatService(repo)
             chat.document_references = AsyncMock(return_value=[])
             graph = ConversationGraph(**kwargs, chat_service=chat,
-                summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))),
-                route_agent=SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=UserSignal.NEW_PLAN, planning_range=day_range()))))
+                summary_node=summary, route_agent=route)
             graph.handlers[AgentType.PLANNER] = PlanNode(service, model, documents, lambda: mcp)
             return graph
 
@@ -376,20 +398,60 @@ class PlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "secret-token", AsyncMock(return_value=False))]
         self.assertIsInstance(events[-2], ResultEvent)
         self.assertIsInstance(events[-1], DoneEvent)
-        self.assertEqual(5, events[-1].data.rounds)
+        self.assertEqual(2, events[-1].data.rounds)
+        self.assertEqual(3, route.route.await_count + model.chat.await_count)
+        summary.assert_not_awaited()
         self.assertEqual(1, len(repo.saved))
         service.save_draft.assert_awaited_once()
         documents.search.assert_awaited_once()
         steps = [event.data for event in events if isinstance(event, AgentStepEvent)]
-        for label in ("检索引用文档", "查询规划区间日程", "查询用户偏好", "校验规划约束", "反馈修正规划", "保存规划草稿"):
+        for label in ("检索引用文档", "查询规划区间日程", "查询用户偏好", "检查规划结构与日期", "保存规划草稿"):
             self.assertIn(label, [step.label for step in steps])
-        self.assertTrue(any(step.label == "校验规划约束" and step.status == "error" for step in steps))
+        self.assertTrue(any(step.label == "检查规划结构与日期" and step.status == "success" for step in steps))
+        self.assertFalse(any(step.label in {"审查重新规划", "反馈修正规划"} for step in steps))
         public = str([step.model_dump() for step in steps])
         self.assertNotIn("secret-token", public)
         self.assertNotIn("private validation details", public)
         reply = "".join(event.data.delta for event in events if isinstance(event, AssistantDeltaEvent))
-        self.assertIn("修正后", reply)
+        self.assertIn("英语复习", reply)
         self.assertNotIn('"todos"', reply)  # 原始 JSON 草稿不泄漏到正文流。
         persisted = repo.saved[0][2]["agent_steps"]
         self.assertEqual("保存规划草稿", persisted[-1].label)
         self.assertTrue(all(step.status != "running" for step in persisted))
+
+    async def test_replanning_uses_four_total_calls_and_preserves_old_draft_on_rejection(self):
+        for rejected in (False, True):
+            with self.subTest(rejected=rejected):
+                repo, service = MemoryFlowRepository(), planning_service()
+                old = await repo.get_or_create(7, "s")
+                old.stage, old.pending_task = "PLAN", "原规划需求"
+                old.pending_draft_id, old.pending_payload = 11, "旧草稿"
+                issue = {"category": "schedule", "message": "任务与已有日程冲突"}
+                model = SimpleNamespace(chat=AsyncMock(side_effect=[
+                    tool_calls("queryScheduleRange", "queryPreferences"), draft(),
+                    review(issue) if rejected else review(),
+                ]))
+                route = SimpleNamespace(route=AsyncMock(return_value=RouteDecision(
+                    signal=UserSignal.MODIFY, planning_range=day_range())))
+                summary = AsyncMock(return_value={"context_compressed": True})
+                graph = ConversationGraph(user_id=7, session_id="s", chat_service=ChatService(repo),
+                    route_agent=route, summary_node=summary,
+                    handlers={AgentType.PLANNER: PlanNode(service, model, mcp_factory=Mcp)})
+                if rejected:
+                    with self.assertRaises(BusinessException) as caught:
+                        await graph.run_turn("重新调整原来的规划", "secret-token")
+                    self.assertEqual(ErrorCode.PLAN_REVIEW_REJECTED.code, caught.exception.code)
+                    service.save_draft.assert_not_awaited()
+                    self.assertEqual(11, old.pending_draft_id)
+                    self.assertEqual("旧草稿", old.pending_payload)
+                    self.assertEqual([], repo.saved)
+                    self.assertEqual(0, old.processing)
+                else:
+                    result = await graph.run_turn("重新调整原来的规划", "secret-token")
+                    self.assertEqual(19, result.pending.draft_id)
+                    service.save_draft.assert_awaited_once()
+                    self.assertEqual(1, len(repo.saved))
+                self.assertEqual(4, route.route.await_count + model.chat.await_count)
+                summary.assert_not_awaited()
+                payload = json.loads(model.chat.call_args_list[2].args[0][1]["content"])
+                self.assertEqual("旧草稿", payload["previousPlan"])

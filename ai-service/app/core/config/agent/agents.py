@@ -39,7 +39,7 @@ class ChatAgentConfig(AgentConfig):
 class RouteAgentConfig(AgentConfig):
     provider: str = "aliyun"
     temperature: float | None = 0.1
-    timeout_seconds: float = Field(default=20, gt=0, validation_alias="ROUTE_REQUEST_TIMEOUT")
+    timeout_seconds: float = Field(default=60, gt=0, validation_alias="ROUTE_REQUEST_TIMEOUT")
     model_config = SettingsConfigDict(env_prefix="ROUTE_")
 
 

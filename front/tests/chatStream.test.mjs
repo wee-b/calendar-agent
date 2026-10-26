@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { consumeChatStream } from '../src/api/chatStream.ts';
 import { playChatStream } from '../src/api/chatPlayback.ts';
-import { timelineNarration, createAgentStepPresenter } from '../src/api/agentTimeline.ts';
+import { timelineAction, timelineNarration, createAgentStepPresenter } from '../src/api/agentTimeline.ts';
 import { createStreamTextPresenter } from '../src/utils/streamText.ts';
 
 const event = (name, data) => `event: ${name}\r\ndata: ${JSON.stringify(data)}\r\n\r\n`;
@@ -48,6 +48,20 @@ test('planning validation and repair summaries remain visible in agent narration
     assert.equal(timelineNarration({ ...step, label: '反馈修正规划', status: 'success',
         resultSummary: '已将 2 项问题反馈给规划模型。' }), '已将 2 项问题反馈给规划模型。');
     assert.equal(timelineNarration({ ...step, narration: '用户可见的规划说明。' }), '用户可见的规划说明。');
+});
+
+test('planning analysis does not claim draft completion and summary states are not prefixed', () => {
+    const step = { id: 1, kind: 'agent', label: '制定规划', status: 'success', elapsedMs: 100 };
+    assert.equal(timelineNarration(step), '已完成本轮规划分析。');
+    assert.equal(timelineNarration({ ...step, status: 'running' }), '正在分析规划需求…');
+    const clarification = '还需补充关键信息，回答后将继续生成并校验规划。';
+    assert.equal(timelineNarration({ ...step, resultSummary: clarification }), clarification);
+    for (const label of ['规划日期尚未确认', '等待用户补充条件', '复用已读取的用户偏好']) {
+        assert.equal(timelineAction({ ...step, kind: 'summary', label }), label);
+    }
+    assert.equal(timelineAction({ ...step, kind: 'tool', label: '读取用户偏好' }), '已读取用户偏好');
+    assert.equal(timelineAction({ ...step, kind: 'tool', label: '读取用户偏好', status: 'running' }), '正在读取用户偏好');
+    assert.equal(timelineAction({ ...step, kind: 'summary', label: '保存规划草稿', status: 'error' }), '执行失败：保存规划草稿');
 });
 
 test('Python SSE handles fragmented UTF-8 and emits only reply text', async () => {

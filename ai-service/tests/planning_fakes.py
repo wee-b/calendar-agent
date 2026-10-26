@@ -1,4 +1,4 @@
-"""保留已有节点测试的生成断言，为新增的独立校验调用提供固定结果。"""
+"""规划节点测试替身；普通规划仅生成，重新规划的一次审查返回通过。"""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock

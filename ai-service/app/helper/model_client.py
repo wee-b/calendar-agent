@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-from time import perf_counter
 from typing import Any, AsyncIterator
 
 import httpx
@@ -13,7 +11,7 @@ from pydantic import ValidationError
 from app.core.config.agent.agents import AgentConfig, chat_config
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException
-from app.core.model_logging import log_model_interruption
+from app.core.model_logging import ModelCallTrace
 from app.schemas.chat.model_stream import AssistantMessage, ModelDelta
 
 
@@ -62,32 +60,32 @@ class ModelClient:
         """非流式调用；返回前校验模型消息，拒绝空正文且无工具调用的响应。"""
 
         url, api_key, model_name, timeout = self._request_options()
-        started = perf_counter()
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    url,
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json=self._payload(model_name, messages, tools, False),
-                )
-        except httpx.TimeoutException as exc:
-            log_model_interruption(self.config, "chat", started, exc)
-            raise BusinessException(ErrorCode.MODEL_TIMEOUT) from exc
-        except asyncio.CancelledError as exc:
-            log_model_interruption(self.config, "chat", started, exc)
-            raise
-        except httpx.RequestError as exc:
-            raise BusinessException(ErrorCode.MODEL_UNAVAILABLE) from exc
-        if not response.is_success:
-            raise BusinessException(ErrorCode.MODEL_HTTP_ERROR,
-                                    message=f"模型服务返回 HTTP {response.status_code}")
-        try:
-            message = AssistantMessage.model_validate(response.json()["choices"][0]["message"])
-        except (ValueError, KeyError, IndexError, TypeError, ValidationError) as exc:
-            raise BusinessException(ErrorCode.MODEL_RESPONSE_INVALID) from exc
-        if not message.content and not message.tool_calls:
-            raise BusinessException(ErrorCode.MODEL_EMPTY_ANSWER)
-        return message
+        with ModelCallTrace(self.config, "chat") as call:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json=self._payload(model_name, messages, tools, False),
+                    )
+                    call.response_received(response)
+            except httpx.TimeoutException as exc:
+                raise BusinessException(ErrorCode.MODEL_TIMEOUT) from exc
+            except httpx.RequestError as exc:
+                raise BusinessException(ErrorCode.MODEL_UNAVAILABLE) from exc
+            if not response.is_success:
+                raise BusinessException(ErrorCode.MODEL_HTTP_ERROR,
+                                        message=f"模型服务返回 HTTP {response.status_code}")
+            try:
+                body = response.json()
+                if isinstance(body, dict):
+                    call.capture_usage(body.get("usage"))
+                message = AssistantMessage.model_validate(body["choices"][0]["message"])
+            except (ValueError, KeyError, IndexError, TypeError, ValidationError) as exc:
+                raise BusinessException(ErrorCode.MODEL_RESPONSE_INVALID) from exc
+            if not message.content and not message.tool_calls:
+                raise BusinessException(ErrorCode.MODEL_EMPTY_ANSWER)
+            return message
 
     async def stream_chat(
         self, messages: list[dict[str, Any]],
@@ -96,62 +94,63 @@ class ModelClient:
         """逐个解析 SSE delta；取消请求时同步关闭上游 HTTP 流。"""
         url, api_key, model_name, timeout = self._request_options()
         completed = False
-        started = perf_counter()
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream(
-                    "POST", url,
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json=self._payload(model_name, messages, tools, True),
-                ) as response:
-                    if not response.is_success:
-                        raise BusinessException(ErrorCode.MODEL_HTTP_ERROR,
-                                                message=f"模型服务返回 HTTP {response.status_code}")
-                    data_lines: list[str] = []
-                    # 一个 SSE 事件可能由多行 data 组成，空行才表示本事件结束。
-                    async for line in response.aiter_lines():
-                        if line.startswith("data:"):
-                            data_lines.append(line[5:].lstrip())
-                            continue
-                        if line and not line.startswith(":"):
-                            continue
-                        if not data_lines:
-                            continue
-                        payload = "\n".join(data_lines)
-                        data_lines.clear()
-                        if payload == "[DONE]":
-                            completed = True
-                            break
-                        delta = self._parse_delta(payload)
-                        if delta is not None:
-                            yield delta
-                    if not completed and data_lines:
-                        payload = "\n".join(data_lines)
-                        if payload == "[DONE]":
-                            completed = True
-                        else:
-                            delta = self._parse_delta(payload)
+        with ModelCallTrace(self.config, "stream_chat") as call:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream(
+                        "POST", url,
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json=self._payload(model_name, messages, tools, True),
+                    ) as response:
+                        call.response_received(response)
+                        if not response.is_success:
+                            raise BusinessException(ErrorCode.MODEL_HTTP_ERROR,
+                                                    message=f"模型服务返回 HTTP {response.status_code}")
+                        data_lines: list[str] = []
+                        # 一个 SSE 事件可能由多行 data 组成，空行才表示本事件结束。
+                        async for line in response.aiter_lines():
+                            if line.startswith("data:"):
+                                data_lines.append(line[5:].lstrip())
+                                continue
+                            if line and not line.startswith(":"):
+                                continue
+                            if not data_lines:
+                                continue
+                            payload = "\n".join(data_lines)
+                            data_lines.clear()
+                            if payload == "[DONE]":
+                                completed = True
+                                break
+                            delta = self._parse_delta(payload, call)
                             if delta is not None:
+                                call.output_received(delta)
                                 yield delta
-        except httpx.TimeoutException as exc:
-            log_model_interruption(self.config, "stream_chat", started, exc)
-            raise BusinessException(ErrorCode.MODEL_TIMEOUT) from exc
-        except asyncio.CancelledError as exc:
-            log_model_interruption(self.config, "stream_chat", started, exc)
-            raise
-        except httpx.RequestError as exc:
-            raise BusinessException(ErrorCode.MODEL_UNAVAILABLE) from exc
-        if not completed:
-            raise BusinessException(ErrorCode.MODEL_STREAM_EARLY_END)
+                        if not completed and data_lines:
+                            payload = "\n".join(data_lines)
+                            if payload == "[DONE]":
+                                completed = True
+                            else:
+                                delta = self._parse_delta(payload, call)
+                                if delta is not None:
+                                    call.output_received(delta)
+                                    yield delta
+            except httpx.TimeoutException as exc:
+                raise BusinessException(ErrorCode.MODEL_TIMEOUT) from exc
+            except httpx.RequestError as exc:
+                raise BusinessException(ErrorCode.MODEL_UNAVAILABLE) from exc
+            if not completed:
+                raise BusinessException(ErrorCode.MODEL_STREAM_EARLY_END)
 
     @staticmethod
-    def _parse_delta(payload: str) -> ModelDelta | None:
+    def _parse_delta(payload: str, call: ModelCallTrace | None = None) -> ModelDelta | None:
         """把单个 SSE 数据块转为类型对象，并区分文本与工具片段错误。"""
 
         try:
             body = json.loads(payload)
             if isinstance(body, dict) and body.get("error"):
                 raise BusinessException(ErrorCode.MODEL_STREAM_ERROR)
+            if isinstance(body, dict) and call is not None:
+                call.capture_usage(body.get("usage"))
             choices = body["choices"]
             if not choices:
                 return None

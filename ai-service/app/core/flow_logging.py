@@ -30,6 +30,7 @@ class FlowTrace:
     session_details: dict = field(default_factory=dict)
     user_text: str = ""
     completed_chat: tuple[str, str] | None = None
+    model_calls: list[dict] = field(default_factory=list)
 
     def flush(self) -> None:
         elapsed = int((perf_counter() - self.started) * 1000)
@@ -39,6 +40,14 @@ class FlowTrace:
         _write(self, "会话流转", self.initial_stage, self.final_stage,
                session_details, self.session_level, elapsed)
         turn_details = {"路径": " → ".join(self.steps), "步骤数": len(self.steps)}
+        if self.model_calls:
+            turn_details["模型API调用"] = self.model_calls
+            turn_details["模型API统计"] = {
+                "count": len(self.model_calls),
+                **{status: sum(call["status"] == status for call in self.model_calls)
+                   for status in ("success", "timeout", "error", "cancelled")},
+                "elapsed_ms": round(sum(call["elapsed_ms"] for call in self.model_calls), 2),
+            }
         _write(self, "单轮流转", "START", self.step, turn_details, self.turn_level, elapsed)
         if self.completed_chat is not None:
             agent_label, answer = self.completed_chat
@@ -51,6 +60,19 @@ class FlowTrace:
 
 
 _current: ContextVar[FlowTrace | None] = ContextVar("flow_trace", default=None)
+
+
+def model_trace_context() -> dict:
+    """只公开本轮定位信息，不向模型日志传递对话或资料正文。"""
+    trace = _current.get()
+    return ({"user_id": trace.user_id, "session_id": trace.session_id,
+             "turn_id": trace.turn_id, "flow_step": trace.step} if trace else {})
+
+
+def record_model_call(call: dict, *, turn_id: str | None) -> None:
+    trace = _current.get()
+    if trace is not None and trace.turn_id == turn_id:
+        trace.model_calls.append(call)
 
 
 @contextmanager
@@ -160,6 +182,8 @@ def _turn_label(steps: list[str]) -> str:
             continue
         if name == "SUMMARY_CHECK":
             parts.append("检查上下文")
+        elif name == "SUMMARY_SKIPPED_PLAN":
+            continue
         elif name == "SUMMARY":
             parts.append("摘要及偏好提取")
         elif name == "SUMMARY_SAVED":
@@ -202,7 +226,7 @@ def _turn_label(steps: list[str]) -> str:
         elif name == "PLAN_INVALID":
             parts.append("规划校验失败")
         elif name == "PLAN_REVIEW":
-            parts.append("校验规划约束")
+            parts.append("审查重新规划")
         elif name == "PLAN_REPAIR":
             parts.append("反馈修正规划")
         elif name == "READ_TOOL_RETRY":
@@ -215,6 +239,10 @@ def _turn_label(steps: list[str]) -> str:
 def _write(trace: FlowTrace, scope: str, before: str, after: str,
            details: dict, level: int, elapsed: int) -> None:
     summary = _session_label(details) if scope == "会话流转" else _turn_label(trace.steps)
+    if stats := details.get("模型API统计"):
+        summary += (f" · 模型API={stats['count']}次(成功{stats['success']}/超时{stats['timeout']}"
+                    f"/失败{stats['error']}/取消{stats['cancelled']})"
+                    f" · API累计耗时={stats['elapsed_ms'] / 1000:.2f}秒")
     logger.log(level, "%s | 用户=%s 会话=%s 轮次=%s | %s → %s | %s | 耗时=%.2f秒",
                scope, trace.user_id, trace.session_id[:8], trace.turn_id[:8],
                before, after, summary, elapsed / 1000,
