@@ -14,6 +14,7 @@ from app.schemas.mcp import (
     JavaErrorResponse, JsonRpcResponse, McpCallResult, McpToolDefinition,
     McpToolFailure, McpToolList,
 )
+from app.service.tool_execution import attempt_timeout
 
 
 class JavaMcpClient:
@@ -78,6 +79,7 @@ class JavaMcpClient:
                 self._url,
                 headers={self._token_header_name: token},
                 json={"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+                **({"timeout": attempt_timeout.get()} if method == "tools/call" and attempt_timeout.get() is not None else {}),
             )
         except httpx.TimeoutException as exc:
             raise McpClientError("JAVA_TIMEOUT", "Java 工具服务响应超时", retryable=True) from exc

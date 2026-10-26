@@ -9,6 +9,26 @@ from app.repository.flow_state import FlowStateRepository
 from app.schemas.statemachine.flow import UserSignal
 
 
+class MemoryToolCallRepository:
+    """显式注入工具记录替身，单元测试不连接业务数据库。"""
+
+    def __init__(self):
+        self.rows = {}
+
+    async def start(self, values):
+        from app.core.exception.exceptions import BusinessException
+        from app.core.exception.error_code import ErrorCode
+        if values.get("operation_key") and any(
+            row.get("operation_key") == values["operation_key"] for row in self.rows.values()
+        ):
+            raise BusinessException(ErrorCode.MODEL_TOOL_DUPLICATE)
+        self.rows[values["attempt_id"]] = dict(values)
+
+    async def finish(self, attempt_id, values):
+        assert self.rows[attempt_id]["status"] == "running"
+        self.rows[attempt_id].update(values)
+
+
 class MemoryFlowRepository:
     resolve_stage = staticmethod(FlowStateRepository.resolve_stage)
     pending = staticmethod(FlowStateRepository.pending)
@@ -55,6 +75,7 @@ def http_conversation_fakes():
             await super().complete(state, stage, pending, agent, **round_data)
 
     with patch("app.service.context_summary.ContextSummaryService.snapshot", new=AsyncMock(return_value=None)), \
+         patch("app.all_graph.conversation_graph.ToolCallRepository", side_effect=MemoryToolCallRepository), \
          patch("app.service.chat.FlowStateRepository", return_value=Flow()), \
          patch("app.all_graph.nodes.route_node.RouteAgent.route",
                new=AsyncMock(return_value=RouteDecision(signal=UserSignal.NEW_QUERY))):

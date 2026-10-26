@@ -5,7 +5,7 @@ import unittest
 from datetime import timedelta
 from time import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.all_graph.conversation_graph import ConversationGraph
 from app.all_graph.nodes.execute_node import ExecuteNode
@@ -67,6 +67,11 @@ def restore(pending):
 
 
 class PlanningClarificationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from tests.conversation_fakes import MemoryToolCallRepository
+        self.enterContext(patch("app.all_graph.conversation_graph.ToolCallRepository",
+                                side_effect=MemoryToolCallRepository))
+
     async def test_tool_selection_and_clarification_publish_accurate_model_milestones(self):
         events = []
 

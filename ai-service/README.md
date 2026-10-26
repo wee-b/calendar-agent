@@ -15,7 +15,7 @@
 - 同步规划：仅接受当前用户、当前会话绑定的待同步草稿，通过新增的 `batchCreateTodos` MCP 工具调用 Java 的事务批量创建，再标记草稿已同步。部署时需同时更新 Java MCP。
 - Image：调用配置的图片模型生成示意图，修改时累计外观要求，始终保留对应的规划草稿。
 - 跨轮状态沿用 `yl_agent_flow_state` 的 `CHAT / PLAN / EXECUTE / IMAGE` 和版本认领；LangGraph 当前不启用 checkpointer。临时闲聊/查询保留待处理任务；拒绝清空任务。
-- 完整回复、会话统计、下一阶段和待处理任务在一个 MySQL 事务提交。写工具开始后的失败或断连保留 `processing=1`，防止重复确认触发重复写入。需人工核实日历结果后修复状态；尚无自动恢复或幂等账本。
+- 完整回复、会话统计、下一阶段和待处理任务在一个 MySQL 事务提交。写工具开始后的失败或断连保留 `processing=1`，防止重复确认触发重复写入。`yl_tool_call` 独立记录每次工具尝试及写结果待核实状态，需人工核实日历结果后修复状态；尚无 Java 业务幂等或自动恢复。
 
 Java 业务写入与 Python 草稿/状态提交不能组成同一个本地事务；批量创建保证 Java 端整批成功或回滚，跨服务响应丢失仍按结果待核实处理。Java 旧 AI 和记忆模块已删除，保留 `module/mcp` 与业务模块；偏好模型抽取和上下文摘要由 Python 实现。
 
@@ -43,6 +43,8 @@ MEMORY_SUMMARY_TIMEOUT_SECONDS=120
 ```
 
 只读 MCP 工具的瞬态错误由 Python 最多尝试 `MCP_READ_RETRY_ATTEMPTS` 次，间隔 `MCP_READ_RETRY_DELAY_MS` 毫秒。Java MCP 每次请求只执行一次并返回 `retryable` 标记；写工具不自动重试。
+
+工具调用统一受单次超时、单轮实际尝试次数和累计耗时预算约束，重试同样计费，并发查询预留额度。已有数据库发布前执行 `sql/migrations/20261026_tool_call.sql`。新增登录用户自己的 `GET /chat/tool-calls` 明细和 `GET /chat/tool-stats` 统计接口，提供成功率、平均/P95耗时及单轮调用次数。默认缺省超时5000毫秒、每轮最多12次、累计60000毫秒；配置和写入核实边界见 [工具调用评估与控制](../docs/12-tool-execution-control.md)。
 
 代码按职责分层：`app/api/routers` 处理 HTTP，`app/core` 管理配置、中间件、异常和响应，`app/cache` 校验 Redis token 与缓存 Embedding，`app/all_graph` 编排对话与模型节点，`app/api/conversation_transport.py` 适配 HTTP/SSE，`app/service` 封装数据操作，`app/repository` 访问 MySQL 与 Qdrant，`app/helper` 封装模型与 Java 客户端，`app/db` 提供连接，`app/schemas` 定义请求与响应。接口入口统一在 `app/api/endpoints.py` 注册。
 

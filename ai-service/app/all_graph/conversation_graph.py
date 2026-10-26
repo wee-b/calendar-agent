@@ -33,6 +33,8 @@ from app.schemas.chat.model_stream import (
 from app.schemas.chat.timeline import AgentStep
 from app.schemas.chat.history import DocumentReference
 from app.schemas.plan.planning_tools import PlanningRange
+from app.repository.tool_call import ToolCallRepository
+from app.service.tool_execution import ToolExecutor, bind_tool_executor, get_tool_executor
 
 
 _AGENT_LABELS = {
@@ -224,11 +226,13 @@ class ConversationGraph:
         route_agent: RouteAgent | None = None,
         transitions: ChatTransitionTable | None = None,
         summary_node=None,
+        tool_repository_factory=None,
     ) -> None:
         if user_id <= 0 or not session_id or not session_id.strip():
             raise ValueError("用户和会话不能为空")
         self.user_id = user_id
         self.session_id = session_id
+        self.tool_repository_factory = tool_repository_factory or ToolCallRepository
         self.chat_service = chat_service if chat_service is not None else ChatService()
         self.route_agent = route_agent if route_agent is not None else RouteAgent(chat_service=self.chat_service)
         self.transitions = transitions if transitions is not None else ChatTransitionTable()
@@ -299,6 +303,7 @@ class ConversationGraph:
         # 后续实现 chat/plan/execute/image 时，在构造图时传入 handlers 映射即可。
         async def run(state: ConversationState, runtime: Runtime[TurnContext]) -> dict:
             log_turn_step(agent.name)
+            get_tool_executor().agent = agent.name.lower()
             handler = self.handlers.get(agent)
             if handler is None:
                 raise RuntimeError(f"{agent.name} Agent 节点尚未接入")
@@ -353,7 +358,11 @@ class ConversationGraph:
         document_ids: list[int] | None = None,
     ) -> ConversationResult:
         """为一次用户输入绑定追踪 ID，普通和流式请求使用同一日志链路。"""
-        with bind_flow_trace(self.user_id, self.session_id) as trace:
+        with bind_flow_trace(self.user_id, self.session_id) as trace, bind_tool_executor(ToolExecutor(
+            user_id=self.user_id, session_id=self.session_id,
+            repository_factory=self.tool_repository_factory,
+        )) as tool_executor:
+            tool_executor.turn_id = trace.turn_id
             record_chat_input(message)
             log_turn_step("RECEIVED", 用户输入=text_preview(message), 输入长度=len(message), 流式=emit is not None)
             try:
@@ -390,6 +399,9 @@ class ConversationGraph:
             raise BusinessException(ErrorCode.CHAT_SESSION_PROCESSING)
         context = TurnContext(token=token, flow_state=flow_state, emit=emit,
                               is_disconnected=is_disconnected, started=started)
+        tool_executor = get_tool_executor()
+        tool_executor.operation_scope = f"claim:{getattr(flow_state, 'version', 0)}"
+        tool_executor.mark_write_started = context.mark_write_started
         try:
             references = await self.chat_service.document_references(self.user_id, document_ids) if document_ids else []
             # route -> transition -> 非规划任务压缩上下文 -> Agent -> commit。

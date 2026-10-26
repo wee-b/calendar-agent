@@ -90,6 +90,7 @@ Java 默认仅启用 `dev` profile，遗留本地 `application-unknown.yml` 不�
 | `yl_ai_session` | 会话列表、最近消息和上下文消息计数 |
 | `yl_plan_draft` | Planner 生成的待同步规划草稿 |
 | `yl_agent_flow_state` | 会话主流程 CHAT/PLAN/EXECUTE/IMAGE、任务产物及版本认领 |
+| `yl_tool_call` | 工具实际尝试、耗时指标和写结果待核实记录 |
 | `yl_user_memory` | 用户长期偏好和长期目标记忆 |
 | `yl_chat_context_summary` | 长会话上下文摘要，用于压缩 Agent 历史输入 |
 | `yl_file`、`yl_document` | 用户上传文档或生成图片的文件记录，以及文档切片 |

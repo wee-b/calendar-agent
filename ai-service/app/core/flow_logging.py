@@ -31,6 +31,7 @@ class FlowTrace:
     user_text: str = ""
     completed_chat: tuple[str, str] | None = None
     model_calls: list[dict] = field(default_factory=list)
+    tool_calls: list[dict] = field(default_factory=list)
 
     def flush(self) -> None:
         elapsed = int((perf_counter() - self.started) * 1000)
@@ -40,6 +41,14 @@ class FlowTrace:
         _write(self, "会话流转", self.initial_stage, self.final_stage,
                session_details, self.session_level, elapsed)
         turn_details = {"路径": " → ".join(self.steps), "步骤数": len(self.steps)}
+        turn_details["工具调用统计"] = {
+            "count": len(self.tool_calls),
+            "logical_count": len({call["logical_call_id"] for call in self.tool_calls}),
+            **{status: sum(call["status"] == status for call in self.tool_calls)
+               for status in ("success", "timeout", "error", "cancelled")},
+            "elapsed_ms": round(sum(call["elapsed_ms"] for call in self.tool_calls), 3),
+        }
+        turn_details["工具调用"] = self.tool_calls
         if self.model_calls:
             turn_details["模型API调用"] = self.model_calls
             turn_details["模型API统计"] = {
@@ -73,6 +82,12 @@ def record_model_call(call: dict, *, turn_id: str | None) -> None:
     trace = _current.get()
     if trace is not None and trace.turn_id == turn_id:
         trace.model_calls.append(call)
+
+
+def record_tool_call(call: dict, *, turn_id: str | None) -> None:
+    trace = _current.get()
+    if trace is not None and trace.turn_id == turn_id:
+        trace.tool_calls.append(call)
 
 
 @contextmanager
@@ -243,6 +258,10 @@ def _write(trace: FlowTrace, scope: str, before: str, after: str,
         summary += (f" · 模型API={stats['count']}次(成功{stats['success']}/超时{stats['timeout']}"
                     f"/失败{stats['error']}/取消{stats['cancelled']})"
                     f" · API累计耗时={stats['elapsed_ms'] / 1000:.2f}秒")
+    if stats := details.get("工具调用统计"):
+        summary += (f" · 工具调用={stats['count']}次(成功{stats['success']}/超时{stats['timeout']}"
+                    f"/失败{stats['error']}/取消{stats['cancelled']})"
+                    f" · 工具累计耗时={stats['elapsed_ms'] / 1000:.2f}秒")
     logger.log(level, "%s | 用户=%s 会话=%s 轮次=%s | %s → %s | %s | 耗时=%.2f秒",
                scope, trace.user_id, trace.session_id[:8], trace.turn_id[:8],
                before, after, summary, elapsed / 1000,

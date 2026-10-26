@@ -6,7 +6,7 @@ import unittest
 from datetime import timedelta
 from time import perf_counter
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.all_graph.conversation_graph import ConversationGraph, TurnContext
 from app.all_graph.nodes.plan_node import PlanNode
@@ -294,6 +294,11 @@ class PlanningGraphTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from tests.conversation_fakes import MemoryToolCallRepository
+        self.enterContext(patch("app.all_graph.conversation_graph.ToolCallRepository",
+                                side_effect=MemoryToolCallRepository))
+
     def state(self, **changes):
         return dict(user_id=7, session_id="s", message="参考文章学习英语", task="参考文章学习英语",
                     pending=PendingTask(task="旧需求", draft_id=11, plan_preview="旧草稿"),

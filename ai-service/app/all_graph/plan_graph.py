@@ -31,6 +31,7 @@ from app.schemas.plan.planning_tools import (
 )
 from app.service.planning import PlanningService
 from app.service.read_only_tool import call_read_only_tool
+from app.service.tool_execution import get_tool_executor
 
 
 MAX_PLAN_MODEL_ROUNDS = 2  # 工具选择及最终生成；可选审查另计一次。
@@ -212,16 +213,25 @@ class PlanningGraph:
                     content = evidence[name]
                 elif name == QUERY_SCHEDULE_RANGE_TOOL_NAME:
                     async with self.mcp_factory() as mcp:
-                        result = await call_read_only_tool(mcp, name, args, runtime.context.token)
+                        result = await call_read_only_tool(mcp, name, args, runtime.context.token,
+                                                           logical_call_id=call_id)
                     content = result.model_dump(mode="json")
                 else:
-                    content = self._preferences(await self.planning.memories(
-                        state["user_id"], state["requirement"]))
+                    async def lookup_preferences():
+                        return self._preferences(await self.planning.memories(
+                            state["user_id"], state["requirement"]))
+                    content = await get_tool_executor().execute(None, name, {}, runtime.context.token,
+                        read_only=True, logical_call_id=call_id, operation=lookup_preferences, allow_retry=False)
             except asyncio.CancelledError:
                 await turn.send(ToolResultEvent(data=ToolResultData(
                     call_id=call_id, status="error", summary="查询已取消。")))
                 raise
             except Exception as exc:
+                if isinstance(exc, BusinessException) and exc.code in {
+                    ErrorCode.TOOL_CALL_LIMIT.code, ErrorCode.TOOL_BUDGET_EXHAUSTED.code,
+                    ErrorCode.TOOL_RECORD_FAILED.code,
+                }:
+                    raise
                 code = exc.code if isinstance(exc, McpClientError) else "LOOKUP_FAILED"
                 await turn.send(ToolResultEvent(data=ToolResultData(
                     call_id=call_id, status="error", code=str(code), summary="查询失败，未获得有效结果。")))

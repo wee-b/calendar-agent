@@ -28,6 +28,7 @@ from app.schemas.chat.tools import (
 from app.schemas.chat.timeline import summarize_tool_result
 from app.service.model_stream import StreamResponseAccumulator
 from app.service.read_only_tool import call_read_only_tool
+from app.service.tool_execution import get_tool_executor
 
 
 class ChatState(TypedDict):
@@ -168,6 +169,7 @@ class ChatGraph:
                     raise BusinessException(ErrorCode.MODEL_TOOL_DATE_INVALID)
                 validated.append((call.id, args))
 
+            get_tool_executor().check_batch(len(validated))
             for call_id, _ in validated:
                 log_turn_step("CHAT_TOOL", 模型轮次=state["rounds"], 工具=DAY_DETAIL_TOOL_NAME,
                               call_id=call_id)
@@ -177,12 +179,13 @@ class ChatGraph:
                 )).model_dump(mode="json", by_alias=True))
             limiter = asyncio.Semaphore(MAX_PARALLEL_READ_TOOLS)
             async with self.mcp_factory() as mcp:
-                async def query(args: DayDetailArguments):
+                async def query(call_id, args: DayDetailArguments):
                     async with limiter:
-                        return await call_read_only_tool(mcp, DAY_DETAIL_TOOL_NAME, args, token)
+                        return await call_read_only_tool(mcp, DAY_DETAIL_TOOL_NAME, args, token,
+                                                         logical_call_id=call_id)
 
                 outcomes = await asyncio.gather(
-                    *(query(args) for _, args in validated), return_exceptions=True)
+                    *(query(call_id, args) for call_id, args in validated), return_exceptions=True)
 
             auth_failure = next((outcome for outcome in outcomes
                                  if isinstance(outcome, McpClientError) and outcome.code == "AUTH_FAILED"), None)

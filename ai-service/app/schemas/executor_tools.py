@@ -6,6 +6,8 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.plan import TodoCreate, WeekDay
+from app.schemas.chat.tools import DayDetailResult
+from app.schemas.plan.planning_tools import TodoListResult
 
 
 class Arguments(BaseModel):
@@ -60,6 +62,33 @@ class CreatedTodo(BaseModel):
 class BatchCreateResult(BaseModel):
     createdCount: Annotated[int, Field(strict=True, gt=0)]
     createdTodos: list[CreatedTodo] = Field(min_length=1)
+
+
+class MonthCountItem(BaseModel):
+    date: Date
+    count: int = Field(strict=True, ge=0)
+
+
+class MonthCountResult(BaseModel):
+    year: int = Field(strict=True, ge=1, le=9999)
+    month: int = Field(strict=True, ge=1, le=12)
+    days: list[MonthCountItem]
+
+
+def validate_read_result(name: str, arguments: dict, result: object) -> None:
+    if name == "queryDayDetail":
+        if DayDetailResult.model_validate(result).date != arguments["date"]:
+            raise ValueError("日程查询返回日期不一致")
+    elif name == "queryTodoList":
+        TodoListResult.model_validate(result)
+    elif name == "queryMonthCount":
+        data = MonthCountResult.model_validate(result)
+        if (data.year, data.month) != (arguments["year"], arguments["month"]):
+            raise ValueError("月历查询返回年月不一致")
+        if any((item.date.year, item.date.month) != (data.year, data.month) for item in data.days):
+            raise ValueError("月历查询包含范围外日期")
+        if len({item.date for item in data.days}) != len(data.days):
+            raise ValueError("月历查询包含重复日期")
 
 
 def validate_write_result(name: str, arguments: dict, result: object) -> None:

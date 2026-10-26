@@ -1,0 +1,28 @@
+-- 现有数据库升级：只创建工具调用记录表，不修改业务数据。
+CREATE TABLE IF NOT EXISTS `yl_tool_call` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `attempt_id` VARCHAR(32) NOT NULL,
+    `logical_call_id` VARCHAR(64) NOT NULL,
+    `turn_id` VARCHAR(32) NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `session_id` VARCHAR(64) NOT NULL,
+    `agent` VARCHAR(64) NOT NULL,
+    `tool_name` VARCHAR(64) NOT NULL,
+    `read_only` TINYINT(1) NOT NULL,
+    `attempt_no` INT NOT NULL,
+    `operation_key` VARCHAR(64) NULL COMMENT '写操作去重摘要；不是Java业务幂等键',
+    `status` VARCHAR(16) NOT NULL DEFAULT 'running' COMMENT 'running/success/timeout/error/cancelled',
+    `outcome` VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/success/failed/uncertain',
+    `timeout_ms` INT NOT NULL,
+    `elapsed_ms` DOUBLE NULL,
+    `error_code` VARCHAR(64) NULL,
+    `started_at` DATETIME NOT NULL COMMENT 'UTC',
+    `finished_at` DATETIME NULL COMMENT 'UTC',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_tool_attempt` (`attempt_id`),
+    UNIQUE KEY `uk_tool_operation` (`operation_key`),
+    KEY `idx_tool_user_time` (`user_id`, `started_at`),
+    KEY `idx_tool_user_session` (`user_id`, `session_id`, `id`),
+    KEY `idx_tool_turn` (`turn_id`),
+    KEY `idx_tool_outcome` (`read_only`, `outcome`, `started_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工具实际尝试及写入待核实记录';

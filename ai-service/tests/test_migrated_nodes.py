@@ -28,7 +28,7 @@ from app.schemas.statemachine.transitions import AgentType
 from app.service.chat import ChatService
 from app.api.conversation_transport import ConversationTransport
 from app.service.planning import PlanningService
-from tests.conversation_fakes import MemoryFlowRepository
+from tests.conversation_fakes import MemoryFlowRepository, MemoryToolCallRepository
 from tests.planning_fakes import text_planner, day_range, EmptyScheduleMcp
 
 
@@ -162,6 +162,19 @@ class PlanNodeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ExecuteNodeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_oversized_write_batch_is_rejected_before_any_write(self):
+        from app.core.config.common.mcp import McpSettings
+        from app.service.tool_execution import ToolExecutor, bind_tool_executor
+        mcp, ctx = Mcp(["deleteTodo"]), context()
+        model = SimpleNamespace(chat=AsyncMock(return_value=calls(
+            ("deleteTodo", {"todoId": 3}), ("deleteTodo", {"todoId": 4}))))
+        executor = ToolExecutor(settings=McpSettings(_env_file=None, MCP_TURN_MAX_CALLS=1))
+        with bind_tool_executor(executor), self.assertRaises(BusinessException) as caught:
+            await ExecuteNode(model, lambda: mcp)(turn(Signal.CONFIRM, Stage.EXECUTE, PendingTask(task="删除两个待办")), ctx)
+        self.assertEqual(42902, caught.exception.code)
+        self.assertEqual([], mcp.calls)
+        self.assertFalse(ctx.write_started)
+
     async def test_prepare_modify_then_confirm_uses_saved_task_not_route_task(self):
         model = SimpleNamespace(chat=AsyncMock(side_effect=[calls(("deleteTodo", {"todoId": 3})),
                                                            AssistantMessage(content="删除完成")]))
@@ -184,7 +197,7 @@ class ExecuteNodeTests(unittest.IsolatedAsyncioTestCase):
         model = SimpleNamespace(chat=AsyncMock(side_effect=[calls(("queryTodoList", {})),
                                                            AssistantMessage(content="请说明哪个目标")]))
         ctx, pending = context(), PendingTask(task="删除一个待办")
-        result = await ExecuteNode(model, lambda: Mcp(["queryTodoList"]))(turn(Signal.CONFIRM, Stage.EXECUTE, pending), ctx)
+        result = await ExecuteNode(model, lambda: Mcp(["queryTodoList"], result={"todos": []}))(turn(Signal.CONFIRM, Stage.EXECUTE, pending), ctx)
         self.assertFalse(result.completed)
         self.assertEqual(pending, result.pending)
         self.assertFalse(ctx.write_started)
@@ -310,6 +323,10 @@ class ImageNodeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NodeGraphTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.enterContext(patch("app.all_graph.conversation_graph.ToolCallRepository",
+                                side_effect=MemoryToolCallRepository))
+
     async def test_referenced_plan_searches_before_planning_and_publishes_search_results(self):
         for outcome in ("hits", "empty", "error"):
             with self.subTest(outcome=outcome):

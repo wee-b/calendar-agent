@@ -252,7 +252,7 @@ class ChatStreamEndpointTests(unittest.IsolatedAsyncioTestCase):
              patch("app.service.chat.ChatRepository", return_value=Repository()), \
              patch("app.all_graph.chat_graph.ModelClient", return_value=Model()), \
              patch("app.all_graph.chat_graph.JavaMcpClient", Mcp), \
-             patch("app.service.read_only_tool.asyncio.sleep", return_value=None):
+             patch("app.service.tool_execution.asyncio.sleep", return_value=None):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:

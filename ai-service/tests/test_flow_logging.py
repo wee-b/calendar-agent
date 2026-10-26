@@ -13,13 +13,14 @@ from app.schemas.chat.model_stream import AssistantMessage, ModelDelta, ToolCall
 from app.schemas.statemachine.flow import AgentTurnResult, PendingTask, UserSignal
 from app.schemas.statemachine.transitions import AgentType
 from app.service.chat import ChatService
-from tests.conversation_fakes import MemoryFlowRepository
+from tests.conversation_fakes import MemoryFlowRepository, MemoryToolCallRepository
 
 
 class FlowLoggingTests(unittest.IsolatedAsyncioTestCase):
     def graph(self, node, *, session="s", repo=None, signal=UserSignal.NEW_PLAN):
         return ConversationGraph(
             {AgentType.PLANNER: node, AgentType.CHAT: node}, user_id=7, session_id=session,
+            tool_repository_factory=MemoryToolCallRepository,
             chat_service=ChatService(repo or MemoryFlowRepository()),
             summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))), route_agent=SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=signal))),
         )
@@ -180,12 +181,15 @@ class FlowLoggingTests(unittest.IsolatedAsyncioTestCase):
                      self.assertLogs("app", level="INFO") as logs:
                     await self.graph(node, signal=UserSignal.NEW_QUERY).run_turn(
                         "查询日程", "secret-token", emit=AsyncMock() if streaming else None)
-                self.assertEqual(3, len(logs.records))
-                path = logs.records[1].flow_details["路径"]
+                self.assertEqual(5, len(logs.records))
+                flow_records = [r for r in logs.records if r.name != "app.tool"]
+                self.assertEqual(["start", "success"],
+                                 [r.tool_event for r in logs.records if r.name == "app.tool"])
+                path = flow_records[1].flow_details["路径"]
                 self.assertLess(path.index("CHAT_MODEL"), path.index("CHAT_TOOL"))
                 self.assertIn("CHAT_TOOL_RESULT", path)
                 self.assertIn("CHAT_RESULT", path)
                 self.assertEqual(1, len({r.turn_id for r in logs.records if hasattr(r, "turn_id")}))
-                self.assertIn("查询日程(成功)", logs.records[1].getMessage())
-                self.assertNotIn("{", logs.records[1].getMessage())
+                self.assertIn("查询日程(成功)", flow_records[1].getMessage())
+                self.assertNotIn("{", flow_records[1].getMessage())
                 self.assertNotIn("工具原始内容不写日志", "\n".join(logs.output))

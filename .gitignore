@@ -41,6 +41,7 @@ docs/*
 !docs/08-chat-state-transition-table.md
 !docs/10-java-chat-history-migration.md
 !docs/11-planning-agent-loop.md
+!docs/12-tool-execution-control.md
 
 # 用于存放密钥
 application-unknown.yml

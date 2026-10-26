@@ -17,10 +17,11 @@ from app.schemas.chat.model_stream import (
     ToolCallData, ToolCallLifecycleEvent, ToolResultData, ToolResultEvent,
 )
 from app.schemas.chat.timeline import summarize_tool_result
-from app.schemas.executor_tools import ARGUMENTS, READ_TOOLS, BatchCreateResult, validate_write_result
+from app.schemas.executor_tools import ARGUMENTS, READ_TOOLS, BatchCreateResult, validate_write_result, validate_read_result
 from app.schemas.plan import parse_plan, today
 from app.schemas.statemachine.flow import AgentTurnResult, ConversationStage, PendingTask, UserSignal
 from app.service.model_stream import StreamResponseAccumulator
+from app.service.tool_execution import get_tool_executor
 
 
 EXECUTOR_PROMPT = """你是日历执行助手，只执行下面已向用户展示并确认的任务。
@@ -85,7 +86,7 @@ class ExecuteNode:
             await context.send(ToolCallLifecycleEvent(event="tool_call_end",
                 data=ToolCallData(round=1, call_id=call_id, tool=tool.name)))
             raw = await self._call(mcp, tool, {"todos": [todo.create_arguments() for todo in plan.todos]},
-                                   context, call_id, 1)
+                                   context, call_id, 1, operation_scope=f"draft:{draft.draft_id}")
         result = BatchCreateResult.model_validate(raw)
         if result.createdCount != len(plan.todos) or len(result.createdTodos) != len(plan.todos):
             raise BusinessException(ErrorCode.MCP_RESULT_INVALID)
@@ -153,6 +154,7 @@ class ExecuteNode:
                             raise BusinessException(ErrorCode.MODEL_TOOL_DUPLICATE)
                         performed.add(signature)
                     prepared.append((call, arguments))
+                get_tool_executor().check_batch(len(prepared))
                 messages.append(response.model_dump(mode="json", exclude_none=True))
                 for call, arguments in prepared:
                     name = call.function.name
@@ -163,25 +165,33 @@ class ExecuteNode:
                                      "content": json.dumps(data, ensure_ascii=False)})
         raise BusinessException(ErrorCode.MODEL_ROUND_LIMIT)
 
-    async def _call(self, mcp, tool, arguments, context, call_id, round_number):
+    async def _call(self, mcp, tool, arguments, context, call_id, round_number, *, operation_scope=None):
         await context.send(AgentStatusEvent(data=AgentStatusData(agent="executor", round=round_number, stage="tool")))
         log_turn_step("EXECUTOR_TOOL", 模型轮次=round_number, 工具=tool.name, call_id=call_id,
                       只读=tool.metadata.readOnly)
         # 位于所有参数检查之后、真实写调用之前。模型只追问/只读时不会设置标记。
-        if not tool.metadata.readOnly:
-            context.mark_write_started()
-        try:
-            timeout = tool.metadata.timeoutMs
-            async with asyncio.timeout(timeout / 1000 if timeout and timeout > 0 else 30):
-                data = await mcp.call_tool(tool.name, arguments, context.token)
-            if not tool.metadata.readOnly:
-                try:
+        executor = get_tool_executor()
+        executor.mark_write_started = context.mark_write_started
+
+        def validate(data):
+            try:
+                if tool.metadata.readOnly:
+                    validate_read_result(tool.name, arguments, data)
+                else:
                     validate_write_result(tool.name, arguments, data)
-                except ValueError as exc:
-                    log_turn_step("EXECUTOR_TOOL_RESULT", call_id=call_id, 结果="返回结果无效")
-                    await context.send(ToolResultEvent(data=ToolResultData(
-                        call_id=call_id, status="error", code=ErrorCode.MCP_RESULT_INVALID.name)))
-                    raise BusinessException(ErrorCode.MCP_RESULT_INVALID) from exc
+            except ValueError as exc:
+                if tool.metadata.readOnly:
+                    raise McpClientError("INVALID_RESPONSE", "Java 只读查询结果格式异常") from exc
+                raise BusinessException(ErrorCode.MCP_RESULT_INVALID) from exc
+            return data
+        try:
+            data = await executor.execute(mcp, tool.name, arguments, context.token,
+                read_only=tool.metadata.readOnly, timeout_ms=tool.metadata.timeoutMs,
+                logical_call_id=call_id, validator=validate, operation_scope=operation_scope)
+        except BusinessException as exc:
+            await context.send(ToolResultEvent(data=ToolResultData(
+                call_id=call_id, status="error", code=str(exc.code))))
+            raise
         except (McpClientError, TimeoutError) as exc:
             log_turn_step("EXECUTOR_TOOL_RESULT", call_id=call_id, 结果="失败",
                           错误码=getattr(exc, "code", "TOOL_TIMEOUT"))
