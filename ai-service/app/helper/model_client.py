@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from time import perf_counter
 from typing import Any, AsyncIterator
 
 import httpx
@@ -11,6 +13,7 @@ from pydantic import ValidationError
 from app.core.config.agent.agents import AgentConfig, chat_config
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException
+from app.core.model_logging import log_model_interruption
 from app.schemas.chat.model_stream import AssistantMessage, ModelDelta
 
 
@@ -59,6 +62,7 @@ class ModelClient:
         """非流式调用；返回前校验模型消息，拒绝空正文且无工具调用的响应。"""
 
         url, api_key, model_name, timeout = self._request_options()
+        started = perf_counter()
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
@@ -67,7 +71,11 @@ class ModelClient:
                     json=self._payload(model_name, messages, tools, False),
                 )
         except httpx.TimeoutException as exc:
+            log_model_interruption(self.config, "chat", started, exc)
             raise BusinessException(ErrorCode.MODEL_TIMEOUT) from exc
+        except asyncio.CancelledError as exc:
+            log_model_interruption(self.config, "chat", started, exc)
+            raise
         except httpx.RequestError as exc:
             raise BusinessException(ErrorCode.MODEL_UNAVAILABLE) from exc
         if not response.is_success:
@@ -88,6 +96,7 @@ class ModelClient:
         """逐个解析 SSE delta；取消请求时同步关闭上游 HTTP 流。"""
         url, api_key, model_name, timeout = self._request_options()
         completed = False
+        started = perf_counter()
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream(
@@ -125,7 +134,11 @@ class ModelClient:
                             if delta is not None:
                                 yield delta
         except httpx.TimeoutException as exc:
+            log_model_interruption(self.config, "stream_chat", started, exc)
             raise BusinessException(ErrorCode.MODEL_TIMEOUT) from exc
+        except asyncio.CancelledError as exc:
+            log_model_interruption(self.config, "stream_chat", started, exc)
+            raise
         except httpx.RequestError as exc:
             raise BusinessException(ErrorCode.MODEL_UNAVAILABLE) from exc
         if not completed:

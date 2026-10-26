@@ -1,10 +1,14 @@
 """远程 Embedding 客户端，导入语料和在线检索共用。"""
 
+import asyncio
+from time import perf_counter
+
 import httpx
 from pydantic import ValidationError
 
 from app.core.config.agent.agents import EmbeddingConfig, embedding_config
 from app.core.exception.exceptions import EmbeddingError
+from app.core.model_logging import log_model_interruption
 from app.schemas.rag import EmbeddingResponse
 
 
@@ -27,7 +31,7 @@ class EmbeddingClient:
         url = self.config.model.base_url.rstrip("/") + "/embeddings"
         payload = {"model": self.config.model.name, "input": text}
         headers = {"Authorization": f"Bearer {key}"}
-
+        started = perf_counter()
         try:
             if self.client is None:
                 async with httpx.AsyncClient(timeout=self.config.timeout_seconds) as client:
@@ -37,5 +41,11 @@ class EmbeddingClient:
             response.raise_for_status()
             body = EmbeddingResponse.model_validate(response.json())
             return body.data[0].embedding
+        except httpx.TimeoutException as exc:
+            log_model_interruption(self.config, "embed", started, exc)
+            raise EmbeddingError("Embedding 请求或响应异常") from exc
+        except asyncio.CancelledError as exc:
+            log_model_interruption(self.config, "embed", started, exc)
+            raise
         except (httpx.HTTPError, ValueError, ValidationError) as exc:
             raise EmbeddingError("Embedding 请求或响应异常") from exc

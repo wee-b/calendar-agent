@@ -1,5 +1,7 @@
 """异步迁移 Java ImageAgent 的文生图协议与限额错误处理。"""
 
+import asyncio
+from time import perf_counter
 from urllib.parse import urlsplit
 
 import httpx
@@ -7,6 +9,7 @@ import httpx
 from app.core.config.agent.agents import image_config
 from app.core.exception.error_code import ErrorCode
 from app.core.exception.exceptions import BusinessException
+from app.core.model_logging import log_model_interruption
 
 
 class ImageClient:
@@ -27,6 +30,7 @@ class ImageClient:
                       "不添加规划之外的事项。\n规划数据：\n" + plan_json + "\n图片要求：\n" + instruction,
         }
         client = self.client if self.client is not None else httpx.AsyncClient(timeout=config.timeout_seconds)
+        started = perf_counter()
         try:
             response = await client.post(model.base_url.rstrip("/") + "/images/generations",
                                          headers={"Authorization": f"Bearer {model.api_key}"}, json=payload)
@@ -47,7 +51,11 @@ class ImageClient:
             except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
                 raise BusinessException(ErrorCode.IMAGE_FAILED) from exc
         except httpx.TimeoutException as exc:
+            log_model_interruption(config, "generate_image", started, exc)
             raise BusinessException(ErrorCode.MODEL_TIMEOUT) from exc
+        except asyncio.CancelledError as exc:
+            log_model_interruption(config, "generate_image", started, exc)
+            raise
         except httpx.RequestError as exc:
             raise BusinessException(ErrorCode.IMAGE_FAILED) from exc
         finally:
