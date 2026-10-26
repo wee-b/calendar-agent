@@ -4,17 +4,21 @@ import com.qiniu.back.domain.ErrorCode;
 import com.qiniu.back.domain.dailyNote.dto.DailyNoteSaveDTO;
 import com.qiniu.back.domain.dailyNote.vo.DayTodosVO;
 import com.qiniu.back.domain.dailyNote.vo.MonthCountVO;
+import com.qiniu.back.domain.dailyNote.vo.ScheduleItemVO;
 import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
 import com.qiniu.back.domain.todo.dto.TodoUpdateDTO;
 import com.qiniu.back.domain.todo.vo.TodoVO;
 import com.qiniu.back.exception.BusinessException;
 import com.qiniu.back.module.dailyNote.service.DailyNoteService;
 import com.qiniu.back.module.todo.service.TodoService;
+import com.qiniu.back.module.todo.mapper.TodoDateMapper;
+import com.qiniu.back.util.LoginUserContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Slf4j
@@ -24,6 +28,7 @@ public class McpToolService {
     public record DayDetailResult(LocalDate date, List<DayTodosVO.DayTodoItem> todos, String dailyNote) {}
     public record MonthCountResult(int year, int month, List<MonthCountVO> days) {}
     public record TodoListResult(List<TodoVO> todos) {}
+    public record ScheduleRangeResult(LocalDate startDate, LocalDate endDate, List<ScheduleItemVO> schedules) {}
     public record TodoMutationResult(String operation, Long todoId, String title, Integer dayCount) {}
     public record TodoDateResult(String operation, Long todoId, LocalDate date, Integer status) {}
     public record DailyNoteResult(LocalDate date, boolean saved) {}
@@ -35,6 +40,22 @@ public class McpToolService {
 
     @Autowired
     private DailyNoteService dailyNoteService;
+
+    @Autowired
+    private TodoDateMapper todoDateMapper;
+
+    public ScheduleRangeResult queryScheduleRange(LocalDate startDate, LocalDate endDate) {
+        if (startDate == null || endDate == null || endDate.isBefore(startDate)
+                || ChronoUnit.DAYS.between(startDate, endDate) > 180) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "日程查询日期范围须为0到180天");
+        }
+        Long userId = LoginUserContext.getUserId();
+        if (userId == null) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "请先登录");
+        }
+        return new ScheduleRangeResult(startDate, endDate,
+                todoDateMapper.selectScheduleRange(userId, startDate, endDate));
+    }
 
     public TodoMutationResult createTodo(TodoCreateDTO dto) {
         log.info("Tool-createTodo: {}", dto.getTitle());

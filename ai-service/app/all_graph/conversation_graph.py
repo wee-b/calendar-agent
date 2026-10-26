@@ -32,6 +32,7 @@ from app.schemas.chat.model_stream import (
 )
 from app.schemas.chat.timeline import AgentStep
 from app.schemas.chat.history import DocumentReference
+from app.schemas.plan.planning_tools import PlanningRange
 
 
 _AGENT_LABELS = {
@@ -40,6 +41,8 @@ _AGENT_LABELS = {
 }
 _TOOL_LABELS = {
     "queryDayDetail": "查询日程", "queryTodoList": "查询待办",
+    "queryPreferences": "查询用户偏好",
+    "queryScheduleRange": "查询规划区间日程",
     "queryMonthCount": "查询月历", "createTodo": "创建待办",
     "batchCreateTodos": "同步规划", "updateTodo": "修改待办",
     "deleteTodo": "删除待办", "toggleTodoDate": "更新完成状态",
@@ -68,6 +71,7 @@ class ConversationState(TypedDict):
     pending: PendingTask
     signal: NotRequired[UserSignal]
     task: NotRequired[str | None]
+    planning_range: NotRequired[PlanningRange | None]
     agent: NotRequired[AgentType]
     target_stage: NotRequired[ConversationStage]
     result: NotRequired[AgentTurnResult]

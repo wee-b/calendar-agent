@@ -21,6 +21,9 @@ class ImageNode:
 
     async def __call__(self, state, context) -> AgentTurnResult:
         pending = state["pending"]
+        if pending.planning and pending.planning.questions:
+            return AgentTurnResult(reply="当前规划正在等待补充条件，请先回答规划问题，再生成示意图。",
+                                   completed=False, pending=pending, dispatch_type="PLAN_CLARIFICATION")
         log_turn_step("LOAD_DRAFT", 草稿ID=pending.draft_id)
         draft = await self.drafts.find_pending(state["user_id"], state["session_id"], pending.draft_id)
         if draft is None:
@@ -44,5 +47,6 @@ class ImageNode:
                    f"MinIO 路径：`{image.minio_uri}` · [下载原图]({image.download_url})\n\n"
                    "可以继续修改图片，或说“同步到日历”同步原规划。"),
             completed=True, pending=PendingTask(task=pending.task, draft_id=pending.draft_id,
-                                               plan_preview=pending.plan_preview, image_instruction=instruction),
+                                               plan_preview=pending.plan_preview, image_instruction=instruction,
+                                               planning=pending.planning),
             dispatch_type="PLAN_IMAGE")

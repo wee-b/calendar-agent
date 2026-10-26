@@ -49,6 +49,10 @@ def summarize_tool_result(name: str, data: object) -> str:
             return f"{date}：{len(todos)} 项待办{note}。"
     if name == "queryTodoList" and isinstance(data.get("todos"), list):
         return f"查询到 {len(data['todos'])} 项待办。"
+    if name == "queryPreferences" and isinstance(data.get("preferences"), list):
+        return f"查询到 {len(data['preferences'])} 项相关偏好。"
+    if name == "queryScheduleRange" and isinstance(data.get("schedules"), list):
+        return f"{data.get('startDate')} 至 {data.get('endDate')}：{len(data['schedules'])} 项日程。"
     if name == "queryMonthCount" and isinstance(data.get("days"), list):
         return f"返回 {len(data['days'])} 天的日程统计。"
     if name == "batchCreateTodos" and type(data.get("createdCount")) is int:

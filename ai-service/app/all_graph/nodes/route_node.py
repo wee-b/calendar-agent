@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from app.core.config.agent.agents import route_config
 from app.helper.model_client import ModelClient
 from app.schemas.statemachine.flow import ConversationStage, PendingTask, UserSignal
+from app.schemas.plan.planning_tools import PlanningRange
 
 if TYPE_CHECKING:
     from app.service.chat import ChatService
@@ -19,7 +20,10 @@ if TYPE_CHECKING:
 
 ROUTE_PROMPT = """你是 RouteAgent。结合会话主流程、当前任务、上一轮助手回复和本轮用户输入，只输出结构化判断。
 你不生成最终回复、不调用工具、不选择 Agent、不决定下一会话阶段。
-只输出 JSON：{"userSignal":"NEW_CHAT","task":"本轮明确任务","publicSummary":"给用户看的简短处理说明"}
+只输出 JSON：{"userSignal":"NEW_CHAT","task":"本轮明确任务","publicSummary":"给用户看的简短处理说明","planningRange":null}
+对规划需求，只有用户已明确开始和结束日期（或可由当前日期唯一展开）时，planningRange 才输出
+{"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD"}。缺日期时保持 null，不擅自假设从今天开始。
+正在回答规划澄清问题时结合原需求和本轮回答解析日期；日期改变时输出新的完整区间。
 publicSummary 用一句自然中文概括你对本轮请求的理解和接下来要做的事，30 到 90 字；不要输出内部推理、工具参数，也不要声称尚未完成的操作已经完成。
 用户询问助手能做什么时，publicSummary 应概括将介绍整个系统的能力，不要把对话 Agent 当前的工具列表说成系统只能查询或无法修改日程。
 userSignal 只能是以下十种：
@@ -49,6 +53,7 @@ class RouteDecision(BaseModel):
     signal: UserSignal
     task: str | None = None
     public_summary: str | None = None
+    planning_range: PlanningRange | None = None
 
 
 class RouteAgent:
@@ -82,7 +87,11 @@ class RouteAgent:
             f"\n是否已有规划草稿：{pending.draft_id is not None}"
             f"\n规划摘要：{(pending.plan_preview or '')[-2000:]}"
             f"\n图片要求：{pending.image_instruction or ''}"
+            f"\n待回答的规划问题：{json.dumps(pending.planning.questions, ensure_ascii=False) if pending.planning else '无'}"
+            f"\n已确认规划区间：{pending.planning.date_range.model_dump_json() if pending.planning and pending.planning.date_range else '未确认'}"
         )
+        if pending.planning and pending.planning.questions:
+            system += "\n当前正等待规划问题的回答。时间、时长、目标等回答属于 MODIFY；只有明确另起任务才用 NEW_PLAN。"
         previous = context.previousReply.content[-1500:] if context.previousReply else ""
         messages = "\n".join(item.content for item in context.userMessages)
         answer = await self.model.complete([
@@ -112,8 +121,12 @@ class RouteAgent:
                 summary = None
             else:
                 summary = " ".join(summary.split())[:180] or None
+            try:
+                date_range = PlanningRange.model_validate(payload["planningRange"]) if payload.get("planningRange") else None
+            except ValueError:
+                date_range = None
             return RouteDecision(signal=signal, task=task.strip() or None if task is not None else None,
-                                 public_summary=summary)
+                                 public_summary=summary, planning_range=date_range)
         except (ValueError, KeyError, TypeError):
             return RouteDecision(signal=UserSignal.UNKNOWN)
 
@@ -134,4 +147,4 @@ class RouteNode:
             state["stage"], state["pending"],
         )
         return {"signal": decision.signal, "task": decision.task,
-                "public_summary": decision.public_summary}
+                "public_summary": decision.public_summary, "planning_range": decision.planning_range}

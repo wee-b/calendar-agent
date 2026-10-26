@@ -16,6 +16,15 @@ const stream = (body, chunkSize = 3) => {
     });
 };
 
+test('planning validation and repair summaries remain visible in agent narration', () => {
+    const step = { id: 1, kind: 'agent', label: '校验规划约束', status: 'error', elapsedMs: 100,
+        resultSummary: '发现 2 项问题，涉及用户约束、已有日程，将反馈修正。' };
+    assert.equal(timelineNarration(step), step.resultSummary);
+    assert.equal(timelineNarration({ ...step, label: '反馈修正规划', status: 'success',
+        resultSummary: '已将 2 项问题反馈给规划模型。' }), '已将 2 项问题反馈给规划模型。');
+    assert.equal(timelineNarration({ ...step, narration: '用户可见的规划说明。' }), '用户可见的规划说明。');
+});
+
 test('Python SSE handles fragmented UTF-8 and emits only reply text', async () => {
     let reply = '';
     let done = 0;

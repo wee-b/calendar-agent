@@ -12,7 +12,7 @@ import httpx
 from app.all_graph.conversation_graph import ConversationGraph, TurnContext
 from app.all_graph.nodes.execute_node import ExecuteNode
 from app.all_graph.nodes.image_node import ImageNode
-from app.all_graph.nodes.plan_node import PlanNode, should_clarify
+from app.all_graph.nodes.plan_node import PlanNode
 from app.all_graph.nodes.route_node import RouteDecision
 from app.core.config.agent.agents import ImageAgentConfig
 from app.core.config.agent.providers import ModelConfig
@@ -29,6 +29,7 @@ from app.service.chat import ChatService
 from app.api.conversation_transport import ConversationTransport
 from app.service.planning import PlanningService
 from tests.conversation_fakes import MemoryFlowRepository
+from tests.planning_fakes import text_planner, day_range, EmptyScheduleMcp
 
 
 def plan_json(title="英语"):
@@ -40,7 +41,8 @@ def plan_json(title="英语"):
 
 def turn(signal=Signal.NEW_PLAN, stage=Stage.CHAT, pending=None, **kwargs):
     return dict(user_id=7, session_id="s", message="做一个学习计划", signal=signal,
-                stage=stage, pending=pending or PendingTask(), **kwargs)
+                stage=stage, pending=pending or PendingTask(),
+                planning_range=kwargs.pop("planning_range", day_range()), **kwargs)
 
 
 def context(emit=None):
@@ -81,17 +83,19 @@ class PlanNodeTests(unittest.IsolatedAsyncioTestCase):
                                    save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=12)))
         data = json.loads(plan_json())
         data["analysis"] = "先学习页面结构，再完成一个小项目。"
-        model = SimpleNamespace(complete=AsyncMock(return_value=json.dumps(data, ensure_ascii=False)))
+        model = text_planner(AsyncMock(return_value=json.dumps(data, ensure_ascii=False)))
         ctx = context()
-        await PlanNode(planning, model)(turn(task="三天学习前端"), ctx)
-        self.assertEqual("先学习页面结构，再完成一个小项目。", ctx.agent_steps[0].narration)
+        await PlanNode(planning, model, mcp_factory=EmptyScheduleMcp)(turn(task="今天学习前端"), ctx)
+        step = next(step for step in ctx.agent_steps if step.label == "制定规划")
+        self.assertEqual("先学习页面结构，再完成一个小项目。", step.narration)
         model.complete.assert_awaited_once()
+        self.assertEqual(2, model.chat.await_count)  # 一次生成、一次独立校验。
 
     async def test_generate_then_modify_preserves_old_draft_until_success(self):
         planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
                                    save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=12)))
-        model = SimpleNamespace(complete=AsyncMock(return_value=plan_json()))
-        node = PlanNode(planning, model)
+        model = text_planner(AsyncMock(return_value=plan_json()))
+        node = PlanNode(planning, model, mcp_factory=EmptyScheduleMcp)
         original = PendingTask(task="英语复习", draft_id=11, plan_preview="旧正文", image_instruction="蓝色")
         state = turn(Signal.MODIFY, Stage.PLAN, original)
         state["message"] = "每天两小时"
@@ -110,41 +114,42 @@ class PlanNodeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_existing_draft_confirmation_does_not_generate_or_sync(self):
         planning = SimpleNamespace(save_draft=AsyncMock(), memories=AsyncMock())
-        model = SimpleNamespace(complete=AsyncMock())
+        model = text_planner(AsyncMock())
         result = await PlanNode(planning, model)(turn(Signal.CONFIRM, Stage.PLAN, PendingTask(draft_id=8)), context())
         self.assertEqual("PLAN_FEEDBACK", result.dispatch_type)
         model.complete.assert_not_awaited()
         planning.save_draft.assert_not_awaited()
         planning.memories.assert_not_awaited()
 
-    async def test_clarification_keeps_requirement_then_confirm_generates(self):
+    async def test_llm_clarification_keeps_requirement_then_confirm_generates(self):
         planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
                                    save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=1)))
-        model = SimpleNamespace(complete=AsyncMock(return_value=plan_json()))
-        node = PlanNode(planning, model)
-        state = turn(task="制定计划")  # Java hashCode('s') % 3 == 1
+        model = text_planner(AsyncMock(side_effect=[
+            '{"action":"clarify","questions":["这次希望学习什么？"]}', plan_json()]))
+        node = PlanNode(planning, model, mcp_factory=EmptyScheduleMcp)
+        state = turn(task="制定计划")
         result = await node(state, context())
         self.assertEqual("PLAN_CLARIFICATION", result.dispatch_type)
         self.assertEqual("制定计划", result.pending.task)
         self.assertIsNone(result.pending.draft_id)
-        model.complete.assert_not_awaited()
+        model.complete.assert_awaited_once()
         result = await node(turn(Signal.CONFIRM, Stage.PLAN, result.pending), context())
         self.assertEqual(1, result.pending.draft_id)
 
     async def test_invalid_model_json_is_corrected_once_and_saved_once(self):
-        model = SimpleNamespace(complete=AsyncMock(side_effect=["not json", plan_json()]))
+        model = text_planner(AsyncMock(side_effect=["not json", plan_json()]))
         drafts = SimpleNamespace(save=AsyncMock(return_value=SimpleNamespace(draft_id=5)))
         service = PlanningService(drafts=drafts, memory=SimpleNamespace(relevant=AsyncMock(return_value=[])))
-        result = await PlanNode(service, model)(turn(task="英语学习"), context())
+        result = await PlanNode(service, model, mcp_factory=EmptyScheduleMcp)(turn(task="英语学习"), context())
         self.assertEqual(5, result.pending.draft_id)
         self.assertIn("英语", result.pending.plan_preview)
         self.assertEqual(2, model.complete.await_count)
         drafts.save.assert_awaited_once()
 
-    async def test_second_invalid_plan_never_saves(self):
+    async def test_persistently_invalid_plan_never_saves(self):
         drafts = SimpleNamespace(save=AsyncMock())
         service = PlanningService(drafts=drafts, memory=SimpleNamespace(relevant=AsyncMock(return_value=[])))
-        node = PlanNode(service, SimpleNamespace(complete=AsyncMock(return_value="{}")))
+        node = PlanNode(service, text_planner(AsyncMock(return_value="{}")), mcp_factory=EmptyScheduleMcp)
         with self.assertRaises(BusinessException):
             await node(turn(task="英语学习"), context())
         drafts.save.assert_not_awaited()
@@ -155,7 +160,6 @@ class PlanNodeTests(unittest.IsolatedAsyncioTestCase):
             data["todos"][0].update(change)
             with self.subTest(change=change), self.assertRaises(ValueError):
                 parse_plan(json.dumps(data), generating=True)
-        self.assertFalse(should_clarify("制定计划", "s", [{"memory_type": "PREFERENCE_TIME"}]))
 
 
 class ExecuteNodeTests(unittest.IsolatedAsyncioTestCase):
@@ -334,13 +338,13 @@ class NodeGraphTests(unittest.IsolatedAsyncioTestCase):
 
                 planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
                                            save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=8)))
-                model = SimpleNamespace(complete=AsyncMock(side_effect=generate))
+                model = text_planner(AsyncMock(side_effect=generate))
                 service = ChatService(MemoryFlowRepository())
                 service.document_references = AsyncMock(return_value=[])
                 graph = ConversationGraph(user_id=7, session_id="s", chat_service=service,
                     summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))),
-                    route_agent=SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=Signal.NEW_PLAN))))
-                graph.handlers[AgentType.PLANNER] = PlanNode(planning, model, SimpleNamespace(search=search))
+                    route_agent=SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=Signal.NEW_PLAN, planning_range=day_range()))))
+                graph.handlers[AgentType.PLANNER] = PlanNode(planning, model, SimpleNamespace(search=search), EmptyScheduleMcp)
                 if outcome == "error":
                     with self.assertRaisesRegex(RuntimeError, "search failed"):
                         await graph.run_turn("参考资料复习英语", "token", document_ids=[42], emit=collect)
@@ -350,19 +354,19 @@ class NodeGraphTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     await graph.run_turn("参考资料复习英语", "token", document_ids=[42], emit=collect)
                     labels = list(dict.fromkeys(step.label for step in events))
-                    self.assertEqual(["识别意图", "分配给规划 Agent", "检索引用文档", "制定规划", "保存规划草稿"], labels)
+                    self.assertEqual(["识别意图", "分配给规划 Agent", "读取用户偏好", "检索引用文档", "查询规划区间日程", "制定规划", "校验规划约束", "保存规划草稿"], labels)
                     self.assertEqual("success", next(step.status for step in reversed(events) if step.label == "制定规划"))
 
     async def test_plan_image_sync_across_turns_and_temporary_query(self):
         repo = MemoryFlowRepository()
-        route = SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=Signal.NEW_PLAN)))
+        route = SimpleNamespace(route=AsyncMock(return_value=RouteDecision(signal=Signal.NEW_PLAN, planning_range=day_range())))
         planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
                                    save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=8)))
         drafts = SimpleNamespace(find_pending=AsyncMock(return_value=SimpleNamespace(draft_id=8, plan_json=plan_json())),
                                  mark_synced=AsyncMock())
         mcp = Mcp(["batchCreateTodos"], result={"createdCount": 1, "createdTodos": [{"todoId": 9, "title": "英语"}]})
         graph = ConversationGraph(user_id=7, session_id="s", chat_service=ChatService(repo), summary_node=SummaryNode(service=SimpleNamespace(snapshot=AsyncMock(return_value=None))), route_agent=route)
-        graph.handlers[AgentType.PLANNER] = PlanNode(planning, SimpleNamespace(complete=AsyncMock(return_value=plan_json())))
+        graph.handlers[AgentType.PLANNER] = PlanNode(planning, text_planner(AsyncMock(return_value=plan_json())), mcp_factory=EmptyScheduleMcp)
         image = SimpleNamespace(minio_uri="minio://calendar-images/users/7/x.jpg",
                                 view_url="https://example.com/images/x.jpg",
                                 download_url="https://example.com/images/x.jpg?download=true")

@@ -293,33 +293,6 @@ Vite 开发服务器将 `/chat`、`/memory`、`/rag`、`/documents`、`/images` 
 
 ---
 
-## 开发进度
-
-- [x] Spring Boot + Vue 项目骨架
-- [x] MySQL 表结构与初始化数据
-- [x] 用户认证与 Redis Token 持久化
-- [x] 待办目标与每日任务 CRUD
-- [x] 日历月统计、日详情、日记保存
-- [x] 前端日历页、今日页、对话页、布局导航
-- [x] 多会话聊天、历史记录、撤回上一轮
-- [x] SSE 流式响应与进度事件
-- [x] Web Speech API 语音识别、TTS 朗读、音量条
-- [x] RouteAgent 结构化事件 + 状态机确定性执行 + Planner / Executor 架构
-- [x] 写操作确认流与 AgentFlowState 状态管理
-- [x] Planner 草稿预览与确认后同步到日历
-- [x] MySQL 长期偏好记忆与跨会话读取
-- [x] Python 长会话自动摘要与上下文压缩
-- [x] Executor 单日及通用写操作工具
-- [x] MCP `tools/list` / `tools/call`
-- [x] Python 中文 BM25 + Qdrant 向量检索 + RRF + 可选 Rerank（独立能力）
-- [x] RAG 语料去重、Embedding、Qdrant 入库脚本
-- [x] 用户知识库上传、解析及 Planner 引用检索
-- [x] 规划示意图生成和原图保存
-- [x] 现代黄历模块
-- [x] Knife4j 接口文档
-
----
-
 ## 常用命令
 
 ```bash

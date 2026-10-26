@@ -84,7 +84,8 @@ def text_preview(value: str, limit: int = 20) -> str:
 
 def pending_summary(pending) -> dict:
     return {"有待处理任务": bool(pending.task), "草稿ID": pending.draft_id,
-            "有规划正文": bool(pending.plan_preview), "有图片要求": bool(pending.image_instruction)}
+            "有规划正文": bool(pending.plan_preview), "有图片要求": bool(pending.image_instruction),
+            "待回答问题数": len(pending.planning.questions) if getattr(pending, "planning", None) else 0}
 
 
 def _pending_label(value: dict | None) -> str:
@@ -99,6 +100,8 @@ def _pending_label(value: dict | None) -> str:
         parts.append("规划正文")
     if value.get("有图片要求"):
         parts.append("图片要求")
+    if value.get("待回答问题数"):
+        parts.append(f"待回答{value['待回答问题数']}问")
     return "、".join(parts) or "无"
 
 
@@ -131,6 +134,8 @@ def _session_label(details: dict) -> str:
 
 _TOOL_LABELS = {
     "queryDayDetail": "查询日程", "queryTodoList": "查询待办", "queryMonthCount": "查询月历",
+    "queryPreferences": "查询用户偏好",
+    "queryScheduleRange": "查询规划区间日程",
     "createTodo": "创建待办", "batchCreateTodos": "同步规划", "updateTodo": "修改待办",
     "deleteTodo": "删除待办", "toggleTodoDate": "更新完成状态", "saveDailyNote": "保存日记",
     "removeTodoDay": "移除待办日期", "addTodoDay": "添加待办日期",
@@ -167,10 +172,10 @@ def _turn_label(steps: list[str]) -> str:
             parts.append(name)
         elif name in {"CHAT_MODEL", "EXECUTOR_MODEL", "PLANNER_MODEL"}:
             parts.append(f"模型第{info.get('模型轮次', info.get('尝试次数', '?'))}轮")
-        elif name in {"CHAT_TOOL", "EXECUTOR_TOOL"}:
+        elif name in {"CHAT_TOOL", "EXECUTOR_TOOL", "PLANNER_TOOL"}:
             tool = info.get("工具", "工具")
             parts.append(_TOOL_LABELS.get(tool, tool))
-        elif name in {"CHAT_TOOL_RESULT", "EXECUTOR_TOOL_RESULT"}:
+        elif name in {"CHAT_TOOL_RESULT", "EXECUTOR_TOOL_RESULT", "PLANNER_TOOL_RESULT"}:
             result = info.get("结果", "未知")
             if parts:
                 parts[-1] += f"({result})"
@@ -196,6 +201,10 @@ def _turn_label(steps: list[str]) -> str:
             parts.append("图片生成完成")
         elif name == "PLAN_INVALID":
             parts.append("规划校验失败")
+        elif name == "PLAN_REVIEW":
+            parts.append("校验规划约束")
+        elif name == "PLAN_REPAIR":
+            parts.append("反馈修正规划")
         elif name == "READ_TOOL_RETRY":
             parts.append("只读工具重试")
         else:

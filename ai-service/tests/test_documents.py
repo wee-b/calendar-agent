@@ -12,12 +12,14 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from fastapi import HTTPException
 
 from app.all_graph.nodes.plan_node import PlanNode
+from app.all_graph.conversation_graph import TurnContext
 from app.schemas.plan import today
 from app.schemas.statemachine.flow import PendingTask, UserSignal
 from app.service.documents import (DocumentUploadService, DocumentParseService,
                                    DocumentSearchService, DocumentManagementService, extract_chunks)
 from app.repository.qdrant import QdrantRepository
 from app.schemas.rag import QdrantPayload, QdrantPoint
+from tests.planning_fakes import text_planner, EmptyScheduleMcp
 
 
 def valid_plan():
@@ -251,20 +253,18 @@ class DocumentTests(unittest.IsolatedAsyncioTestCase):
         documents = SimpleNamespace(search=AsyncMock(return_value=[hit]))
         planning = SimpleNamespace(memories=AsyncMock(return_value=[]),
                                    save_draft=AsyncMock(return_value=SimpleNamespace(draft_id=3)))
-        model = SimpleNamespace(complete=AsyncMock(return_value=valid_plan()))
-        context = SimpleNamespace(use_model=lambda *_: None,
-                                  add_step=AsyncMock(return_value=1), complete_step=AsyncMock(),
-                                  set_agent_narration=AsyncMock(), send=AsyncMock())
-        node = PlanNode(planning, model, documents)
-        state = {"user_id": 7, "session_id": "s", "message": "明天复习",
+        model = text_planner(AsyncMock(return_value=valid_plan()))
+        context = TurnContext(token="user-token", flow_state=SimpleNamespace())
+        node = PlanNode(planning, model, documents, EmptyScheduleMcp)
+        state = {"user_id": 7, "session_id": "s", "message": "今天复习",
                  "pending": PendingTask(), "signal": UserSignal.NEW_PLAN}
         await node(state, context)
         documents.search.assert_not_awaited()
         self.assertNotIn("每天背单词", model.complete.call_args.args[0][1]["content"])
         state["document_ids"] = [42]
         await node(state, context)
-        documents.search.assert_awaited_once_with(7, [42], "明天复习")
-        context.add_step.assert_any_await("tool", "检索引用文档")
-        context.complete_step.assert_awaited_once_with(
-            1, result_summary="找到 1 个相关片段，来源：notes.md。片段摘录：每天背单词")
+        documents.search.assert_awaited_once_with(7, [42], "今天复习")
+        search_step = next(step for step in context.agent_steps if step.label == "检索引用文档")
+        self.assertEqual("success", search_step.status)
+        self.assertEqual("找到 1 个相关片段，来源：notes.md。片段摘录：每天背单词", search_step.resultSummary)
         self.assertIn("每天背单词", model.complete.call_args.args[0][1]["content"])

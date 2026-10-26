@@ -34,7 +34,8 @@ class MemoryFlowRepository:
         state.stage, state.processing = stage.name, 0
         state.version += 1
         state.pending_task, state.pending_draft_id = pending.task, pending.draft_id
-        state.pending_payload, state.image_instruction = pending.plan_preview, pending.image_instruction
+        state.pending_payload = FlowStateRepository.serialize_payload(pending)
+        state.image_instruction = pending.image_instruction
         self.saved.append((state.user_id, state.session_id, round_data))
 
     async def release_claim(self, state):

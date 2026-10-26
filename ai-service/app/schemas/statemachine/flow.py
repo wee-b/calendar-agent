@@ -1,6 +1,7 @@
 from enum import Enum
 
 from pydantic import BaseModel, Field
+from app.schemas.plan.preparation import PlanningPreparation
 
 
 class UserSignal(Enum):
@@ -47,6 +48,7 @@ class PendingTask(BaseModel):
     draft_id: int | None = None
     plan_preview: str | None = None
     image_instruction: str | None = None
+    planning: PlanningPreparation | None = None
 
 
 class ConversationTurnInput(BaseModel):

@@ -29,6 +29,8 @@ export async function consumeChatStream(
     let receivedResult = false;
     const toolLabels: Record<string, string> = {
         queryDayDetail: '查询日程', queryTodoList: '查询待办', queryMonthCount: '查询月历',
+        queryPreferences: '查询用户偏好',
+        queryScheduleRange: '查询规划区间日程',
         createTodo: '创建待办', batchCreateTodos: '同步规划', updateTodo: '修改待办',
         deleteTodo: '删除待办', toggleTodoDate: '更新完成状态', saveDailyNote: '保存日记',
         removeTodoDay: '移除待办日期', addTodoDay: '添加待办日期',

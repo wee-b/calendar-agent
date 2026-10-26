@@ -11,6 +11,8 @@ from app.repository.chat import ChatRepository
 from app.repository.flow_state import FlowStateRepository
 from app.repository.plan_draft import PlanDraftRepository
 from app.schemas.plan import parse_plan
+from app.schemas.plan.preparation import PlanningPreparation
+from app.schemas.plan.planning_tools import PlanningRange, ScheduleRangeResult
 from app.schemas.chat.timeline import AgentStep
 from app.schemas.chat.history import DocumentReference
 from app.schemas.statemachine.flow import ConversationStage, PendingTask
@@ -20,6 +22,24 @@ from tests.test_migrated_nodes import plan_json
 
 
 class FlowPersistenceTests(HistoryMysqlCase):
+    async def test_clarification_questions_and_prepared_sources_commit_and_restore_together(self):
+        repo = FlowStateRepository(self.engine)
+        state = await repo.get_or_create(23, "s")
+        self.assertTrue(await repo.claim(state))
+        period = PlanningRange(startDate="2026-10-23", endDate="2026-10-30")
+        pending = PendingTask(task="英语复习", planning=PlanningPreparation(
+            date_range=period, document_ids=[42], references="[文章 / 方法] 每天复习",
+            questions=["每天可以投入多久？"],
+            schedules=ScheduleRangeResult(**period.model_dump(), schedules=[])))
+        await repo.complete(state, ConversationStage.PLAN, pending, AgentType.PLANNER,
+                            message="帮我规划", reply="每天可以投入多久？", dispatch_type="PLAN_CLARIFICATION")
+        saved = await repo.get(23, "s")
+        self.assertEqual("PLAN", saved.stage)
+        self.assertEqual(0, saved.processing)
+        self.assertEqual(pending, repo.pending(saved))
+        async with repo.sessions() as session:
+            self.assertEqual(2, await session.scalar(select(func.count()).select_from(AiDialogue)))
+
     async def test_concurrent_claim_and_complete_commit_one_round(self):
         repo = FlowStateRepository(self.engine)
         first = await repo.get_or_create(23, "s")

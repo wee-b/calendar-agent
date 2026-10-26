@@ -1,5 +1,7 @@
 """会话流程状态的持久化与版本认领。"""
 
+import json
+
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -14,6 +16,7 @@ from app.schemas.statemachine.transitions import AgentType
 from app.repository.chat import ChatRepository
 from app.schemas.chat.history import ChatMessageCreate, DocumentReference
 from app.schemas.chat.timeline import AgentStep
+from app.schemas.plan.preparation import PlanningPreparation
 
 
 class FlowStateRepository:
@@ -111,7 +114,7 @@ class FlowStateRepository:
                     next_agent=self.owner(next_stage),
                     pending_task=pending.task,
                     pending_draft_id=pending.draft_id,
-                    pending_payload=pending.plan_preview,
+                    pending_payload=self.serialize_payload(pending),
                     image_instruction=pending.image_instruction,
                     processing=0,
                     version=YlAgentFlowState.version + 1,
@@ -132,7 +135,7 @@ class FlowStateRepository:
         state.next_agent = self.owner(next_stage)
         state.pending_task = pending.task
         state.pending_draft_id = pending.draft_id
-        state.pending_payload = pending.plan_preview
+        state.pending_payload = self.serialize_payload(pending)
         state.image_instruction = pending.image_instruction
         state.processing = 0
         state.version += 1
@@ -179,11 +182,33 @@ class FlowStateRepository:
 
     @staticmethod
     def pending(state: YlAgentFlowState) -> PendingTask:
+        preview, preparation = state.pending_payload, None
+        if preview:
+            try:
+                payload = json.loads(preview)
+            except (ValueError, TypeError):
+                payload = None
+            if isinstance(payload, dict) and payload.get("_format") == "planning-v1":
+                try:
+                    preparation = PlanningPreparation.model_validate(payload["planning"])
+                    preview = payload.get("plan_preview")
+                    if preview is not None and not isinstance(preview, str):
+                        raise ValueError("规划预览必须为文本")
+                except (KeyError, ValueError) as exc:
+                    raise BusinessException(ErrorCode.PLAN_STATE_INVALID) from exc
         return PendingTask(
             task=state.pending_task, draft_id=state.pending_draft_id,
-            plan_preview=state.pending_payload,
+            plan_preview=preview, planning=preparation,
             image_instruction=state.image_instruction,
         )
+
+    @staticmethod
+    def serialize_payload(pending: PendingTask) -> str | None:
+        """兼容旧的预览文本；仅有规划上下文时使用版本化 JSON 包装。"""
+        if pending.planning is None:
+            return pending.plan_preview
+        return json.dumps({"_format": "planning-v1", "plan_preview": pending.plan_preview,
+                           "planning": pending.planning.model_dump(mode="json")}, ensure_ascii=False)
 
     @staticmethod
     def owner(stage: ConversationStage) -> str:

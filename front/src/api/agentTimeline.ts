@@ -2,6 +2,7 @@ import type { AgentStep } from './chatStream';
 
 export function timelineNarration(step: AgentStep): string {
     if (step.narration?.trim()) return step.narration;
+    if (step.kind === 'agent' && step.resultSummary?.trim()) return step.resultSummary;
     if (step.status === 'error') return `${step.label}未完成。`;
     return step.status === 'running' ? `正在${step.label}…` : `${step.label}已完成。`;
 }

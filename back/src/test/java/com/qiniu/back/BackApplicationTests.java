@@ -96,6 +96,9 @@ class BackApplicationTests {
         doNothing().when(tokenUtil).updateActiveTimeout(23L);
         when(toolService.queryDayDetail("2026-10-03")).thenReturn(
                 new McpToolService.DayDetailResult(LocalDate.of(2026, 10, 3), List.of(), "休息"));
+        when(toolService.queryScheduleRange(LocalDate.of(2026, 10, 23), LocalDate.of(2026, 10, 30)))
+                .thenReturn(new McpToolService.ScheduleRangeResult(
+                        LocalDate.of(2026, 10, 23), LocalDate.of(2026, 10, 30), List.of()));
         try (var auth = mockStatic(SaTokenUtil.class)) {
             auth.when(() -> SaTokenUtil.getTokenFromRequest(any(HttpServletRequest.class))).thenReturn("test-token");
             auth.when(() -> SaTokenUtil.getUserIdFromToken("test-token")).thenReturn(23L);
@@ -103,7 +106,9 @@ class BackApplicationTests {
             mvc.perform(post("/mcp").contentType("application/json")
                             .content("{\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"id\":\"list-1\"}"))
                     .andExpect(status().isOk()).andExpect(jsonPath("$.id").value("list-1"))
-                    .andExpect(jsonPath("$.result.tools.length()").value(11))
+                    .andExpect(jsonPath("$.result.tools.length()").value(12))
+                    .andExpect(jsonPath("$.result.tools[?(@.name == 'queryScheduleRange')].metadata.readOnly")
+                            .value(org.hamcrest.Matchers.contains(true)))
                     .andExpect(jsonPath("$.result.tools[?(@.name == 'batchCreateTodos')].metadata.confirmationRequired")
                             .value(org.hamcrest.Matchers.contains(true)));
             var response = mvc.perform(post("/mcp").contentType("application/json").content("""
@@ -116,6 +121,17 @@ class BackApplicationTests {
             assertEquals("2026-10-03", mapper.readTree(result).get("date").asText());
             assertEquals("休息", mapper.readTree(result).get("dailyNote").asText());
             verify(toolService).queryDayDetail("2026-10-03");
+            var rangeResponse = mvc.perform(post("/mcp").contentType("application/json").content("""
+                    {"jsonrpc":"2.0","method":"tools/call","id":"range-1",
+                     "params":{"name":"queryScheduleRange","arguments":{"startDate":"2026-10-23","endDate":"2026-10-30"}}}
+                    """))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.result.isError").value(false)).andReturn();
+            var rangeText = mapper.readTree(rangeResponse.getResponse().getContentAsString()).at("/result/content/0/text").asText();
+            var range = mapper.readTree(rangeText);
+            assertEquals("2026-10-23", range.get("startDate").asText());
+            assertEquals("2026-10-30", range.get("endDate").asText());
+            assertTrue(range.get("schedules").isArray());
+            verify(toolService).queryScheduleRange(LocalDate.of(2026, 10, 23), LocalDate.of(2026, 10, 30));
         }
     }
 }

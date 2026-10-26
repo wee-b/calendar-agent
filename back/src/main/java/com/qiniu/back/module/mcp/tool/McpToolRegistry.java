@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.qiniu.back.domain.dailyNote.dto.DailyNoteSaveDTO;
 import com.qiniu.back.domain.dailyNote.dto.DayDetailQueryDTO;
 import com.qiniu.back.domain.dailyNote.dto.MonthCountQueryDTO;
+import com.qiniu.back.domain.dailyNote.dto.ScheduleRangeQueryDTO;
 import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
 import com.qiniu.back.domain.todo.dto.TodoBatchCreateDTO;
 import com.qiniu.back.domain.todo.dto.TodoDateToggleDTO;
@@ -112,6 +113,7 @@ public class McpToolRegistry {
         registerQueryMonthCount();
         registerQueryDayDetail();
         registerQueryTodoList();
+        registerQueryScheduleRange();
         registerDeleteTodo();
         registerUpdateTodo();
         registerToggleTodoDate();
@@ -255,6 +257,24 @@ public class McpToolRegistry {
                 .confirmationRequired(false).timeoutMs(3000)
                 .inputSchema(DtoInputSchema.empty())
                 .executor(args -> toolService.queryTodoList())
+                .build());
+    }
+
+    private void registerQueryScheduleRange() {
+        tools.put("queryScheduleRange", McpToolDefinition.builder()
+                .name("queryScheduleRange")
+                .description("一次批量查询当前用户在指定日期区间内的日程明细，包含日期、标题和每日内容；跨度不超过180天。")
+                .readOnly(true).idempotent(true).parallelSafe(true)
+                .confirmationRequired(false).timeoutMs(5000)
+                .inputSchema(DtoInputSchema.from(ScheduleRangeQueryDTO.class))
+                .executor(args -> {
+                    if (!args.keySet().equals(Set.of("startDate", "endDate"))) {
+                        throw new BusinessException(com.qiniu.back.domain.ErrorCode.BAD_REQUEST,
+                                "只允许传入开始和结束日期");
+                    }
+                    ScheduleRangeQueryDTO dto = mapper.convertValue(args, ScheduleRangeQueryDTO.class);
+                    return toolService.queryScheduleRange(dto.getStartDate(), dto.getEndDate());
+                })
                 .build());
     }
 

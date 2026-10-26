@@ -64,6 +64,9 @@ class ExecuteNode:
                                dispatch_type="EXECUTE" if writes else "EXECUTE_CONFIRM")
 
     async def _sync_plan(self, state, context):
+        if state["pending"].planning and state["pending"].planning.questions:
+            return AgentTurnResult(reply="当前规划正在等待补充条件，请先回答规划问题，再同步最终草稿。",
+                                   completed=False, pending=state["pending"], dispatch_type="PLAN_CLARIFICATION")
         log_turn_step("LOAD_DRAFT", 草稿ID=state["pending"].draft_id)
         draft = await self.drafts.find_pending(state["user_id"], state["session_id"], state["pending"].draft_id)
         if draft is None:

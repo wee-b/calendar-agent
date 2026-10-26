@@ -1,11 +1,14 @@
 package com.qiniu.back.module.mcp.tool;
 
 import com.qiniu.back.domain.dailyNote.vo.DayTodosVO;
+import com.qiniu.back.domain.dailyNote.vo.ScheduleItemVO;
 import com.qiniu.back.domain.todo.dto.TodoCreateDTO;
 import com.qiniu.back.domain.todo.vo.TodoVO;
 import com.qiniu.back.exception.BusinessException;
 import com.qiniu.back.module.dailyNote.service.DailyNoteService;
 import com.qiniu.back.module.todo.service.TodoService;
+import com.qiniu.back.module.todo.mapper.TodoDateMapper;
+import com.qiniu.back.util.LoginUserContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -20,6 +23,45 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 class McpToolServiceTest {
+
+    @Test
+    void scheduleRangeQueriesOnceWithAuthenticatedUserAndExactDates() {
+        McpToolService service = service(mock(TodoService.class), mock(DailyNoteService.class));
+        TodoDateMapper mapper = mock(TodoDateMapper.class);
+        ReflectionTestUtils.setField(service, "todoDateMapper", mapper);
+        LocalDate start = LocalDate.of(2026, 10, 23), end = start.plusDays(7);
+        ScheduleItemVO item = new ScheduleItemVO();
+        item.setTodoId(9L);
+        item.setTitle("学习");
+        item.setDate(start);
+        item.setDayContent("19:00-20:00 复习");
+        when(mapper.selectScheduleRange(7L, start, end)).thenReturn(List.of(item));
+        LoginUserContext.setUserId(7L);
+        try {
+            var result = service.queryScheduleRange(start, end);
+            assertEquals(start, result.startDate());
+            assertEquals(end, result.endDate());
+            assertEquals(List.of(item), result.schedules());
+            verify(mapper).selectScheduleRange(7L, start, end);
+            verifyNoMoreInteractions(mapper);
+        } finally {
+            LoginUserContext.remove();
+        }
+    }
+
+    @Test
+    void scheduleRangeRejectsMissingIdentityAndInvalidDatesBeforeQuery() {
+        McpToolService service = service(mock(TodoService.class), mock(DailyNoteService.class));
+        TodoDateMapper mapper = mock(TodoDateMapper.class);
+        ReflectionTestUtils.setField(service, "todoDateMapper", mapper);
+        LocalDate start = LocalDate.of(2026, 10, 23);
+        LoginUserContext.remove();
+        assertThrows(BusinessException.class, () -> service.queryScheduleRange(null, start));
+        assertThrows(BusinessException.class, () -> service.queryScheduleRange(start, start.minusDays(1)));
+        assertThrows(BusinessException.class, () -> service.queryScheduleRange(start, start.plusDays(181)));
+        assertEquals(401, assertThrows(BusinessException.class, () -> service.queryScheduleRange(start, start)).getCode());
+        org.mockito.Mockito.verifyNoInteractions(mapper);
+    }
 
     @Test
     void batchCreateDelegatesOnceToTransactionalBusinessService() {

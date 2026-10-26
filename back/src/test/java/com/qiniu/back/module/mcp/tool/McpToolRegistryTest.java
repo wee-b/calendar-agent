@@ -25,6 +25,30 @@ import static org.mockito.Mockito.when;
 class McpToolRegistryTest {
 
     @Test
+    void rangeToolExposesOnlyDatesAndRejectsUserIdentityArguments() {
+        McpToolService service = mock(McpToolService.class);
+        LocalDate start = LocalDate.of(2026, 10, 23), end = start.plusDays(7);
+        when(service.queryScheduleRange(start, end)).thenReturn(
+                new McpToolService.ScheduleRangeResult(start, end, List.of()));
+        McpToolRegistry registry = new McpToolRegistry(service);
+        registry.init();
+        var tool = registry.getTool("queryScheduleRange");
+        assertTrue(tool.isReadOnly());
+        assertTrue(tool.isIdempotent());
+        assertFalse(tool.isConfirmationRequired());
+        assertEquals(Set.of("startDate", "endDate"), propertyNames(registry, tool.getName()));
+        assertFalse(registry.executeResult(tool.getName(), """
+                {"startDate":"2026-10-23","endDate":"2026-10-30","userId":999}
+                """).success());
+        org.mockito.Mockito.verifyNoInteractions(service);
+        var result = registry.executeResult(tool.getName(), """
+                {"startDate":"2026-10-23","endDate":"2026-10-30"}
+                """);
+        assertTrue(result.success());
+        verify(service, times(1)).queryScheduleRange(start, end);
+    }
+
+    @Test
     void batchToolUsesBusinessArgumentsAndRequiresConfirmation() {
         McpToolService service = mock(McpToolService.class);
         when(service.batchCreateTodos(any())).thenReturn(new McpToolService.BatchCreateResult(1,

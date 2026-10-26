@@ -4,9 +4,46 @@ from app.core.config.common.mcp import McpSettings
 from app.helper.mcp_client import McpClientError
 from app.service.read_only_tool import call_read_only_tool
 from app.schemas.chat.tools import DayDetailArguments, DayDetailResult
+from app.schemas.plan.planning_tools import QueryTodoListArguments, TodoListResult, ScheduleRangeArguments
 
 
 class ReadOnlyToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_range_result_must_match_requested_dates_and_contain_only_in_range_items(self):
+        for result in (
+            {"startDate": "2026-10-22", "endDate": "2026-10-23", "schedules": []},
+            {"startDate": "2026-10-23", "endDate": "2026-10-23", "schedules": [
+                {"todoId": 9, "title": "范围外任务", "date": "2026-10-24"}]},
+        ):
+            with self.subTest(result=result):
+                class Mcp:
+                    async def call_tool(self, *_):
+                        return result
+
+                with self.assertRaises(McpClientError) as caught:
+                    await call_read_only_tool(Mcp(), "queryScheduleRange", ScheduleRangeArguments(
+                        startDate="2026-10-23", endDate="2026-10-23"), "token")
+                self.assertEqual("INVALID_RESPONSE", caught.exception.code)
+
+    async def test_bulk_query_retries_only_retryable_failures_and_validates_result(self):
+        class Mcp:
+            calls = 0
+
+            async def call_tool(self, name, arguments, token):
+                self.calls += 1
+                if (name, arguments, token) != ("queryTodoList", {}, "token"):
+                    raise AssertionError("查询必须只使用服务端身份和空参数")
+                if self.calls == 1:
+                    raise McpClientError("JAVA_TIMEOUT", "timeout", retryable=True)
+                return {"todos": []}
+
+        mcp = Mcp()
+        result = await call_read_only_tool(
+            mcp, "queryTodoList", QueryTodoListArguments(), "token",
+            McpSettings(MCP_READ_RETRY_ATTEMPTS=2, MCP_READ_RETRY_DELAY_MS=0),
+        )
+        self.assertEqual(TodoListResult(todos=[]), result)
+        self.assertEqual(2, mcp.calls)
+
     async def test_retries_retryable_failure_then_succeeds(self):
         class Mcp:
             calls = 0
