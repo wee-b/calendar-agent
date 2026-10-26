@@ -96,23 +96,24 @@
               >{{ readingMsgIndex === index ? (isPaused ? '继续' : '暂停') : '朗读' }}</span>
               <span class="action-icon danger" @click="handleDeleteLastRound">撤回</span>
             </div>
-            <div v-if="!msg.loading && !msg.runActive && index === messages.length - 1 && msg.dispatchType === 'PLAN_CLARIFICATION'" class="plan-choices">
-              <button @click="focusPlanInput('请补充预算、时间、偏好等信息')">1. 补充信息</button>
-              <button class="primary" @click="sendQuickReply('不补充信息，直接规划')">2. 不补充信息，直接规划</button>
-              <button @click="focusPlanInput('请输入其他处理方式')">3. 其他</button>
-            </div>
           </div>
         </div>
       </div>
 
+      <PlanningFollowUp
+        :key="currentSessionId || 'new-session'"
+        :planning="planning.state.value" :busy="isSending" :loading="planning.loading.value || isRestoringSession"
+        :load-error="planning.error.value" :logged-in="isUserLoggedIn"
+        @send="sendQuickReply" @refresh="refreshPlanningState"
+      />
       <div class="chat-input-area" :class="{ 'is-expanded': isExpanded }">
         <div class="textarea-wrapper">
           <textarea
               v-model="inputText"
               class="chat-input"
-              :placeholder="inputMudle === 2 ? (isRecording ? '正在聆听...' : '正在聆听，说完后说【发送】提交...') : '输入指令或点击🎤开启语音'"
+              :placeholder="inputMudle === 2 ? (isRecording ? '正在聆听...' : '正在聆听，说完后说【发送】提交...') : planning.state.value?.status === 'awaiting_answers' ? '补充上面的规划条件…' : '输入指令或点击🎤开启语音'"
               @keydown.enter.exact.prevent="handleSend"
-              :disabled="isSending || !isUserLoggedIn"
+              :disabled="isSending || isRestoringSession || !isUserLoggedIn"
               :rows="isExpanded ? 10 : 3"
           ></textarea>
           <div class="input-actions">
@@ -137,7 +138,7 @@
             <button
                 class="send-btn"
                 @click="handleSend"
-                :disabled="isSending || !inputText.trim() || !isUserLoggedIn"
+                :disabled="isSending || isRestoringSession || !inputText.trim() || !isUserLoggedIn"
             >
               发送
             </button>
@@ -175,17 +176,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted, watch } from 'vue';
+import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
-  newSessionAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
+  newSessionAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, getSessionStateAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
 } from '../../../api/chat';
 import { tokenRef } from '../../../utils/auth';
 import { renderMarkdown } from '../../../utils/markdown';
-import type { AgentStep } from '../../../api/chatStream';
+import type { AgentStep, ChatStreamResult } from '../../../api/chatStream';
 import type { DocumentReference } from '../../../api/documents';
 import MessageDocuments from '../../ChatView/components/MessageDocuments.vue';
 import { timelineAction, timelineNarration } from '../../../api/agentTimeline';
+import PlanningFollowUp from '../../ChatView/components/PlanningFollowUp.vue';
+import { usePlanningSession } from '../../../composables/usePlanningSession';
 
 const props = defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'refresh'): void }>();
@@ -197,6 +200,8 @@ interface ChatMessage { role: string; content: string; loading?: boolean; respon
 
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
+const planning = usePlanningSession(getSessionStateAPI);
+const refreshPlanningState = () => currentSessionId.value ? planning.refresh(currentSessionId.value) : Promise.resolve();
 const messages = ref<ChatMessage[]>([]);
 const hasMoreHistory = ref(false);
 const nextBeforeId = ref<number | null>(null);
@@ -204,6 +209,7 @@ const isLoadingHistory = ref(false);
 let historyRequestId = 0;
 const inputText = ref('');
 const isSending = ref(false);
+const isRestoringSession = ref(false);
 
 const isDropdownOpen = ref(false);
 const showDeleteConfirm = ref(false);
@@ -246,17 +252,15 @@ const scrollToBottom = async (force = true) => {
 
 const toggleDropdown = () => { if (isUserLoggedIn.value) isDropdownOpen.value = !isDropdownOpen.value; };
 
-const focusPlanInput = async (placeholder: string) => {
-  inputText.value = '';
-  await nextTick();
-  const input = document.querySelector('.right-sidebar .chat-input') as HTMLTextAreaElement | null;
-  if (input) {
-    input.placeholder = placeholder;
-    input.focus();
-  }
-};
-
 const sendQuickReply = (content: string) => {
+  if (isSending.value || isRestoringSession.value || !isUserLoggedIn.value) return;
+  if (inputText.value.trim() && content.startsWith('补充规划条件：')) {
+    content += '\n\n补充说明：' + inputText.value.trim();
+  } else if (inputText.value.trim() && content !== '取消当前规划') {
+    ElMessage.info('输入框还有未发送内容，请先发送或清空。');
+    return;
+  }
+  if (content.length > 10000) { ElMessage.warning('回答与补充说明合计最多 10000 字，请精简后再提交。'); return; }
   inputText.value = content;
   handleSend();
 };
@@ -272,9 +276,12 @@ const fetchSessions = async () => {
 
 const selectSession = async (session: ChatSessionVO) => {
   currentSessionId.value = session.sessionId;
+  planning.reset(session.sessionId);
+  void planning.refresh(session.sessionId);
   isDropdownOpen.value = false;
   messages.value = [];
   const requestId = ++historyRequestId;
+  isRestoringSession.value = true;
   hasMoreHistory.value = false;
   nextBeforeId.value = null;
   isLoadingHistory.value = false;
@@ -289,10 +296,11 @@ const selectSession = async (session: ChatSessionVO) => {
       responseTimeMs: h.responseTimeMs,
       agentSteps: h.agentSteps || [],
       documentReferences: h.documentReferences || [],
-      dispatchType: h.dispatchType || (h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined)
+      dispatchType: h.dispatchType || undefined
     }));
     scrollToBottom();
   } catch (error) {}
+  finally { if (requestId === historyRequestId) isRestoringSession.value = false; }
 };
 
 const loadEarlierHistory = async () => {
@@ -323,12 +331,15 @@ const createNewSession = async () => {
   if (!isUserLoggedIn.value) { ElMessage.warning('请先登录'); return; }
   isDropdownOpen.value = false;
   messages.value = [];
+  planning.reset();
+  isRestoringSession.value = false;
   historyRequestId++;
   hasMoreHistory.value = false;
   nextBeforeId.value = null;
   try {
     const res = await newSessionAPI();
     currentSessionId.value = res.sessionId || Object.values(res)[0];
+    planning.reset(currentSessionId.value);
     await fetchSessions();
   } catch (error) {}
 };
@@ -414,10 +425,11 @@ const handleDeleteLastRound = async () => {
       responseTimeMs: h.responseTimeMs,
       agentSteps: h.agentSteps || [],
       documentReferences: h.documentReferences || [],
-      dispatchType: h.dispatchType || (h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined)
+      dispatchType: h.dispatchType || undefined
     }));
     scrollToBottom();
     await fetchSessions();
+    await refreshPlanningState();
     emit('refresh');
   } catch (error) {}
 };
@@ -624,12 +636,14 @@ const CHAT_TIMEOUT = 30000;
 const handleSend = async () => {
   let text = inputText.value.trim();
   text = text.replace(/发送[。！？，、；：]*$/g, '').trim();
-  if (!text || isSending.value || !isUserLoggedIn.value) return;
+  if (!text || isSending.value || isRestoringSession.value || !isUserLoggedIn.value) return;
+  if (text.length > 10000) { ElMessage.warning('消息最多 10000 字，请精简后再发送。'); return; }
 
   if (!currentSessionId.value) {
     await createNewSession();
     if (!currentSessionId.value) return;
   }
+  const activeSessionId = currentSessionId.value;
 
   stopVoice();
   messages.value.push({ role: 'user', content: text });
@@ -645,13 +659,14 @@ const handleSend = async () => {
   let slowTimer: any = null;
   let streamDone = false;
   let streamFailed = false;
+  let finalResult: ChatStreamResult | null = null;
   try {
     slowTimer = setTimeout(() => {
       ElMessage.warning('响应较慢，请耐心等待...');
     }, CHAT_TIMEOUT);
 
     await streamChatAPI(
-      { sessionId: currentSessionId.value, message: text },
+      { sessionId: activeSessionId, message: text },
       (token) => {
         clearTimeout(slowTimer);
         replyMsg.content += token;
@@ -685,14 +700,22 @@ const handleSend = async () => {
         if (index >= 0) steps.splice(index, 1, step);
         else steps.push(step);
         scrollToBottom(false);
-      }
+      },
+      (result) => { finalResult = result; }
     );
     if (streamDone && !streamFailed) {
+      const result = finalResult as ChatStreamResult | null;
+      if (currentSessionId.value === activeSessionId) {
+        if (!result || result.sessionId !== activeSessionId || !planning.apply(activeSessionId, result.planning)) {
+          await planning.refresh(activeSessionId);
+        }
+      }
       replyMsg.runActive = false;
       replyMsg.loading = false;
       if (inputMudle.value === 2) handleRead(replyMsg.content, messages.value.indexOf(replyMsg));
     }
   } finally {
+    if (streamFailed && currentSessionId.value === activeSessionId) await planning.refresh(activeSessionId);
     isSending.value = false;
     scrollToBottom(false);
     inputText.value = '';
@@ -719,6 +742,7 @@ onMounted(async () => {
     // 默认手动模式，不自动开启语音
   }
 });
+onUnmounted(() => planning.reset());
 
 watch(isUserLoggedIn, async (newVal) => {
   if (newVal) {
@@ -732,6 +756,7 @@ watch(isUserLoggedIn, async (newVal) => {
     sessions.value = [];
     messages.value = [];
     currentSessionId.value = null;
+    planning.reset();
   }
 });
 </script>
@@ -895,31 +920,6 @@ watch(isUserLoggedIn, async (newVal) => {
 .action-icon { font-size: 12px; font-weight: bold; color: #b5a992; cursor: pointer; transition: color 0.2s; }
 .action-icon:hover { color: #5c4b37; text-decoration: underline; }
 .action-icon.danger:hover { color: #bc423f; }
-
-.plan-choices {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.plan-choices button {
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid #ded7ca;
-  border-radius: 8px;
-  background: #fffdf8;
-  color: #5c4b37;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.plan-choices button:hover,
-.plan-choices button.primary {
-  border-color: #5c4b37;
-  background: #5c4b37;
-  color: #ffffff;
-}
 
 /* 加载动画 */
 .typing-indicator { display: flex; gap: 4px; align-items: center; height: 20px; }

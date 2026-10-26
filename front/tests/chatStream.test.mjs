@@ -16,6 +16,31 @@ const stream = (body, chunkSize = 3) => {
     });
 };
 
+test('SSE result forwards authoritative planning questions and range independently of reply wording', async () => {
+    const planning = { status: 'awaiting_answers', questions: ['每天可以投入多久？'],
+        questionSetId: '1234567890abcdef', dateRange: { startDate: '2026-10-26', endDate: '2026-11-01' }, referenceCount: 1 };
+    let result, completed = false;
+    await consumeChatStream(stream(event('result', { sessionId: 's', aiResult: '自定义问题文案',
+        dispatchType: 'PLAN_CLARIFICATION', flowStage: 'PLAN', planning }) + event('done', {})), {
+        onToken() {}, onResult: value => { result = value; }, onDone: () => { completed = true; },
+    });
+    assert.equal(completed, true);
+    assert.deepEqual(result.planning, planning);
+    assert.equal(result.sessionId, 's');
+    assert.equal(result.flowStage, 'PLAN');
+});
+
+test('missing planning metadata remains unknown and planner tool progress is labeled as a query', async () => {
+    const progress = [];
+    let result;
+    await consumeChatStream(stream(event('agent_status', { agent: 'planner', stage: 'tool' }) +
+        event('result', { sessionId: 's', aiResult: '回复' }) + event('done', {})), {
+        onToken() {}, onDone() {}, onProgress: value => progress.push(value), onResult: value => { result = value; },
+    });
+    assert.equal(result.planning, null);
+    assert.deepEqual(progress, ['开始：查询规划资料']);
+});
+
 test('planning validation and repair summaries remain visible in agent narration', () => {
     const step = { id: 1, kind: 'agent', label: '校验规划约束', status: 'error', elapsedMs: 100,
         resultSummary: '发现 2 项问题，涉及用户约束、已有日程，将反馈修正。' };

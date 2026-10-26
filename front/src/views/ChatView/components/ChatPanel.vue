@@ -23,7 +23,7 @@
         :messages="messages"
         :has-more-history="hasMoreHistory"
         :is-loading-history="isLoadingHistory"
-        :is-sending="isSending"
+        :is-sending="isSending || isRestoringSession"
         @load-earlier="loadEarlierHistory"
         :reading-msg-index="readingMsgIndex"
         :is-paused="isPaused"
@@ -35,7 +35,17 @@
         @copy="handleCopy"
         @read="handleRead"
         @delete-last-round="handleDeleteLastRound"
-        @quick-reply="handleQuickReply"
+      />
+
+      <PlanningFollowUp
+        :key="currentSessionId || 'new-session'"
+        :planning="planning.state.value"
+        :busy="isSending"
+        :loading="planning.loading.value || isRestoringSession"
+        :load-error="planning.error.value"
+        :logged-in="isUserLoggedIn"
+        @send="handleQuickReply"
+        @refresh="refreshPlanningState"
       />
 
       <ChatInputBox
@@ -43,8 +53,9 @@
         :input-mode="inputMudle"
         :is-recording="isRecording"
         :is-expanded="isExpanded"
-        :is-sending="isSending"
+        :is-sending="isSending || isRestoringSession"
         :is-user-logged-in="isUserLoggedIn"
+        :awaiting-planning-answers="planning.state.value?.status === 'awaiting_answers'"
         :db-bars="dbBars"
         v-model:references="selectedDocumentReferences"
         @send="handleSend"
@@ -78,16 +89,19 @@ import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch } from
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
-  newSessionAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
+  newSessionAPI, streamChatAPI, getSessionsAPI, getHistoryAPI, getSessionStateAPI, deleteSessionAPI, deleteLastRoundAPI, type ChatSessionVO
 } from '../../../api/chat';
 import { tokenRef } from '../../../utils/auth';
 import ChatHeader from './ChatHeader.vue';
 import SessionDropdown from './SessionDropdown.vue';
 import ChatMessageList from './ChatMessageList.vue';
 import ChatInputBox from './ChatInputBox.vue';
+import PlanningFollowUp from './PlanningFollowUp.vue';
 import ConfirmModal from './ConfirmModal.vue';
 import type { ChatMessage } from './types';
 import type { DocumentReference } from '../../../api/documents';
+import type { ChatStreamResult } from '../../../api/chatStream';
+import { usePlanningSession } from '../../../composables/usePlanningSession';
 
 const emit = defineEmits<{
   (e: 'refresh'): void;
@@ -99,6 +113,8 @@ const isUserLoggedIn = computed(() => !!tokenRef.value);
 
 const sessions = ref<ChatSessionVO[]>([]);
 const currentSessionId = ref<string | null>(null);
+const planning = usePlanningSession(getSessionStateAPI);
+const refreshPlanningState = () => currentSessionId.value ? planning.refresh(currentSessionId.value) : Promise.resolve();
 const messages = ref<ChatMessage[]>([]);
 const hasMoreHistory = ref(false);
 const nextBeforeId = ref<number | null>(null);
@@ -106,6 +122,7 @@ const isLoadingHistory = ref(false);
 const inputText = ref('');
 const selectedDocumentReferences = ref<DocumentReference[]>([]);
 const isSending = ref(false);
+const isRestoringSession = ref(false);
 
 const isDropdownOpen = ref(false);
 const showDeleteConfirm = ref(false);
@@ -200,6 +217,14 @@ const selectPrompt = (prompt: string) => {
 };
 
 const handleQuickReply = (content: string) => {
+  if (isSending.value || isRestoringSession.value || !isUserLoggedIn.value) return;
+  if (inputText.value.trim() && content.startsWith('补充规划条件：')) {
+    content += '\n\n补充说明：' + inputText.value.trim();
+  } else if (inputText.value.trim() && content !== '取消当前规划') {
+    ElMessage.info('输入框还有未发送内容，请先发送或清空。');
+    return;
+  }
+  if (content.length > 10000) { ElMessage.warning('回答与补充说明合计最多 10000 字，请精简后再提交。'); return; }
   inputText.value = content;
   handleSend();
 };
@@ -224,7 +249,11 @@ const getRouteSessionId = () => {
 
 const loadSessionById = async (sessionId: string) => {
   const loadToken = ++historyLoadToken;
+  isRestoringSession.value = true;
   currentSessionId.value = sessionId;
+  planning.reset(sessionId);
+  void planning.refresh(sessionId);
+  selectedDocumentReferences.value = [];
   messages.value = [];
   hasMoreHistory.value = false;
   nextBeforeId.value = null;
@@ -242,10 +271,11 @@ const loadSessionById = async (sessionId: string) => {
       agentSteps: h.agentSteps || [],
       documentReferences: h.documentReferences || [],
       runDone: true,
-      dispatchType: h.dispatchType || (h.content.startsWith('为了让规划更贴合你') ? 'PLAN_CLARIFICATION' : undefined)
+      dispatchType: h.dispatchType || undefined
     }));
     scrollToBottom();
   } catch (error) {}
+  finally { if (loadToken === historyLoadToken) isRestoringSession.value = false; }
 };
 
 const selectSession = async (session: ChatSessionVO) => {
@@ -285,6 +315,9 @@ const createNewSession = async () => {
   if (!isUserLoggedIn.value) { ElMessage.warning('请先登录'); return; }
   isDropdownOpen.value = false;
   currentSessionId.value = null;
+  planning.reset();
+  isRestoringSession.value = false;
+  selectedDocumentReferences.value = [];
   messages.value = [];
   historyLoadToken++;
   hasMoreHistory.value = false;
@@ -297,6 +330,7 @@ const startSessionForSend = async (title: string) => {
     const res = await newSessionAPI();
     currentSessionId.value = res.sessionId || Object.values(res)[0];
     if (!currentSessionId.value) return false;
+    planning.reset(currentSessionId.value);
     pendingRouteSessionId = currentSessionId.value;
     const displayTitle = title.length > 30 ? `${title.slice(0, 30)}...` : title;
     sessions.value = [
@@ -376,14 +410,18 @@ const handleRead = (text: string, msgIndex?: number) => {
 };
 
 const handleDeleteLastRound = async () => {
-  if (!currentSessionId.value || isSending.value) return;
+  if (!currentSessionId.value || isSending.value || isRestoringSession.value) return;
+  const sessionId = currentSessionId.value;
+  isRestoringSession.value = true;
   try {
-    await deleteLastRoundAPI(currentSessionId.value);
+    await deleteLastRoundAPI(sessionId);
     ElMessage.success('已撤回上一轮对话');
-    await loadSessionById(currentSessionId.value);
+    if (currentSessionId.value !== sessionId) return;
+    await loadSessionById(sessionId);
     await fetchSessions();
     emit('refresh');
   } catch (error) {}
+  finally { if (currentSessionId.value === sessionId) isRestoringSession.value = false; }
 };
 
 // ================= 璇煶璇嗗埆褰曞叆 =================
@@ -598,7 +636,8 @@ const CHAT_TIMEOUT = 30000;
 const handleSend = async () => {
   let text = inputText.value.trim();
   text = text.replace(/发送[。！？，“”、；：\s]*$/g, '').trim();
-  if (!text || isSending.value || !isUserLoggedIn.value) return;
+  if (!text || isSending.value || isRestoringSession.value || !isUserLoggedIn.value) return;
+  if (text.length > 10000) { ElMessage.warning('消息最多 10000 字，请精简后再发送。'); return; }
 
   isSending.value = true;
   if (!currentSessionId.value) {
@@ -635,6 +674,7 @@ const handleSend = async () => {
   let slowTimer: any = null;
   let streamDone = false;
   let streamFailed = false;
+  let finalResult: ChatStreamResult | null = null;
   try {
     slowTimer = setTimeout(() => {
       ElMessage.warning('响应较慢，请耐心等待...');
@@ -683,13 +723,21 @@ const handleSend = async () => {
         if (index >= 0) replyMsg.agentSteps.splice(index, 1, step);
         else replyMsg.agentSteps.push(step);
         scrollToBottom(false);
-      }
+      },
+      (result) => { finalResult = result; }
     );
     if (streamDone && !streamFailed) {
+      const result = finalResult as ChatStreamResult | null;
+      if (currentSessionId.value === activeSessionId) {
+        if (!result || result.sessionId !== activeSessionId || !planning.apply(activeSessionId, result.planning)) {
+          await planning.refresh(activeSessionId);
+        }
+      }
       await finishTimeline(replyMsg);
       if (inputMudle.value === 2) handleRead(replyMsg.content, messages.value.indexOf(replyMsg));
     }
   } finally {
+    if (streamFailed && currentSessionId.value === activeSessionId) await planning.refresh(activeSessionId);
     isSending.value = false;
     scrollToBottom(false);
     inputText.value = '';
@@ -724,6 +772,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  planning.reset();
   if (thinkingTimer) clearInterval(thinkingTimer);
 });
 
@@ -744,6 +793,8 @@ watch(isUserLoggedIn, async (newVal) => {
     sessions.value = [];
     messages.value = [];
     currentSessionId.value = null;
+    planning.reset();
+    selectedDocumentReferences.value = [];
   }
 });
 
@@ -762,6 +813,8 @@ watch(
     } else {
       historyLoadToken++;
       currentSessionId.value = null;
+      planning.reset();
+      selectedDocumentReferences.value = [];
       messages.value = [];
     }
   }

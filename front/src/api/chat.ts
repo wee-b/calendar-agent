@@ -2,7 +2,8 @@
 import request from '../utils/request';
 import { getToken, clearAuth } from '../utils/auth';
 import { playChatStream } from './chatPlayback';
-import type { AgentStep } from './chatStream';
+import type { AgentStep, ChatStreamResult } from './chatStream';
+import type { PlanningState, ChatSessionState } from './planningState';
 import type { DocumentReference } from './documents';
 
 // 独立于 Java 的 API 地址；开发环境留空，通过 Vite /chat 代理访问 Python。
@@ -26,6 +27,7 @@ export interface ChatResponseVO {
     currentAgent?: string;
     nextAgent?: string;
     flowStage?: string;
+    planning?: PlanningState;
 }
 
 export interface ChatHistoryItemVO {
@@ -73,7 +75,8 @@ export const streamChatAPI = async (
     onProgress?: (message: string) => void,
     onResponseTime?: (responseTimeMs: number) => void,
     onDispatchType?: (dispatchType: string) => void,
-    onAgentStep?: (step: AgentStep) => void
+    onAgentStep?: (step: AgentStep) => void,
+    onResult?: (result: ChatStreamResult) => void
 ): Promise<void> => {
     const token = getToken();
     const tokenName = import.meta.env.VITE_TOKEN_KEY || 'yvli-token';
@@ -104,7 +107,7 @@ export const streamChatAPI = async (
         await playChatStream(response.body, {
             onToken,
             onDone,
-            onProgress, onResponseTime, onDispatchType, onAgentStep,
+            onProgress, onResponseTime, onDispatchType, onAgentStep, onResult,
         });
     } catch (error: any) {
         onError(error.message || '网络连接异常');
@@ -114,6 +117,10 @@ export const streamChatAPI = async (
 // 3. 获取历史会话列表
 export const getSessionsAPI = (): Promise<ChatSessionVO[]> => {
     return request.get('/chat/sessions', { baseURL: AI_BASE_URL });
+};
+
+export const getSessionStateAPI = (sessionId: string): Promise<ChatSessionState> => {
+    return request.get('/chat/state', { baseURL: AI_BASE_URL, params: { sessionId } });
 };
 
 // 4. 获取某次会话的具体聊天记录

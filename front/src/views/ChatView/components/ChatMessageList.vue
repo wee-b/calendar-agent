@@ -83,36 +83,6 @@
         </template>
         <TypingIndicator v-else-if="msg.loading" />
 
-        <div v-if="msg.runDone && index === messages.length - 1 && msg.dispatchType === 'PLAN_CLARIFICATION'" class="plan-choices">
-          <button type="button" @click="openChoiceInput(index, '补充信息')">1. 补充信息</button>
-          <button type="button" class="primary" @click="$emit('quick-reply', '不补充信息，直接规划')">
-            2. 不补充信息，直接规划
-          </button>
-          <button type="button" @click="openChoiceInput(index, '其他')">3. 其他</button>
-        </div>
-        <div
-          v-if="msg.runDone && index === messages.length - 1 && ['PLAN', 'PLAN_REFINE'].includes(msg.dispatchType || '')"
-          class="plan-choices"
-        >
-          <button type="button" class="primary" @click="$emit('quick-reply', '同步到日历')">
-            同步到日历
-          </button>
-          <button type="button" @click="$emit('quick-reply', '生成一张规划示意图')">
-            生成示意图
-          </button>
-        </div>
-        <form
-          v-if="index === messages.length - 1 && inlineChoiceIndex === index"
-          class="choice-input"
-          @submit.prevent="submitChoiceInput"
-        >
-          <input
-            v-model="inlineChoiceText"
-            :placeholder="inlineChoiceKind === '补充信息' ? '补充预算、时间、偏好等信息' : '输入其他处理方式'"
-          />
-          <button type="submit" :disabled="!inlineChoiceText.trim()">发送</button>
-        </form>
-
         <div class="msg-actions" v-if="msg.runDone && !isUserRole(msg.role)">
           <button type="button" class="action-icon" @click="$emit('copy', msg.content)">复制</button>
           <button
@@ -203,9 +173,6 @@ const imageAssets = computed(() => props.messages.map(message =>
   props.isUserRole(message.role) || !message.runDone ? null : parseImageAsset(message.content || '')));
 
 const chatHistoryRef = ref<HTMLElement | null>(null);
-const inlineChoiceIndex = ref<number | null>(null);
-const inlineChoiceKind = ref('');
-const inlineChoiceText = ref('');
 const previewImageUrl = ref('');
 const previewScale = ref(1);
 
@@ -238,31 +205,14 @@ const handlePreviewKeydown = (event: KeyboardEvent) => {
 onMounted(() => document.addEventListener('keydown', handlePreviewKeydown));
 onBeforeUnmount(() => document.removeEventListener('keydown', handlePreviewKeydown));
 
-const openChoiceInput = async (index: number, kind: string) => {
-  inlineChoiceIndex.value = index;
-  inlineChoiceKind.value = kind;
-  inlineChoiceText.value = '';
-  await nextTick();
-  (chatHistoryRef.value?.querySelector('.choice-input input') as HTMLInputElement | null)?.focus();
-};
-
-const emit = defineEmits<{
+defineEmits<{
   (e: 'load-earlier'): void;
   (e: 'select-prompt', prompt: string): void;
   (e: 'toggle-timeline', index: number): void;
   (e: 'copy', content: string): void;
   (e: 'read', content: string, index: number): void;
   (e: 'delete-last-round'): void;
-  (e: 'quick-reply', content: string): void;
 }>();
-
-const submitChoiceInput = () => {
-  const content = inlineChoiceText.value.trim();
-  if (!content) return;
-  inlineChoiceIndex.value = null;
-  inlineChoiceText.value = '';
-  emit('quick-reply', content);
-};
 
 const scrollToBottom = async (force = true) => {
   const element = chatHistoryRef.value;
@@ -650,57 +600,6 @@ defineExpose({ scrollToBottom, prependKeepingPosition });
 .action-icon.danger:hover {
   color: #dc2626;
   background: #fef2f2;
-}
-
-.plan-choices {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.plan-choices button,
-.choice-input button {
-  min-height: 36px;
-  padding: 0 14px;
-  border: 1px solid #e4e4e7;
-  border-radius: 10px;
-  background: #ffffff;
-  color: #3f3f46;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.plan-choices button:hover,
-.plan-choices button.primary {
-  border-color: #18181b;
-  background: #18181b;
-  color: #ffffff;
-}
-
-.choice-input {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.choice-input input {
-  flex: 1;
-  min-width: 0;
-  height: 38px;
-  padding: 0 12px;
-  border: 1px solid #d4d4d8;
-  border-radius: 10px;
-  outline: none;
-}
-
-.choice-input input:focus {
-  border-color: #71717a;
-}
-
-.choice-input button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 .thinking-panel { margin-bottom: 20px; }

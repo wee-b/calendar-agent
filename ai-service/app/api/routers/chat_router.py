@@ -14,6 +14,7 @@ from app.service.chat import ChatService
 from app.schemas.chat import ChatRequest
 from app.schemas.chat.history import DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT
 from app.schemas.chat.model_stream import ErrorData, ErrorEvent
+from app.schemas.chat.planning_state import ChatSessionState, PlanningUiState
 
 
 router = APIRouter(prefix="/chat", tags=["对话"])
@@ -122,6 +123,20 @@ async def sessions(request: Request):
         user_id=request.state.user_id,
     )
     return success(result)
+
+
+@router.get("/state", summary="恢复当前会话的规划交互状态")
+async def session_state(
+    request: Request,
+    session_id: str = Query(..., alias="sessionId", min_length=1, max_length=64, pattern=r"\S"),
+):
+    service = ChatService()
+    state = await service.get_flow_state(request.state.user_id, session_id)
+    if state is None:
+        return success(ChatSessionState(sessionId=session_id))
+    stage = service.resolve_flow_stage(state).name
+    return success(ChatSessionState(sessionId=session_id, flowStage=stage,
+        planning=PlanningUiState.from_pending(service.flow_pending(state), stage)))
 
 
 @router.get("/latest", summary="获取当前会话的 RouteAgent 意图判断上下文")

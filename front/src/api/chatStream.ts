@@ -1,4 +1,16 @@
+import { parsePlanningState } from './planningState.ts';
+import type { PlanningState } from './planningState.ts';
+
 /** Python 聊天 SSE 协议；只有 done 表示成功，EOF 或 error 都不能当作完成。 */
+export interface ChatStreamResult {
+    sessionId: string;
+    aiResult: string;
+    dispatchType?: string;
+    flowStage?: string;
+    responseTimeMs?: number;
+    planning: PlanningState | null;
+}
+
 export interface AgentStep {
     id: number;
     kind: 'agent' | 'tool' | 'summary';
@@ -17,6 +29,7 @@ export interface ChatStreamHandlers {
     onResponseTime?: (milliseconds: number) => void;
     onDispatchType?: (dispatchType: string) => void;
     onAgentStep?: (step: AgentStep) => void;
+    onResult?: (result: ChatStreamResult) => void;
 }
 
 export async function consumeChatStream(
@@ -64,7 +77,7 @@ export async function consumeChatStream(
                 break;
             case 'agent_status':
                 handlers.onProgress?.('开始：' + (payload.stage === 'tool'
-                    ? (payload.agent === 'chat' ? '查询日程' : '处理日历操作')
+                    ? (payload.agent === 'chat' ? '查询日程' : payload.agent === 'planner' ? '查询规划资料' : '处理日历操作')
                     : agentLabels[payload.agent] || '生成回复'));
                 break;
             case 'tool_call_start':
@@ -79,6 +92,7 @@ export async function consumeChatStream(
                 receivedResult = true;
                 if (typeof payload.responseTimeMs === 'number') handlers.onResponseTime?.(payload.responseTimeMs);
                 if (typeof payload.dispatchType === 'string') handlers.onDispatchType?.(payload.dispatchType);
+                handlers.onResult?.({ ...payload, planning: parsePlanningState(payload.planning) });
                 break;
             case 'done':
                 if (!receivedResult) throw new Error('回复未保存，请重试');

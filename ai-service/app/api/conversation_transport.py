@@ -7,6 +7,7 @@ from uuid import uuid4
 from app.all_graph.conversation_graph import ConversationGraph
 from app.core.config.common.chat_stream import get_chat_stream_settings
 from app.schemas.chat import ChatRequest, ChatResult
+from app.schemas.chat.planning_state import PlanningUiState
 from app.schemas.chat.model_stream import ClientEvent, DoneData, DoneEvent, PingEvent, ResultEvent
 
 
@@ -26,7 +27,8 @@ class ConversationTransport:
             result = await graph.run_turn(request.message, token, **kwargs)
         return ChatResult(sessionId=session_id, aiResult=result.reply, responseTimeMs=result.elapsed_ms,
                           dispatchType=result.dispatch_type, currentAgent=result.agent.name,
-                          flowStage=result.stage.name), result.rounds
+                          flowStage=result.stage.name,
+                          planning=PlanningUiState.from_pending(result.pending, result.stage.name)), result.rounds
 
     async def reply(self, user_id: int, request: ChatRequest, token: str):
         result, _ = await self._run(user_id, request, token)

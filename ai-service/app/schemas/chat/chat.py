@@ -1,6 +1,7 @@
 """聊天 HTTP 请求与完整结果的对外字段。"""
 
 from pydantic import BaseModel, Field
+from app.schemas.chat.planning_state import PlanningUiState
 
 
 class ChatRequest(BaseModel):
@@ -20,6 +21,7 @@ class ChatResult(BaseModel):
     dispatchType: str = "CHAT"
     currentAgent: str = "CHAT"
     flowStage: str = "CHAT"
+    planning: PlanningUiState = Field(default_factory=PlanningUiState)
 
 
 class NewSessionResult(BaseModel):

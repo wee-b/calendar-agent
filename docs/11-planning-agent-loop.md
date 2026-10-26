@@ -63,9 +63,13 @@ flowchart TD
 
 ## SSE、部署和测试
 
+前端会话页和首页聊天侧栏共用 `PlanningFollowUp`：待回答时展示 1～3 个实际问题及日期、引用数量，表单回答按编号合并为普通聊天消息续答，也可从主输入框直接回复或取消规划。草稿就绪后才显示同步、生图按钮；旧草稿仍有待回答问题时继续展示问题。发送中禁用操作。
+
+普通响应及 SSE `result` 增加 `planning` 摘要，包含 `status`（`none` / `awaiting_answers` / `draft_ready`）、`questions`、`questionSetId`、`dateRange` 和 `referenceCount`。`GET /chat/state?sessionId=...` 使用相同摘要恢复刷新、历史会话及撤回后的交互状态，不新建会话，也不返回资料快照。`questionSetId` 标识一组问题，同组问题重试保留本地未提交回答；会话切换清空回答。前端忽略切换前和新 SSE 结果之前发起的过时状态请求，读取失败时关闭草稿操作并提供重试。
+
 时间线持续展示读取偏好、检索文章、查询规划区间日程、LLM处理、等待用户补充、校验和反馈修正。只展示预定义名称、问题类别/数量及摘要；真正的澄清问题作为本轮助手回复展示。历史回放沿用现有 `agent_steps`。取消会传播到模型及 MCP，请求保存前再次检查连接。
 
-部署需同时更新 Python 和 Java MCP，旧 Java 没有 `queryScheduleRange` 时会明确报查询不可用，不会回退查询全部待办。无需变更数据库表结构。
+部署需同时更新前端、Python 和 Java MCP，旧 Java 没有 `queryScheduleRange` 时会明确报查询不可用，不会回退查询全部待办。前端恢复状态依赖新版 Python 的 `/chat/state`。无需变更数据库表结构。
 
 从 `ai-service` 运行：
 
